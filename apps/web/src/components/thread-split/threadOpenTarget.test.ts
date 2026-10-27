@@ -5,6 +5,7 @@ import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
   openThreadInActivePane,
   planThreadOpen,
+  readActivePaneThreadTarget,
   shouldCloseSplitForRoute,
   threadOpenHashRouteRef,
 } from "./threadOpenTarget";
@@ -114,6 +115,17 @@ describe("planThreadOpen", () => {
         paneOverride: "secondary",
       }),
     ).toEqual({ kind: "open-secondary" });
+  });
+});
+
+describe("readActivePaneThreadTarget", () => {
+  it("targets the focused split pane and falls back when it is parked", () => {
+    const route = { kind: "server" as const, threadRef: ROUTE_REF };
+    useThreadSplitStore.getState().openSecondaryThread(SECONDARY_REF);
+    useThreadSplitStore.getState().setSplitMounted(true);
+    expect(readActivePaneThreadTarget(route)).toEqual({ kind: "server", threadRef: SECONDARY_REF });
+    useThreadSplitStore.getState().setSplitMounted(false);
+    expect(readActivePaneThreadTarget(route)).toEqual(route);
   });
 });
 

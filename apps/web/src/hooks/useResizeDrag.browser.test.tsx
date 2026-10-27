@@ -39,6 +39,7 @@ it("commits the final pointer position through the session that started the drag
     const handlers = useResizeDrag<HTMLButtonElement>(() => ({
       width: 200,
       edge: "right",
+      bounds: { min: 100, max: 500 },
       resize: resizeWidth,
       finish,
       cleanup,

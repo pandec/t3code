@@ -168,7 +168,9 @@ export const make = Effect.gen(function* () {
   });
 
   return MessageSpeechScript.of({
-    generate: (request) => locks.withMessageLock(request.messageId, generateUnlocked(request)),
+    generate: Effect.fn("MessageSpeechScript.generate")((request) =>
+      locks.withMessageLock(request.messageId, generateUnlocked(request)),
+    ),
   });
 });
 

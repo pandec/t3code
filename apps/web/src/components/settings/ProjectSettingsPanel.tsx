@@ -620,7 +620,6 @@ function ProjectDetail({
               <ProviderAccentColorPicker
                 displayName={group.displayName}
                 value={accentColor ?? undefined}
-                commitDelayMs={120}
                 onCommit={(color) =>
                   updateProjectAccentColor(
                     color === "" ? null : (color as SidebarProjectAccentColor),

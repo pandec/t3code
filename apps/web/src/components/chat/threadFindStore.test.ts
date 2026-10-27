@@ -21,21 +21,25 @@ const threadKey = "env-1:thread-1";
 function setup() {
   closeThreadFind();
   useThreadSplitStore.setState({ secondaryRef: null, splitMounted: false });
+  const navigate = vi.fn();
   const readPosition = vi.fn(() => ({ entryId: "entry-9", occurrence: 1 }));
-  return { readPosition, timeline: { threadKey, readPosition } };
+  return { navigate, readPosition, timeline: { threadKey, navigate, readPosition } };
 }
 
 describe("thread find store", () => {
   it("restarts an open query from the viewport of the timeline showing the thread", () => {
-    const { readPosition, timeline } = setup();
+    const { navigate, readPosition, timeline } = setup();
     const detach = attachThreadFindTimeline(timeline);
     openThreadFind(threadKey);
+    // Opening find is manual navigation; reopening it is not.
+    expect(navigate).toHaveBeenCalledTimes(1);
     expect(useThreadFindStore.getState()).toMatchObject({ threadKey, focusRequestId: 1 });
 
     setThreadFindQuery(threadKey, " needle ");
     expect(readPosition).toHaveBeenLastCalledWith("needle");
     // Opening again refocuses and restarts the search from where the viewport is.
     openThreadFind(threadKey);
+    expect(navigate).toHaveBeenCalledTimes(1);
     expect(useThreadFindStore.getState()).toMatchObject({
       query: " needle ",
       focusRequestId: 2,
@@ -47,7 +51,7 @@ describe("thread find store", () => {
   });
 
   it("opens a search result's find for a thread before its timeline shows it", () => {
-    const { readPosition, timeline } = setup();
+    const { navigate, readPosition, timeline } = setup();
     const detach = attachThreadFindTimeline({ ...timeline, threadKey: "env-1:thread-2" });
     openThreadFindOnQuery(threadKey, { query: "Café", start: { entryId: "m", occurrence: 0 } });
     expect(useThreadFindStore.getState()).toMatchObject({
@@ -58,6 +62,7 @@ describe("thread find store", () => {
     // Another thread's timeline does not answer for this one.
     setThreadFindQuery(threadKey, "Caf");
     expect(readPosition).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
     detach();
   });
 
@@ -79,15 +84,19 @@ describe("thread find store", () => {
 
 describe("thread find in a split", () => {
   it("reads the viewport of the pane showing the thread and survives the other pane's route", () => {
-    const { readPosition, timeline } = setup();
+    const { navigate, readPosition, timeline } = setup();
     useThreadSplitStore.setState({ secondaryRef: threadRef, splitMounted: true });
     const detachSecondary = attachThreadFindTimeline(timeline);
+    const otherNavigate = vi.fn();
     const otherReadPosition = vi.fn(() => undefined);
     const detachPrimary = attachThreadFindTimeline({
       threadKey: "env-1:thread-2",
+      navigate: otherNavigate,
       readPosition: otherReadPosition,
     });
     openThreadFind(threadKey);
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(otherNavigate).not.toHaveBeenCalled();
     setThreadFindQuery(threadKey, "needle");
     expect(readPosition).toHaveBeenLastCalledWith("needle");
     expect(otherReadPosition).not.toHaveBeenCalled();

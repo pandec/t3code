@@ -61,7 +61,7 @@ describe("toggleCollapsedThreadGroup", () => {
   it("keeps earlier folds when toggles chain before a render", () => {
     let preferences: Preferences = {};
     for (const groupId of ["a", "b", "c", "b"]) {
-      preferences = { ...preferences, ...toggleCollapsedThreadGroup(preferences, groupId) };
+      Object.assign(preferences, toggleCollapsedThreadGroup(preferences, groupId));
     }
     expect(preferences).toEqual({ collapsedThreadGroups: ["a", "c"] });
   });

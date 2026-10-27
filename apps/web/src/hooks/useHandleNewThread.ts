@@ -1,16 +1,16 @@
+import { readActivePaneThreadTarget } from "../components/thread-split/threadOpenTarget";
 import {
   scopedProjectKey,
   scopeProjectRef,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
   DEFAULT_SERVER_SETTINGS,
   type ModelSelection,
   type ScopedProjectRef,
   type ThreadId,
 } from "@t3tools/contracts";
-import { useRouter } from "@tanstack/react-router";
+import { type AnyRouter, useRouter } from "@tanstack/react-router";
 import {
   composerDraftHasUserContent,
   markPromotedDraftThreadByRef,
@@ -43,13 +43,14 @@ import {
   hasExplicitComposerModelSelection,
   resolveNewDraftStartFromOrigin,
 } from "../lib/chatThreadActions";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { readT3ProjectFile } from "../lib/t3ProjectFileDefaults";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentSummaries } from "../state/presentation";
 import { environmentServerConfigsAtom } from "../state/server";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
-import { useClientSettings } from "./useSettings";
+import { getClientSettings } from "./useSettings";
 import { useThreadRouteTarget } from "./useThreadRouteTarget";
 import { readUnloadedThreadCount } from "../state/olderSettledShelf";
 
@@ -152,11 +153,15 @@ function pickExplicitWorkspaceOptions(options: NewThreadWorkspaceOptions | undef
 }
 
 export function useNewThreadHandler() {
-  const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
-  const router = useRouter();
+  return createNewThreadHandler(useRouter());
+}
+
+export type NewThreadHandler = ReturnType<typeof createNewThreadHandler>;
+
+export function createNewThreadHandler(router: AnyRouter) {
   const getCurrentRouteTarget = () => {
     const currentRouteParams = router.state.matches[router.state.matches.length - 1]?.params ?? {};
-    return resolveThreadRouteTarget(currentRouteParams);
+    return readActivePaneThreadTarget(resolveThreadRouteTarget(currentRouteParams));
   };
 
   return (
@@ -174,6 +179,7 @@ export function useNewThreadHandler() {
     },
   ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
     const projects = readProjects();
+    const projectGroupingSettings = selectProjectGroupingSettings(getClientSettings());
     // Read at call time; status pushes replace the config map and would recreate every sidebar handler.
     const environmentServerConfigs = appAtomRegistry.get(environmentServerConfigsAtom);
     const targetServerSettings =
@@ -517,6 +523,22 @@ export function useNewThreadHandler() {
   };
 }
 
+export function resolveDefaultProjectRef(
+  projects: ReadonlyArray<EnvironmentProject>,
+  projectOrder: readonly string[],
+): ScopedProjectRef | null {
+  const [defaultProject] = orderItemsByPreferredIds({
+    items: projects,
+    preferredIds: projectOrder,
+    getId: getProjectOrderKey,
+    getPreferenceIds: (project) => [
+      getProjectOrderKey(project),
+      legacyProjectCwdPreferenceKey(project.workspaceRoot),
+    ],
+  });
+  return defaultProject ? scopeProjectRef(defaultProject.environmentId, defaultProject.id) : null;
+}
+
 export function useHandleNewThread() {
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const routeTarget = useThreadRouteTarget();
@@ -533,18 +555,7 @@ export function useHandleNewThread() {
   );
   const projects = useProjects();
   const handleNewThread = useNewThreadHandler();
-  const [defaultProject] = orderItemsByPreferredIds({
-    items: projects,
-    preferredIds: projectOrder,
-    getId: getProjectOrderKey,
-    getPreferenceIds: (project) => [
-      getProjectOrderKey(project),
-      legacyProjectCwdPreferenceKey(project.workspaceRoot),
-    ],
-  });
-  const defaultProjectRef = defaultProject
-    ? scopeProjectRef(defaultProject.environmentId, defaultProject.id)
-    : null;
+  const defaultProjectRef = resolveDefaultProjectRef(projects, projectOrder);
 
   return {
     activeDraftThread,

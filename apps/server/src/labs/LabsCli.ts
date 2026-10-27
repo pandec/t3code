@@ -78,7 +78,7 @@ const labsCliCommand = (input: Pick<LabsCliRunInput, "args" | "threadId">) => ({
 const make = Effect.gen(function* () {
   const processes = yield* ProcessRunner.ProcessRunner;
   return LabsCli.of({
-    run: (input) => {
+    run: Effect.fn("LabsCli.run")((input) => {
       const subcommand = input.args[0] ?? "";
       return processes
         .run({
@@ -130,7 +130,7 @@ const make = Effect.gen(function* () {
               : Effect.succeed(output);
           }),
         );
-    },
+    }),
   });
 });
 

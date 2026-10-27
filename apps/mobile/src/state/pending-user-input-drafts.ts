@@ -1,4 +1,7 @@
-import type { ThreadUserInputQuestion } from "@t3tools/client-runtime/state/thread-requests";
+import {
+  seedUserInputDraftAnswers,
+  type ThreadUserInputQuestion,
+} from "@t3tools/client-runtime/state/thread-requests";
 import { Atom } from "effect/reactivity";
 
 import {
@@ -9,10 +12,18 @@ import {
 } from "../lib/threadActivity";
 import { appAtomRegistry } from "./atom-registry";
 
-/** Typed answers to pending agent questions, keyed by `scopedRequestKey`, then question id. */
+/** Typed answers to pending agent questions, keyed by `userInputDraftKey`, then question id. */
 export const userInputDraftsByRequestKeyAtom = Atom.make<
   Record<string, Record<string, PendingUserInputDraftAnswer>>
 >({}).pipe(Atom.keepAlive, Atom.withLabel("mobile:user-input-drafts"));
+
+// Writes start from the suggested answer the user was looking at.
+function seededDraft(
+  drafts: Record<string, PendingUserInputDraftAnswer> | undefined,
+  question: ThreadUserInputQuestion,
+): PendingUserInputDraftAnswer | undefined {
+  return seedUserInputDraftAnswers([question], drafts ?? {})[question.id];
+}
 
 export function setUserInputDraftOption(
   requestKey: string,
@@ -26,7 +37,7 @@ export function setUserInputDraftOption(
       ...current[requestKey],
       [question.id]: togglePendingUserInputOptionSelection(
         question,
-        current[requestKey]?.[question.id],
+        seededDraft(current[requestKey], question),
         value,
       ),
     },
@@ -45,7 +56,7 @@ export function setUserInputDraftCustomAnswer(
       ...current[requestKey],
       [question.id]: setPendingUserInputCustomAnswer(
         question,
-        current[requestKey]?.[question.id],
+        seededDraft(current[requestKey], question),
         customAnswer,
       ),
     },
@@ -63,7 +74,10 @@ export function readLatestPendingUserInputAnswers(
   questions: ReadonlyArray<ThreadUserInputQuestion>,
   renderedDrafts: Readonly<Record<string, PendingUserInputDraftAnswer>>,
 ): Record<string, string | ReadonlyArray<string>> | null {
-  const typed = appAtomRegistry.get(userInputDraftsByRequestKeyAtom)[requestKey] ?? {};
+  const typed = seedUserInputDraftAnswers(
+    questions,
+    appAtomRegistry.get(userInputDraftsByRequestKeyAtom)[requestKey] ?? {},
+  );
   return buildPendingUserInputAnswers(
     questions,
     Object.fromEntries(

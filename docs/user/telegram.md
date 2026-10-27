@@ -6,7 +6,7 @@ Agents can send their results to Telegram: a short summary, an optional full rep
 
 1. In Telegram, open [@BotFather](https://t.me/BotFather), send `/newbot`, and copy the token it gives you.
 2. In BotFather, open your bot's settings and turn on **Threaded Mode**, so the chat can hold one topic per thread.
-3. In T3 Code, open **Settings → Integrations → Telegram** and paste the token. The token is kept in the environment's secret store.
+3. In T3 Code, open **Settings → Devices → Telegram** and paste the token. The token is kept in the environment's secret store.
 4. Press **Link chat**. Telegram opens your bot; press **Start**. The bot replies once the chat is linked.
 
 The bot belongs to one environment: link it in the environment whose agents should use it. A bot token works with one T3 Code server at a time.

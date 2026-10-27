@@ -224,6 +224,30 @@ function devCompressionPlugin(): Plugin {
   };
 }
 
+// A static import cycle between chunks can run a chunk before the values it imports exist,
+// which blanks the app at boot. Fail the build instead of shipping it.
+function chunkCycleGuardPlugin(): Plugin {
+  return {
+    name: "t3code:chunk-cycle-guard",
+    apply: "build",
+    generateBundle(_options, bundle) {
+      const done = new Set<string>();
+      const visit = (fileName: string, path: string[]) => {
+        if (done.has(fileName)) return;
+        const start = path.indexOf(fileName);
+        if (start !== -1) {
+          this.error(`Chunk import cycle: ${[...path.slice(start), fileName].join(" -> ")}`);
+        }
+        const chunk = bundle[fileName];
+        if (chunk?.type !== "chunk") return;
+        for (const imported of chunk.imports) visit(imported, [...path, fileName]);
+        done.add(fileName);
+      };
+      for (const fileName of Object.keys(bundle)) visit(fileName, []);
+    },
+  };
+}
+
 // Allow Tailnet hosts for sharing; Tailscale-controlled DNS prevents attacker rebinding.
 const configuredAllowedHosts = (process.env.T3CODE_DEV_ALLOWED_HOSTS ?? "")
   .split(",")
@@ -245,6 +269,7 @@ export default defineConfig(() => {
     assetsInclude: ["**/*.wasm"],
     plugins: [
       devCompressionPlugin(),
+      chunkCycleGuardPlugin(),
       builtDev
         ? undefined
         : thirdPartyLicensesPlugin({
@@ -365,6 +390,12 @@ export default defineConfig(() => {
           codeSplitting: {
             // Preview imports must not fold shared file icons back into main.
             groups: [
+              // Class merging stays below icons and composer state to avoid a chunk cycle.
+              {
+                name: "classes",
+                test: /\/(?:src\/lib\/cn\.ts|node_modules\/(?:class-variance-authority|clsx|tailwind-merge)\/)/,
+                includeDependenciesRecursively: false,
+              },
               {
                 name: "react",
                 test: /\/node_modules\/(?:react|react-dom|scheduler)\//,

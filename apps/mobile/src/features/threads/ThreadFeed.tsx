@@ -52,6 +52,7 @@ import {
   type OrchestrationV2ProjectedTurnItem,
   type RunId,
   type ScheduledTaskId,
+  type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { renderAssistantCitationsAsText } from "@t3tools/shared/assistantCitations";
 import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
@@ -345,6 +346,8 @@ export interface ThreadFeedProps {
   readonly onEditPendingMessage: ((message: QueuedThreadMessage) => void) | null;
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
+  /** Null while the thread's creation is queued: reading detail then caches a not-found as deleted. */
+  readonly detailRef: ScopedThreadRef | null;
   readonly threadTitle: string;
   /** The environment serves on-demand message summaries. */
   readonly messageSummariesAvailable?: boolean;
@@ -2201,12 +2204,8 @@ export const ThreadFeed = memo(function ThreadFeed(
     onEndFollowEnabledChange,
     onHeaderMaterialVisibilityChange,
   } = props;
-  const workflowOpening = useWorkflowOpening(props.environmentId, props.threadId);
-  const guestThreadRef = useMemo(
-    () => scopeThreadRef(props.environmentId, props.threadId),
-    [props.environmentId, props.threadId],
-  );
-  const guestShare = useThreadGuestShare(guestThreadRef);
+  const workflowOpening = useWorkflowOpening(props.detailRef);
+  const guestShare = useThreadGuestShare(props.detailRef);
   const deviceType = useDeviceType();
   const duoColumns = useNativeWorkspaceColumnsSupported() && isDuoDevice(deviceType);
   const openPullRequest = useOpenPullRequest();
@@ -2301,6 +2300,7 @@ export const ThreadFeed = memo(function ThreadFeed(
     props.threadId,
     props.contentPresentation.kind,
   ]);
+  // oxlint-disable-next-line react/exhaustive-effect-dependencies -- A scope change (thread or presentation) aborts the pending link lookup opened from the old scope.
   useLayoutEffect(() => () => markdownLinkRequest.current?.abort(), [markdownLinkScope]);
   const [preview, setPreview] = useState<{
     readonly scope: string;
@@ -2882,6 +2882,7 @@ export const ThreadFeed = memo(function ThreadFeed(
   // commit, and setEndFollow notifies the parent, so it can't run during render.
   useEffect(() => {
     if (jumpIndex !== null) landJump(jumpIndex);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Jumping to a different message whose row index is unchanged must still land the jump.
   }, [jumpToMessageId, jumpIndex]);
 
   const reflowLayout = () => ({

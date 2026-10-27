@@ -1,9 +1,11 @@
-import { AuthOrchestrationOperateScope, AuthPreviewOperateScope } from "@t3tools/contracts";
+import { readActivePaneThreadTarget } from "../components/thread-split/threadOpenTarget";
+import { registerCommands } from "../shortcuts/dispatcher";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import type { KeybindingCommand } from "@t3tools/contracts";
+import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { Outlet, createFileRoute, redirect, useMatches, useRouter } from "@tanstack/react-router";
-import { useAtomValue } from "@effect/atom-react";
-import { useEffect, useRef, useState } from "react";
-import type { ClientSettings } from "@t3tools/contracts";
+import { useEffect, useEffectEvent, useState } from "react";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -21,34 +23,17 @@ import { isAppModalPage } from "../components/sidebar/mainAppLocation";
 import { SidebarInset } from "../components/ui/sidebar";
 import { retainThreadFindForRoute } from "../components/chat/threadFindStore";
 import { ThreadLinkPrompt } from "../components/promptLinks/ThreadLinkPrompt";
-import { useClientSettings, useLegacySidebarEnabled } from "../hooks/useSettings";
 import { useThreadActions } from "../hooks/useThreadActions";
+import { getClientSettings } from "../hooks/useSettings";
 import { openCommandPalette } from "../commandPaletteBus";
-import {
-  readEnvironmentSupportsSnoozeUntilDone,
-  readThreadShell,
-  useProjects,
-} from "../state/entities";
-import { isPreviewAvailableFor } from "../browser/previewRuntime";
-import { usePrimaryEnvironmentId } from "../state/environments";
-import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
-import { selectProjectGroupingSettings } from "../logicalProject";
-import { buildSidebarProjectSnapshots } from "../sidebarProjectGrouping";
-import { dispatchPreviewAction } from "../components/preview/previewActionBus";
-import { useHandleNewThread } from "../hooks/useHandleNewThread";
-import { useScratchProject } from "../hooks/useScratchProject";
-import { startNewThreadFromContext } from "../lib/chatThreadActions";
+import { readEnvironmentSupportsSnoozeUntilDone, readThreadShell } from "../state/entities";
+import { readEnvironmentScope } from "../state/session";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { isEditableFocused } from "../lib/editableFocus";
 import { isModelPickerOpen } from "../modelPickerVisibility";
 import { resolveShortcutCommand } from "../keybindings";
-import {
-  createLastVisitedThreadShortcut,
-  type LastVisitedPendingRelease,
-  type LastVisitedShortcutEvent,
-  threadVisitHistory,
-} from "../threadLastVisited";
+import { createLastVisitedThreadShortcut, threadVisitHistory } from "../threadLastVisited";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
@@ -75,348 +60,183 @@ import {
 } from "../threadVisitTargets";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
 
-const selectSnoozeShortcutUntilDone = (settings: ClientSettings) =>
-  settings.snoozeShortcutUntilDone;
-
 function ChatRouteGlobalShortcuts() {
-  const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
-  const selectedThreadKeysSize = useThreadSelectionStore((state) => state.selectedThreadKeys.size);
-  const {
-    activeDraftThread,
-    activeThread,
-    defaultProjectRef,
-    handleNewThread,
-    routeDraftId,
-    routeThreadRef,
-  } = useHandleNewThread();
-  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const legacySidebarEnabled = useLegacySidebarEnabled();
-  const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
-  const projects = useProjects();
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const router = useRouter();
   const { attemptArchiveThread, snoozeThread } = useThreadActions();
-  const snoozeShortcutUntilDone = useClientSettings(selectSnoozeShortcutUntilDone);
-  const { scratchEnvironmentId, startScratchThread } = useScratchProject();
-  const projectGroupCount = buildSidebarProjectSnapshots({
-    projects,
-    settings: projectGroupingSettings,
-    primaryEnvironmentId,
-    resolveEnvironmentLabel: () => null,
-  }).length;
-  // Split view: thread-targeted shortcuts and their `when` context follow the
-  // active pane, so mod+shift+E can never archive the thread the user is not
-  // looking at while the secondary pane holds focus.
-  const secondaryActiveThreadRef = useThreadSplitStore((state) =>
-    state.splitMounted && state.activePaneId === "secondary" ? state.secondaryRef : null,
-  );
-  const shortcutThreadRef = secondaryActiveThreadRef ?? routeThreadRef;
-  const canOperatePreview = useEnvironmentScope(
-    shortcutThreadRef?.environmentId ?? null,
-    AuthPreviewOperateScope,
-  );
-  const terminalOpen = useTerminalUiStateStore((state) =>
-    shortcutThreadRef
-      ? selectThreadTerminalUiState(state.terminalUiStateByThreadKey, shortcutThreadRef)
-          .terminalOpen
-      : false,
-  );
-  // This flag is store-only; dispatch the action bus to reuse ChatView's URL-aware arbitration.
-  const previewOpen = useRightPanelStore((state) =>
-    shortcutThreadRef
-      ? selectActiveRightPanel(state.byThreadKey, shortcutThreadRef) === "preview"
-      : false,
-  );
-  // Visit history: the focused pane's thread, or the routed draft. Ctrl+Tab
-  // (desktop) toggles through it, and snoozing the open thread returns to it.
-  const focusedVisitTarget: ThreadRouteTarget | null =
-    shortcutThreadRef !== null
-      ? { kind: "server", threadRef: shortcutThreadRef }
-      : routeDraftId !== null
-        ? { kind: "draft", draftId: routeDraftId }
-        : null;
-  useEffect(() => {
-    threadVisitHistory.record(focusedVisitTarget, resolveVisitTarget);
-    if (focusedVisitTarget?.kind === "server") {
-      return trackVisitedThreadShell(focusedVisitTarget.threadRef);
-    }
-    if (focusedVisitTarget?.kind !== "draft") return;
-    const { draftId } = focusedVisitTarget;
-    rememberDraftThreadRef(draftId);
-    // Tracks the draft's thread while it is open (an environment switch moves it).
-    return useComposerDraftStore.subscribe(() => rememberDraftThreadRef(draftId));
-  }, [focusedVisitTarget]);
-  const lastVisitedPendingRelease = useRef<LastVisitedPendingRelease>({ key: null });
-  // oxlint-disable-next-line t3code/react-effect-budget -- the last-visited chord listens on window keydown/keyup outside React.
-  useEffect(() => {
-    const resolveCommand = (event: LastVisitedShortcutEvent) =>
-      resolveShortcutCommand(event, keybindings, {
-        context: {
-          terminalFocus: isTerminalFocused(),
-          terminalOpen,
-          previewFocus: isPreviewFocused(),
-          previewOpen,
-          editableFocus: isEditableFocused(event.target),
-          modelPickerOpen: isModelPickerOpen(),
-        },
+  const runThreadCommand = useEffectEvent((command: KeybindingCommand, event: KeyboardEvent) => {
+    const target = readActivePaneThreadTarget(
+      resolveThreadRouteTarget(router.state.matches.at(-1)?.params ?? {}),
+    );
+    const threadRef = target?.kind === "server" ? target.threadRef : null;
+    if (command === "threadPane.focusOther") {
+      if (!focusOtherThreadPane()) return false;
+    } else if (command === "threadPane.swap") {
+      const routeTarget = resolveThreadRouteTarget(router.state.matches.at(-1)?.params ?? {});
+      const routeThreadRef = routeTarget?.kind === "server" ? routeTarget.threadRef : null;
+      if (!canSwapThreadPanes(routeThreadRef)) return false;
+      void swapThreadPanes({
+        routeThreadRef,
+        navigateToThread: (ref) =>
+          router.navigate({
+            to: "/$environmentId/$threadId",
+            params: buildThreadRouteParams(ref),
+          }),
       });
-
-    // Capture phase: the composer and the terminal both consume Tab before a
-    // bubbling window listener would see it.
-    const lastVisitedShortcut = createLastVisitedThreadShortcut({
-      isDesktop: isElectron,
-      pendingRelease: lastVisitedPendingRelease.current,
-      // The settings recorder must see the chord to let the user rebind it.
-      resolveCommand: (event) =>
-        event.target instanceof HTMLElement && event.target.closest("[data-keybinding-capture]")
-          ? null
-          : resolveCommand(event),
-      isBlocked: () =>
-        isCommandPaletteOpen() || isModelPickerOpen() || hasOpenArchiveUndoBlockingLayer(),
-      resolveTarget: () => threadVisitHistory.resolveTarget(focusedVisitTarget, resolveVisitTarget),
-      openThread: (target) => {
-        clearSelection();
-        if (target.kind === "draft") {
-          // Drafts only open as the routed pane; from the secondary pane the
-          // split gives way to the draft as a single view.
-          const split = useThreadSplitStore.getState();
-          if (split.splitMounted && split.activePaneId === "secondary") split.closeSplit();
-          void router.navigate({ to: "/draft/$draftId", params: { draftId: target.draftId } });
-          return;
-        }
-        const targetRef = target.threadRef;
-        const { completion } = openThreadInActivePane({
-          targetRef,
-          routeThreadRef,
-          navigateToPrimary: () =>
-            router.navigate({
-              to: "/$environmentId/$threadId",
-              params: buildThreadRouteParams(targetRef),
-            }),
-        });
-        completion?.catch(() => {
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Could not open the previous thread",
-              description: "Navigation to the thread failed.",
-            }),
-          );
-        });
-      },
-    });
-
-    const onWindowKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      const command = resolveCommand(event);
-
-      if (isCommandPaletteOpen()) {
-        return;
-      }
-
-      if (event.key === "Escape" && selectedThreadKeysSize > 0) {
-        event.preventDefault();
-        clearSelection();
-        return;
-      }
-
-      if (command === "chat.newLocal") {
+    } else {
+      if (!threadRef) return false;
+      const shell = readThreadShell(threadRef);
+      if (shell?.archivedAt != null) return false;
+      if (command === "thread.archive") {
+        if (hasOpenArchiveUndoBlockingLayer()) return false;
+        if (shell?.archivedAt !== null) return false;
+        void attemptArchiveThread(threadRef);
+      } else {
         event.preventDefault();
         event.stopPropagation();
-        void startNewThreadFromContext({
-          activeDraftThread,
-          activeThread: activeThread ?? undefined,
-          defaultProjectRef,
-          handleNewThread,
-        });
-        return;
-      }
-
-      if (command === "chat.newWithoutProject") {
-        const environmentId = scratchEnvironmentId(
-          activeThread?.environmentId ?? activeDraftThread?.environmentId ?? primaryEnvironmentId,
-        );
-        if (environmentId === null) return;
-        event.preventDefault();
-        event.stopPropagation();
-        void startScratchThread(environmentId);
-        return;
-      }
-
-      if (command === "chat.new") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!legacySidebarEnabled && projectGroupCount > 1) {
-          openCommandPalette({ open: "new-thread-in" });
-          return;
-        }
-        void startNewThreadFromContext({
-          activeDraftThread,
-          activeThread: activeThread ?? undefined,
-          defaultProjectRef,
-          handleNewThread,
-        });
-        return;
-      }
-
-      if (command === "threadPane.focusOther") {
-        if (focusOtherThreadPane()) {
-          event.preventDefault();
-          event.stopPropagation();
-        }
-        return;
-      }
-
-      if (command === "threadPane.swap") {
-        // Swaps the primary route thread with the secondary pane's — needs
-        // two server threads on screen, so a draft primary leaves the key
-        // to its default behavior.
-        if (!canSwapThreadPanes(routeThreadRef)) return;
-        event.preventDefault();
-        event.stopPropagation();
-        void swapThreadPanes({
-          routeThreadRef,
-          navigateToThread: (ref) =>
-            router.navigate({
-              to: "/$environmentId/$threadId",
-              params: buildThreadRouteParams(ref),
-            }),
-        });
-        return;
-      }
-
-      if (
-        command === "thread.rename" ||
-        command === "thread.snooze" ||
-        command === "thread.snoozeUntilDone"
-      ) {
-        if (!shortcutThreadRef) return;
-        // An unloaded shell passes: the palette holds the intent until the
-        // thread hydrates. Only a loaded, archived thread has nothing to open.
-        const shell = readThreadShell(shortcutThreadRef);
-        if (shell?.archivedAt != null) return;
-        event.preventDefault();
-        event.stopPropagation();
-        // Fork: snooze a working thread until it's done in one keystroke; any
-        // other state falls through to the snooze picker, as thread.snooze does.
-        // A held key must not repeat into the picker, which would wake the
-        // thread it just snoozed.
         if (command === "thread.snoozeUntilDone" && event.repeat) return;
         if (
           command === "thread.snoozeUntilDone" &&
-          snoozeShortcutUntilDone &&
+          getClientSettings().snoozeShortcutUntilDone &&
           shell != null &&
-          readEnvironmentScope(shortcutThreadRef.environmentId, AuthOrchestrationOperateScope) &&
-          readEnvironmentSupportsSnoozeUntilDone(shortcutThreadRef.environmentId)
+          readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope) &&
+          readEnvironmentSupportsSnoozeUntilDone(threadRef.environmentId) &&
+          !effectiveSnoozed(shell, { now: new Date().toISOString() }) &&
+          canSnooze(shell) &&
+          canSnoozeUntilDone(shell)
         ) {
-          const now = new Date().toISOString();
-          if (!effectiveSnoozed(shell, { now }) && canSnooze(shell) && canSnoozeUntilDone(shell)) {
-            void snoozeThread(shortcutThreadRef, null, { untilDone: true }).then((result) => {
-              if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return;
-              const error = squashAtomCommandFailure(result);
-              toastManager.add(
-                stackedThreadToast({
-                  type: "error",
-                  title: "Failed to snooze thread",
-                  description: error instanceof Error ? error.message : "An error occurred.",
-                }),
-              );
-            });
-            return;
-          }
+          void snoozeThread(threadRef, null, { untilDone: true }).then((result) => {
+            if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return;
+            const error = squashAtomCommandFailure(result);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Failed to snooze thread",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
+            );
+          });
+          return;
         }
         openCommandPalette({
           open: command === "thread.rename" ? "rename-thread" : "snooze-thread",
         });
         return;
       }
+    }
+    event.preventDefault();
+    event.stopPropagation();
+  });
 
-      if (command === "thread.archive") {
-        if (!shortcutThreadRef) return;
-        if (hasOpenArchiveUndoBlockingLayer()) return;
-        event.preventDefault();
-        event.stopPropagation();
-        if (readThreadShell(shortcutThreadRef)?.archivedAt !== null) return;
-        // Same toggle as the menus: archive, archive when done, or cancel.
-        void attemptArchiveThread(shortcutThreadRef);
-        return;
+  // oxlint-disable-next-line t3code/react-effect-budget -- owns global shortcut and focused-visit subscriptions for the visible chat route
+  useEffect(() => {
+    const readRouteTarget = () =>
+      resolveThreadRouteTarget(router.state.matches.at(-1)?.params ?? {});
+    const readFocusedTarget = () => readActivePaneThreadTarget(readRouteTarget());
+    let trackedKey: string | null = null;
+    let releaseTrackedShell: (() => void) | undefined;
+    const recordVisit = () => {
+      const target = readFocusedTarget();
+      threadVisitHistory.record(target, resolveVisitTarget);
+      const key = threadRouteTargetKey(target);
+      if (key !== trackedKey) {
+        releaseTrackedShell?.();
+        releaseTrackedShell =
+          target?.kind === "server" ? trackVisitedThreadShell(target.threadRef) : undefined;
+        trackedKey = key;
       }
-
-      if (command === "preview.toggle") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!shortcutThreadRef || (!canOperatePreview && !previewOpen)) return;
-        if (!isPreviewAvailableFor(shortcutThreadRef.environmentId)) {
-          toastManager.add(
-            stackedThreadToast({
-              type: "info",
-              title: "Preview is desktop-only",
-              description: "Open T3 Code in the desktop app to use the in-app preview.",
+      if (target?.kind === "draft") rememberDraftThreadRef(target.draftId);
+    };
+    const readContext = () => {
+      const target = readFocusedTarget();
+      const threadRef = target?.kind === "server" ? target.threadRef : null;
+      return {
+        terminalOpen: threadRef
+          ? selectThreadTerminalUiState(
+              useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+              threadRef,
+            ).terminalOpen
+          : false,
+        previewOpen: threadRef
+          ? selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, threadRef) ===
+            "preview"
+          : false,
+      };
+    };
+    const previousThreadShortcut = createLastVisitedThreadShortcut({
+      isDesktop: isElectron,
+      pendingRelease: { key: null },
+      resolveCommand: (event) =>
+        event.target instanceof HTMLElement && event.target.closest("[data-keybinding-capture]")
+          ? null
+          : resolveShortcutCommand(event, appAtomRegistry.get(primaryServerKeybindingsAtom), {
+              context: {
+                ...readContext(),
+                terminalFocus: isTerminalFocused(),
+                previewFocus: isPreviewFocused(),
+                editableFocus: isEditableFocused(event.target),
+                modelPickerOpen: isModelPickerOpen(),
+              },
             }),
-          );
+      isBlocked: () =>
+        isCommandPaletteOpen() || isModelPickerOpen() || hasOpenArchiveUndoBlockingLayer(),
+      resolveTarget: () =>
+        threadVisitHistory.resolveTarget(readFocusedTarget(), resolveVisitTarget),
+      openThread: (target) => {
+        useThreadSelectionStore.getState().clearSelection();
+        if (target.kind === "draft") {
+          const split = useThreadSplitStore.getState();
+          if (split.splitMounted && split.activePaneId === "secondary") split.closeSplit();
+          void router.navigate({ to: "/draft/$draftId", params: { draftId: target.draftId } });
           return;
         }
-        dispatchPreviewAction("toggle-panel");
-        return;
-      }
-
-      if (
-        command === "preview.refresh" ||
-        command === "preview.focusUrl" ||
-        command === "preview.zoomIn" ||
-        command === "preview.zoomOut" ||
-        command === "preview.resetZoom"
-      ) {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!canOperatePreview) return;
-        const action =
-          command === "preview.refresh"
-            ? "refresh"
-            : command === "preview.focusUrl"
-              ? "focus-url"
-              : command === "preview.zoomIn"
-                ? "zoom-in"
-                : command === "preview.zoomOut"
-                  ? "zoom-out"
-                  : "reset-zoom";
-        dispatchPreviewAction(action);
-      }
-    };
-
-    window.addEventListener("keydown", lastVisitedShortcut.onKeyDown, true);
-    window.addEventListener("keyup", lastVisitedShortcut.onKeyUp, true);
-    window.addEventListener("keydown", onWindowKeyDown);
+        const route = readRouteTarget();
+        const { completion } = openThreadInActivePane({
+          targetRef: target.threadRef,
+          routeThreadRef: route?.kind === "server" ? route.threadRef : null,
+          navigateToPrimary: () =>
+            router.navigate({
+              to: "/$environmentId/$threadId",
+              params: buildThreadRouteParams(target.threadRef),
+            }),
+        });
+        completion?.catch(() =>
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not open the previous thread",
+              description: "Navigation to the thread failed.",
+            }),
+          ),
+        );
+      },
+    });
+    const disposeCommands = registerCommands(
+      {
+        "threadPane.focusOther": (event) => runThreadCommand("threadPane.focusOther", event),
+        "threadPane.swap": (event) => runThreadCommand("threadPane.swap", event),
+        "thread.rename": (event) => runThreadCommand("thread.rename", event),
+        "thread.snooze": (event) => runThreadCommand("thread.snooze", event),
+        "thread.snoozeUntilDone": (event) => runThreadCommand("thread.snoozeUntilDone", event),
+        "thread.archive": (event) => runThreadCommand("thread.archive", event),
+      },
+      { when: () => !isCommandPaletteOpen(), context: readContext },
+    );
+    window.addEventListener("keydown", previousThreadShortcut.onKeyDown, true);
+    window.addEventListener("keyup", previousThreadShortcut.onKeyUp, true);
+    const unsubscribes = [
+      router.subscribe("onResolved", recordVisit),
+      useComposerDraftStore.subscribe(recordVisit),
+      useThreadSplitStore.subscribe(recordVisit),
+    ];
+    recordVisit();
     return () => {
-      window.removeEventListener("keydown", lastVisitedShortcut.onKeyDown, true);
-      window.removeEventListener("keyup", lastVisitedShortcut.onKeyUp, true);
-      window.removeEventListener("keydown", onWindowKeyDown);
+      disposeCommands();
+      window.removeEventListener("keydown", previousThreadShortcut.onKeyDown, true);
+      window.removeEventListener("keyup", previousThreadShortcut.onKeyUp, true);
+      for (const unsubscribe of unsubscribes) unsubscribe();
+      releaseTrackedShell?.();
     };
-  }, [
-    activeDraftThread,
-    activeThread,
-    attemptArchiveThread,
-    snoozeThread,
-    snoozeShortcutUntilDone,
-    clearSelection,
-    canOperatePreview,
-    handleNewThread,
-    keybindings,
-    defaultProjectRef,
-    focusedVisitTarget,
-    previewOpen,
-    primaryEnvironmentId,
-    projectGroupCount,
-    routeThreadRef,
-    shortcutThreadRef,
-    scratchEnvironmentId,
-    selectedThreadKeysSize,
-    startScratchThread,
-    legacySidebarEnabled,
-    terminalOpen,
-    router,
-  ]);
-
+  }, [router]);
   return null;
 }
 
@@ -440,7 +260,7 @@ function ChatRouteLayout() {
   const shownTarget = modalOpen ? backgroundTarget : threadTarget;
   return (
     <>
-      {modalOpen ? null : <ChatRouteGlobalShortcuts />}
+      {!modalOpen ? <ChatRouteGlobalShortcuts /> : null}
       {shownTarget?.kind === "server" && !modalOpen ? (
         <ThreadLinkPrompt threadRef={shownTarget.threadRef} />
       ) : null}

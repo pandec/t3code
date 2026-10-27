@@ -3,7 +3,7 @@ import { ComposerContextId } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
 import { collectComposerContextReferences } from "@t3tools/shared/composerContextReferences";
@@ -11,6 +11,7 @@ import { ComposerEditor as NativeComposerEditor } from "../native/T3ComposerEdit
 import type { ComposerEditorProps as NativeComposerEditorProps } from "../native/T3ComposerEditor";
 import {
   appendComposerDraftAttachments,
+  composerContextImportsAtom,
   createComposerDraftContextHistory,
   getComposerDraftAfterSelection,
   getComposerDraftSnapshot,
@@ -22,6 +23,8 @@ import {
   useComposerDraft,
 } from "../state/use-composer-drafts";
 import { importComposerContextClipboard } from "../lib/composerContextClipboard";
+import { startComposerDraftOperation } from "../state/composerDraftOperations";
+import { appAtomRegistry } from "../state/atom-registry";
 import { mobilePreferencesAtom } from "../state/preferences";
 import { useOpenLinkedThread } from "../features/threads/useOpenLinkedThread";
 import { ComposerContextSheet } from "./ComposerContextSheet";
@@ -82,46 +85,42 @@ export function ComposerEditor({
   const [selected, setSelected] = useState<{ source: string; start: number; end: number } | null>(
     null,
   );
-  const selectedRef = useRef(selected);
-  selectedRef.current = selected;
-  const releaseOverlayRef = useRef(onReleaseOverlay);
-  releaseOverlayRef.current = onReleaseOverlay;
   const closeSelected = () => {
-    if (selectedRef.current === null) return;
-    selectedRef.current = null;
+    if (selected === null) return;
     setSelected(null);
-    releaseOverlayRef.current?.();
+    onReleaseOverlay?.();
   };
+  const releaseSelectedOverlay = useEffectEvent(closeSelected);
   // A sheet still open when the draft changes underneath it or the editor unmounts would
-  // otherwise keep the composer's overlay owner forever.
+  // otherwise keep the composer's overlay owner forever. Without a draft no sheet can open.
   // oxlint-disable-next-line t3code/react-effect-budget -- releases the overlay owner when the draft changes or the editor unmounts
-  useEffect(() => () => closeSelected(), [draftKey]);
-  const importRef = useRef<AbortController | null>(null);
-  const [importing, setImporting] = useState(false);
-  useEffect(
-    () => () => {
-      importRef.current?.abort();
-    },
-    [draftKey],
-  );
+  useEffect(() => (draftKey ? () => releaseSelectedOverlay() : undefined), [draftKey]);
+  const contextImports = useAtomValue(composerContextImportsAtom);
+  const importing = draftKey ? contextImports[draftKey] === true : false;
   const pasteContext = async (
     clipboard: Parameters<NonNullable<NativeComposerEditorProps["onPasteContext"]>>[0],
   ) => {
-    if (!draftKey || importRef.current || props.readOnly || props.editable === false) return;
+    if (
+      !draftKey ||
+      appAtomRegistry.get(composerContextImportsAtom)[draftKey] ||
+      props.readOnly ||
+      props.editable === false
+    )
+      return;
     const insertion = { text: clipboard.value, ...clipboard.selection };
-    const controller = new AbortController();
-    importRef.current = controller;
-    setImporting(true);
+    const operation = startComposerDraftOperation(draftKey);
+    const { signal } = operation;
     setComposerContextImporting(draftKey, true);
     const settled = await settlePromise(async () => {
       const retained = getComposerDraftAfterSelection(draftKey, insertion);
       const result = await importComposerContextClipboard(
         clipboard,
         retained.attachments.length,
-        controller.signal,
+        signal,
         retained.context?.records.length ?? 0,
         environmentId,
       );
+      if (signal.aborted) return;
       if (!result) {
         insertComposerDraftText(draftKey, clipboard.text, insertion);
         return;
@@ -148,10 +147,9 @@ export function ComposerEditor({
           [...warnings, "Those references are marked unavailable."].join("\n\n"),
         );
     });
+    operation.finish();
     setComposerContextImporting(draftKey, false);
-    importRef.current = null;
-    setImporting(false);
-    if (AsyncResult.isFailure(settled) && !controller.signal.aborted) {
+    if (AsyncResult.isFailure(settled) && !signal.aborted) {
       const error = squashAtomCommandFailure(settled);
       Dialog.alert(
         "Could not paste context",
@@ -222,9 +220,8 @@ export function ComposerEditor({
             collectComposerContextReferences(selection.source).length > 0 ||
             (selection.source.startsWith("$") &&
               props.skills?.some((skill) => skill.name === selection.source.slice(1)) === true);
-          if (!presentable || selectedRef.current !== null) return;
+          if (!presentable || selected !== null) return;
           if (onAcquireOverlay && !onAcquireOverlay()) return;
-          selectedRef.current = selection;
           setSelected(selection);
         }}
         onSelectionChange={(selection) => {

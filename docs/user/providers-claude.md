@@ -77,12 +77,12 @@ next to the send button. While it is on, Enter summarizes the history first, the
 sends your message. Click the chip to switch it to **Full** and keep the full
 history; the choice holds for that thread until the message is sent. ⌘Enter
 (Ctrl+Enter) sends once with the chip's other choice. To start every old thread
-on **Full**, set **Settings → General → Old thread send** to **Full history**.
+on **Full**, set **Settings → Chat → Old thread send** to **Full history**.
 The cache lasts about an hour on a Claude subscription and 5 minutes with an API
 key, Bedrock, or Vertex. See [commands and skills](./composer.md#commands-and-skills) for using
 composer commands.
 
-**Compact idle threads** in **Settings > General** controls this for threads
+**Compact idle threads** in **Settings > Providers > Advanced** controls this for threads
 over 200,000 tokens. Each Claude provider's settings can override it:
 
 - **When you return** shows the **Compact** chip described above. This is the default.
@@ -114,8 +114,8 @@ start earlier ones through its Skill tool, which refuses skills reserved for man
 
 To show Claude task lists in the web and desktop apps, add
 `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` under **Variables** in the Claude instance's
-**Environment** section in **Settings > Providers**. Unfinished tasks stay visible
-between turns in the same Claude session.
+**Environment** section in **Settings > Providers**. Each update shows as a Tasks
+row in the thread; open it to see every step.
 
 ## OpenRouter
 

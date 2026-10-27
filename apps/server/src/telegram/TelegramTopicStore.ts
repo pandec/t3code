@@ -106,7 +106,7 @@ export const make = Effect.fn("TelegramTopicStore.make")(function* (filePath: st
     read: SynchronizedRef.modifyEffect(state, (value) =>
       current(value).pipe(Effect.map((loaded) => [loaded, loaded] as const)),
     ),
-    update: (f) =>
+    update: Effect.fn("TelegramTopicStore.update")((f) =>
       SynchronizedRef.modifyEffect(state, (value) =>
         Effect.gen(function* () {
           const before = yield* current(value);
@@ -126,6 +126,7 @@ export const make = Effect.fn("TelegramTopicStore.make")(function* (filePath: st
           return [next, next] as const;
         }),
       ),
+    ),
   });
 });
 

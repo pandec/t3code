@@ -77,7 +77,7 @@ export const threadPrewarmRunGateLayer: Layer.Layer<ThreadPrewarmRunGate> = Laye
   Effect.gen(function* () {
     const semaphore = yield* Semaphore.make(1);
     return ThreadPrewarmRunGate.of({
-      run: (effect) => semaphore.withPermits(1)(effect),
+      run: Effect.fn("ThreadPrewarmRunGate.run")((effect) => semaphore.withPermits(1)(effect)),
     });
   }),
 );
@@ -136,7 +136,9 @@ export const threadPrewarmTriggersLayer: Layer.Layer<ThreadPrewarmTriggers> = La
     const pubsub = yield* PubSub.unbounded<ThreadPrewarmTriggerRequest>();
     return ThreadPrewarmTriggers.of({
       changes: Stream.fromPubSub(pubsub),
-      fire: (request) => PubSub.publish(pubsub, request).pipe(Effect.asVoid),
+      fire: Effect.fn("ThreadPrewarmTriggers.fire")((request) =>
+        PubSub.publish(pubsub, request).pipe(Effect.asVoid),
+      ),
     });
   }),
 );

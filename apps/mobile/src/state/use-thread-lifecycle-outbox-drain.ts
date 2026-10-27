@@ -244,5 +244,6 @@ export function useThreadLifecycleOutboxDrain(): void {
         });
       return;
     }
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- retryTick rechecks delivery after the backoff timer expires
   }, [cancelArchive, dispatchingCommandId, inputs, retryTick, scheduleArchive, unarchive]);
 }

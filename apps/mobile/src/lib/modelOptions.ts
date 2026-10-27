@@ -11,16 +11,18 @@ import type {
   RuntimeMode,
   ServerConfig as T3ServerConfig,
 } from "@t3tools/contracts";
-import { resolveProjectProviderInstanceEnabled } from "@t3tools/contracts";
+import { isProviderDriverKind, resolveProjectProviderInstanceEnabled } from "@t3tools/contracts";
 import {
   buildExplicitProviderOptionSelectionsFromDescriptors,
   getProviderOptionDescriptors,
 } from "@t3tools/shared/model";
 import { customModelIcon, readCustomModelIcons } from "@t3tools/client-runtime/customModelIcons";
+import { resolveModelShortName } from "@t3tools/client-runtime/provider-clients";
 
 export type ModelOption = {
   readonly key: string;
   readonly label: string;
+  readonly shortName?: string;
   readonly subtitle: string;
   readonly providerKey: string;
   readonly providerLabel: string;
@@ -326,9 +328,11 @@ export function buildModelOptions(
     for (const model of models) {
       const key = `${provider.instanceId}:${model.slug}`;
       const modelIcon = model.isCustom ? customModelIcon(modelIcons, model.slug) : undefined;
+      const shortName = resolveModelShortName(model, provider.driver);
       options.set(key, {
         key,
         label: model.name,
+        ...(shortName ? { shortName } : {}),
         subtitle: model.subProvider ?? "",
         providerKey: provider.instanceId,
         providerLabel,
@@ -392,9 +396,13 @@ export function buildModelOptions(
         displayName: provider?.displayName ?? instanceConfig?.displayName,
         instanceId: fallbackModelSelection.instanceId,
       });
+      const shortName = model
+        ? resolveModelShortName(model, isProviderDriverKind(providerDriver) ? providerDriver : null)
+        : undefined;
       options.set(key, {
         key,
         label: model?.name ?? fallbackModelSelection.model,
+        ...(shortName ? { shortName } : {}),
         subtitle: model?.subProvider ?? "",
         providerKey: fallbackModelSelection.instanceId,
         providerLabel,

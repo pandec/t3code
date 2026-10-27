@@ -51,12 +51,10 @@ See [images and videos](#images-and-videos-in-messages) for previewing and savin
 
 ## Send while the agent is working
 
-On web and desktop, a draft written while a turn runs shows **Queue for later**,
-**Steer**, and **Stop** together. Queue for later holds the message for a later turn;
-Steer sends it into the running turn. **Settings → General → Follow-up behavior**
-picks which of the two `Enter` uses (it is the filled button). The setting applies
-to this client; already queued messages keep their place. Queued messages are saved
-on the server and can be edited, reordered, or removed above the composer.
+On web and desktop, choose **Settings → Chat → Follow-up behavior** to queue
+new messages for a later turn or steer the running turn immediately. The setting
+applies to this client; already queued messages keep their place. Queued messages
+are saved on the server and can be edited or removed before they send.
 When Enter sends, `Cmd+Enter` on macOS or `Ctrl+Enter` on Windows and Linux uses
 the opposite action: it steers when your default is Queue and queues when your
 default is Steer.
@@ -75,7 +73,7 @@ start of the composer to edit the most recently queued message. Change
 `thread.editQueuedMessage` to use another shortcut. In an empty composer, plain
 `ArrowUp` does the same.
 
-Mobile has the same choice under **Settings → Follow-ups**. While a turn is
+Mobile has the same choice under **Settings → Chat**. While a turn is
 running the send button shows which action it will take. Long-press it to use the
 other action for a single message, or hold `Cmd` while sending from a hardware
 keyboard. VoiceOver and TalkBack offer the other action as an accessibility
@@ -99,7 +97,7 @@ still need a connection.
 Mobile caches a few recently active threads it hasn't stored yet, so they open instantly and can be
 read offline. This happens shortly after an environment connects, when the app returns to the
 foreground, and when a running thread finishes. To start it yourself, use **Sync Threads** in
-**Settings → Thread behavior**, which also shows when the last full sync finished. Syncing is
+**Settings → General**, which also shows when the last full sync finished. Syncing is
 best-effort and stores a recent window of each thread's history; threads that are already cached
 refresh when you open them online. It does not send queued messages.
 
@@ -263,9 +261,10 @@ On web and desktop, the composer shows **Interrupt** while the agent is working 
 empty. Adding text or attachments shows **Queue for later**, **Steer**, and **Stop**; see
 [Send while the agent is working](#send-while-the-agent-is-working) for which one `Enter` uses.
 
-Queued messages appear above the composer. Rows show a thumbnail of any attached image alongside
-the text. Drag a row by its handle to reorder it, use the handle's arrow keys, promote the message
-to a steer, or remove it.
+On web and desktop, queued messages appear at the end of the thread as dashed messages that have
+not been sent yet. On mobile they appear above the composer. Each shows its text and any attached
+images. **Send now** sends a message right away, into the running turn if there is one. You can
+also edit or remove it.
 
 When the active turn ends, the waiting messages go in together: the first one starts the next turn
 and the rest join it as steers, in order, once it is running. Anything you queue after that turn
@@ -279,7 +278,7 @@ desktop, pressing `Enter` in an empty composer sends the newest waiting steer at
 first, it starts the next turn when its time is up. Opening a waiting steer for editing pauses it;
 saving or cancelling the edit (`Escape` on web and desktop) starts a fresh wait, or sends it right
 away if the turn has ended meanwhile. The wait is five seconds by default; change it
-under **Settings → Extras** on web and desktop or **Settings → Thread behavior** on mobile (set per
+under **Settings → Extras** on web and desktop or **Settings → General** on mobile (set per
 device). Set it to 0 to steer immediately.
 
 The agent doesn't always read a steer straight away. Most agents only check for new input between
@@ -290,12 +289,12 @@ it. The note clears when the agent produces new output, or when the turn ends. I
 device and survives a reload.
 
 If you stop the agent or the server restarts, queued messages keep their order and are held.
-Press **Resume** in an empty composer on web and desktop, or **Resume queue** in the queue sheet on
-mobile, to continue. Sending a new message also resumes the queue, unless it steers a turn that is
-already running. You can edit, reorder, or remove held messages without starting them.
+Press **Resume** in an empty composer on web and desktop, or **Resume queue** on mobile, to
+continue. Sending a new message also resumes the queue, unless it steers a turn that is already
+running. You can edit or remove held messages without starting them.
 
-The pencil on a queued row opens that message in the composer for editing. The original message
-stays in the queue until you save, and its row is highlighted while you edit. The message's
+The pencil on a queued message opens it in the composer for editing. The original message
+stays in the queue until you save, and it is highlighted while you edit. The message's
 attachments appear above the text with a remove control, and new images can be added the usual way.
 The checkmark saves the queued message in place; **Cancel** on its row leaves it unchanged. Whatever
 you had typed in the composer before starting the edit is restored afterwards.
@@ -313,8 +312,8 @@ Type `/` for commands or `$` to add a skill from the selected environment and
 provider. On mobile, both are also available before starting a thread on
 **New task**.
 
-The slash menu also includes skills unless you turn off **Settings → General →
-Show skills in slash menu**. Only skills enabled for the provider are listed.
+The slash menu also includes skills unless you turn off **Settings → Chat →
+Show skills in slash menu**, under Advanced. Only skills enabled for the provider are listed.
 
 After you add or change skills, plugins, or MCP servers, use **Restart agent
 session** in the command palette on web and desktop. The conversation continues,
@@ -339,13 +338,18 @@ away. Send `/t3-archive` again before it runs to cancel the pending archive.
 With Codex and Claude, send `/goal` followed by what "done" means, for example
 `/goal all tests in packages/api pass`. The agent keeps working across turns
 until it judges the goal met. The thread shows **Goal** while it works, and a
-row above the composer shows the goal and its progress.
+line at the end of the thread (above the composer on mobile) shows the goal and
+its progress.
 
 - `/goal` alone shows the current goal. `/goal clear` removes it.
 - Codex also supports `/goal pause` and `/goal resume`. Stopping a Codex goal
-  pauses it.
+  pauses it, and so does Codex ending its work without meeting the goal.
 - Stopping Claude ends the current turn, but the goal stays set. Claude checks it
   again at the end of your next message.
+- Sending a new goal, or `/goal resume`, while the agent works stops the current
+  turn and starts the goal, unless you queue it. `/goal clear` and `/goal pause`
+  stop the turn only when it is working on the goal. Other goal commands wait for
+  the turn to end.
 
 ## Context in your message
 

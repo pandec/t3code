@@ -36,7 +36,7 @@ export function useVoiceInputController(input: {
   readonly onChangeSelection: (selection: ComposerEditorSelection) => void;
 }) {
   const global = useGlobalVoiceInput();
-  const { setOwnerFocused, session } = global;
+  const { session } = global;
   // Server transcription operates the environment; on-device dictation needs no grant.
   const canOperateEnvironment = useEnvironmentScope(
     input.environmentId,
@@ -45,6 +45,7 @@ export function useVoiceInputController(input: {
   const environmentTranscriptionAvailable =
     input.environmentTranscriptionAvailable && canOperateEnvironment;
   const latestInput = useRef({ ...input, environmentTranscriptionAvailable });
+  // oxlint-disable-next-line react/refs -- Transcription finishes asynchronously and must reach the composer's current selection setter, not the one captured at start.
   latestInput.current = { ...input, environmentTranscriptionAvailable };
   const mounted = useRef(true);
   useEffect(() => {
@@ -58,9 +59,9 @@ export function useVoiceInputController(input: {
     useCallback(() => {
       const ownerKey = input.ownerKey;
       if (!ownerKey) return;
-      setOwnerFocused(ownerKey, true);
-      return () => setOwnerFocused(ownerKey, false);
-    }, [input.ownerKey, setOwnerFocused]),
+      session.setOwnerFocused(ownerKey, true);
+      return () => session.setOwnerFocused(ownerKey, false);
+    }, [input.ownerKey, session]),
   );
 
   const start = useCallback(() => {

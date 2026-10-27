@@ -58,6 +58,10 @@ import {
   type ProviderReplayGate,
 } from "@t3tools/provider-testing/replayGate";
 
+const decodeSessionEnvironment = Schema.decodeUnknownSync(
+  Schema.Struct({ variables: Schema.Record(Schema.String, Schema.String) }),
+);
+
 const SESSION = "ses_f148ca2deffeJcwCnRQtb0YFNX";
 const WORK = "/work/opencode2";
 const instanceId = ProviderInstanceId.make("opencode");
@@ -1786,9 +1790,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       });
       const variables = sessionEnvironments.map((entry) => {
         assert.equal(entry.sessionID, SESSION);
-        const body = Schema.decodeUnknownSync(
-          Schema.Struct({ variables: Schema.Record(Schema.String, Schema.String) }),
-        )(entry.body);
+        const body = decodeSessionEnvironment(entry.body);
         assert.isNotEmpty(body.variables.T3CODE_HOME);
         assert.isNotEmpty(body.variables.T3CODE_STATE_DIR);
         return {
@@ -1829,10 +1831,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       );
       yield* runtime.ensureThread({ threadId, modelSelection: bigPickle, runtimePolicy: policy() });
       const variables = sessionEnvironments.map(
-        (entry) =>
-          Schema.decodeUnknownSync(
-            Schema.Struct({ variables: Schema.Record(Schema.String, Schema.String) }),
-          )(entry.body).variables,
+        (entry) => decodeSessionEnvironment(entry.body).variables,
       );
       assert.lengthOf(variables, 1);
       assert.equal(variables[0]?.PATH, "/opt/tools/bin:/usr/bin");

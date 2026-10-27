@@ -212,6 +212,36 @@ const scenario = (name: string) =>
     return { ...harness, threadId, setup };
   });
 
+it.effect("applies a goal command without the ordinary steer recall delay", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { steered, started, threadId, setup, layer } = yield* scenario("goal-bypasses-recall");
+      yield* Effect.gen(function* () {
+        const { orchestrator, worker, watch, send } = yield* setup;
+        const goalRunning = yield* watch(
+          (event) =>
+            event.type === "provider-turn.updated" &&
+            event.payload.status === "running" &&
+            event.payload.runAttemptId !== started[0]!.attemptId,
+        );
+        yield* send("/goal ship it", "steer");
+        const goal = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+          (run) => run.userMessageId === "message:/goal ship it",
+        );
+        assert.isDefined(goal);
+        assert.isUndefined(goal.steerDeadlineAt);
+        yield* worker.drain();
+        yield* Fiber.join(goalRunning);
+        assert.deepEqual(steered, []);
+        assert.deepEqual(
+          started.map((turn) => turn.message.text),
+          ["active", "/goal ship it"],
+        );
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
 it.effect("holds a steer for its recall window, then steers its latest text", () =>
   Effect.scoped(
     Effect.gen(function* () {

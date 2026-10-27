@@ -97,24 +97,22 @@ function tryResolveClaudeModelCatalog(
   };
 }
 
-const BUNDLED_CLAUDE_PROVIDER_CATALOG =
-  resolveProviderCatalog(BUNDLED_MODEL_MANIFEST, CLAUDE) ?? undefined;
-
+/** Resolve the fallback on each read so its new-model badges can expire. */
 export function resolveClaudeModelCatalog(
   catalog: ModelCatalog.ProviderCatalog | undefined,
 ): ClaudeModelCatalog {
   return (
     tryResolveClaudeModelCatalog(catalog) ??
-    tryResolveClaudeModelCatalog(BUNDLED_CLAUDE_PROVIDER_CATALOG) ?? {
+    tryResolveClaudeModelCatalog(
+      resolveProviderCatalog(BUNDLED_MODEL_MANIFEST, CLAUDE) ?? undefined,
+    ) ?? {
       models: [],
       customModelSlugs: new Set(),
     }
   );
 }
 
-export const BUNDLED_CLAUDE_MODEL_CATALOG = resolveClaudeModelCatalog(
-  BUNDLED_CLAUDE_PROVIDER_CATALOG,
-);
+export const BUNDLED_CLAUDE_MODEL_CATALOG = resolveClaudeModelCatalog(undefined);
 
 /**
  * Custom slugs stay opaque, keep the gateway effort ladder, and add only

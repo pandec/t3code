@@ -1,35 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
-/**
- * Holds a transient flag on for at least `minVisibleMs` so fast background work does not strobe
- * its indicator, without delaying its appearance. Re-arming while still held keeps the original
- * onset: the indicator never visibly disappeared.
- */
+import { useDeadlinePassed } from "./clock";
+
+/** Holds a transient indicator through its minimum duration, including a restart while held. */
 export function useMinimumVisibleFlag(active: boolean, minVisibleMs: number): boolean {
-  const [held, setHeld] = useState(false);
-  const shownAtRef = useRef<number | null>(null);
-
-  // oxlint-disable-next-line t3code/react-effect-budget -- minimum-visible hold timer
-  useEffect(() => {
-    if (active) {
-      shownAtRef.current ??= Date.now();
-      setHeld(true);
-      return;
-    }
-    const shownAt = shownAtRef.current;
-    if (shownAt === null) return;
-    const release = () => {
-      shownAtRef.current = null;
-      setHeld(false);
-    };
-    const remaining = minVisibleMs - (Date.now() - shownAt);
-    if (remaining <= 0) {
-      release();
-      return;
-    }
-    const timer = setTimeout(release, remaining);
-    return () => clearTimeout(timer);
-  }, [active, minVisibleMs]);
-
-  return active || held;
+  const [shownAt, setShownAt] = useState<number | null>(() => (active ? Date.now() : null));
+  if (active && shownAt === null) setShownAt(() => Date.now());
+  const passed = useDeadlinePassed(shownAt === null || active ? null : shownAt + minVisibleMs);
+  if (!active && passed && shownAt !== null) setShownAt(null);
+  return active || (shownAt !== null && !passed);
 }

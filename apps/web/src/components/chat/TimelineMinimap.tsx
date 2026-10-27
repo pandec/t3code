@@ -4,7 +4,7 @@ import {
   resolveTimelineMinimapTooltipTranslate,
   type TimelineMinimapItem,
 } from "./MessagesTimeline.minimap";
-import { memo, useEffect, useRef, useState, type MouseEvent } from "react";
+import { memo, useRef, useState, type MouseEvent } from "react";
 import { ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import {
@@ -71,11 +71,6 @@ export const TimelineMinimap = memo(function TimelineMinimap({
 
   const pressedOnStripRef = useRef(false);
   const [passThrough, setPassThrough] = useState(false);
-
-  useEffect(() => {
-    if (!passThrough) return;
-    return onMouseButtonsReleased(() => setPassThrough(false));
-  }, [passThrough]);
 
   const resolvedActiveIndex =
     activeIndex !== null && activeIndex < items.length ? activeIndex : null;
@@ -153,7 +148,9 @@ export const TimelineMinimap = memo(function TimelineMinimap({
             });
           }}
           onMouseMove={(event) => {
-            if (event.buttons !== 0 && !pressedOnStripRef.current) setPassThrough(true);
+            if (event.buttons === 0 || pressedOnStripRef.current || passThrough) return;
+            setPassThrough(true);
+            onMouseButtonsReleased(() => setPassThrough(false));
           }}
           style={{
             // Both rails share the user-turn position space so a final answer

@@ -112,11 +112,12 @@ const make = Effect.gen(function* () {
                 delivered_at = NULL
         `;
     }),
-    remove: (input) =>
+    remove: Effect.fn("ThreadHiddenNotes.remove")((input) =>
       sql`
         DELETE FROM fork_thread_hidden_notes
         WHERE thread_id = ${input.threadId} AND kind = ${input.kind}
       `.pipe(Effect.asVoid),
+    ),
     pending: Effect.fn("ThreadHiddenNotes.pending")(
       function* (threadId, turn) {
         const rows = yield* sql<{
@@ -150,12 +151,13 @@ const make = Effect.gen(function* () {
           ),
         ),
     ),
-    acknowledge: (ids) =>
+    acknowledge: Effect.fn("ThreadHiddenNotes.acknowledge")((ids) =>
       markDelivered(ids).pipe(
         Effect.catch((cause) =>
           Effect.logWarning("Failed to acknowledge hidden thread notes", { cause }),
         ),
       ),
+    ),
   });
 });
 

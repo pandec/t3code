@@ -17,8 +17,8 @@ import {
 } from "~/components/ui/sheet";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { useResizeDrag } from "~/hooks/useResizeDrag";
-import { useIsMobile } from "~/hooks/useMediaQuery";
-import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
+import { useMediaQuery } from "~/hooks/useMediaQuery";
+import { setLocalStorageItem } from "~/hooks/useLocalStorage";
 import { resolveSidebarState, type ResponsiveSidebarState } from "./sidebarState";
 import * as Schema from "effect/Schema";
 
@@ -40,13 +40,10 @@ type SidebarContextProps = {
   setOpenMobile: (open: boolean) => void;
   isMobile: boolean;
   toggleSidebar: () => void;
+  /** Runs before the desktop sidebar collapses. */
+  onCollapse: (listener: () => void) => () => void;
 };
 
-/**
- * `minWidth`/`maxWidth` hold while dragging, on restore, and when the limits change;
- * the last applies only to a px `--sidebar-width`, so a `rem` default waits for the
- * first drag. Pass an initial px width via `onResize` if the limits must hold sooner.
- */
 type SidebarResizableOptions = {
   maxWidth?: number;
   minWidth?: number;
@@ -99,46 +96,99 @@ function useSidebarVisibility() {
   return isMobile ? openMobile : open;
 }
 
+// Same breakpoint as useIsMobile, also read when a shortcut fires.
+const SIDEBAR_MOBILE_QUERY = "(max-width: 767px)";
+
+function isMobileViewport(): boolean {
+  return typeof window !== "undefined" && window.matchMedia(SIDEBAR_MOBILE_QUERY).matches;
+}
+
+async function persistSidebarOpen(open: boolean) {
+  await cookieStore.set({
+    expires: Date.now() + SIDEBAR_COOKIE_MAX_AGE * 1000,
+    name: SIDEBAR_COOKIE_NAME,
+    path: "/",
+    value: String(open),
+  });
+}
+
+// An offcanvas sidebar turns inert once collapsed, which drops focus to the body.
+function moveFocusOutOfCollapsingSidebar() {
+  const sidebar = document.activeElement?.closest<HTMLElement>(
+    '[data-slot="sidebar"][data-collapsible-mode="offcanvas"]',
+  );
+  const wrapper = sidebar?.closest<HTMLElement>('[data-slot="sidebar-wrapper"]');
+  if (!sidebar || !wrapper) return;
+  const trigger = Array.from(
+    wrapper.querySelectorAll<HTMLElement>('[data-sidebar="trigger"]'),
+  ).find((element) => !sidebar.contains(element));
+  trigger?.focus({ preventScroll: true });
+}
+
+interface SidebarOpenState {
+  readonly open: boolean;
+  readonly openMobile: boolean;
+}
+
+/** Per-provider open state, kept outside React so shortcuts can toggle it at event time. */
+function createSidebarOpenStore(defaultOpen: boolean) {
+  let state: SidebarOpenState = { open: defaultOpen, openMobile: false };
+  const listeners = new Set<() => void>();
+  const collapseListeners = new Set<() => void>();
+  const publish = (next: SidebarOpenState) => {
+    state = next;
+    for (const listener of listeners) listener();
+  };
+  const setOpen = (open: boolean) => {
+    if (!open && state.open) {
+      for (const listener of collapseListeners) listener();
+      moveFocusOutOfCollapsingSidebar();
+    }
+    if (open !== state.open) publish({ ...state, open });
+    void persistSidebarOpen(open);
+  };
+  const setOpenMobile = (openMobile: boolean) => {
+    if (openMobile !== state.openMobile) publish({ ...state, openMobile });
+  };
+  return {
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    getSnapshot: () => state,
+    setOpen,
+    setOpenMobile,
+    toggle: () => (isMobileViewport() ? setOpenMobile(!state.openMobile) : setOpen(!state.open)),
+    onCollapse: (listener: () => void) => {
+      collapseListeners.add(listener);
+      return () => {
+        collapseListeners.delete(listener);
+      };
+    },
+  };
+}
+
 function SidebarProvider({
   defaultOpen = true,
-  open: openProp,
-  onOpenChange: setOpenProp,
   className,
   style,
   children,
   ...props
 }: React.ComponentProps<"div"> & {
   defaultOpen?: boolean;
-  open?: boolean;
-  onOpenChange?: (open: boolean) => void;
 }) {
-  const isMobile = useIsMobile();
-  const [openMobile, setOpenMobile] = React.useState(false);
+  const isMobile = useMediaQuery(SIDEBAR_MOBILE_QUERY);
+  const [store] = React.useState(() => createSidebarOpenStore(defaultOpen));
+  const { open, openMobile } = React.useSyncExternalStore(
+    store.subscribe,
+    store.getSnapshot,
+    store.getSnapshot,
+  );
   const [mobileSheetMounted, setMobileSheetMounted] = React.useState(false);
   const setMobileSheetElement = (element: HTMLDivElement | null) => {
     setMobileSheetMounted(element !== null);
-  };
-
-  const [_open, _setOpen] = React.useState(defaultOpen);
-  const open = openProp ?? _open;
-  const setOpen = async (value: boolean | ((value: boolean) => boolean)) => {
-    const openState = typeof value === "function" ? value(open) : value;
-    if (setOpenProp) {
-      setOpenProp(openState);
-    } else {
-      _setOpen(openState);
-    }
-
-    await cookieStore.set({
-      expires: Date.now() + SIDEBAR_COOKIE_MAX_AGE * 1000,
-      name: SIDEBAR_COOKIE_NAME,
-      path: "/",
-      value: String(openState),
-    });
-  };
-
-  const toggleSidebar = () => {
-    return isMobile ? setOpenMobile((open) => !open) : setOpen((open) => !open);
   };
 
   const state = resolveSidebarState({ isMobile, open, openMobile });
@@ -149,10 +199,11 @@ function SidebarProvider({
     openMobile,
     mobileSheetMounted,
     setMobileSheetElement,
-    setOpen,
-    setOpenMobile,
+    setOpen: store.setOpen,
+    setOpenMobile: store.setOpenMobile,
     state,
-    toggleSidebar,
+    toggleSidebar: store.toggle,
+    onCollapse: store.onCollapse,
   };
 
   return (
@@ -220,23 +271,7 @@ function Sidebar({
   resizable?: boolean | SidebarResizableOptions;
 }) {
   const { isMobile, state, openMobile, setOpenMobile, setMobileSheetElement } = useSidebar();
-  const desktopSidebarRef = React.useRef<HTMLDivElement>(null);
   const offcanvasCollapsed = !isMobile && collapsible === "offcanvas" && state === "collapsed";
-
-  React.useLayoutEffect(() => {
-    const sidebar = desktopSidebarRef.current;
-    if (!sidebar) return;
-
-    // Transfer focus before inert causes the browser to clear the focused descendant.
-    if (offcanvasCollapsed && sidebar.contains(document.activeElement)) {
-      const wrapper = sidebar.closest('[data-slot="sidebar-wrapper"]');
-      const trigger = Array.from(
-        wrapper?.querySelectorAll<HTMLElement>('[data-sidebar="trigger"]') ?? [],
-      ).find((element) => !sidebar.contains(element));
-      trigger?.focus({ preventScroll: true });
-    }
-    sidebar.toggleAttribute("inert", offcanvasCollapsed);
-  }, [offcanvasCollapsed]);
 
   const resolvedResizable = resolveSidebarResizable({ collapsible, isMobile, resizable });
   const instanceContextValue: SidebarInstanceContextProps = { side, resizable: resolvedResizable };
@@ -302,9 +337,10 @@ function Sidebar({
   return (
     <SidebarInstanceContext value={instanceContextValue}>
       <div
-        ref={desktopSidebarRef}
         className="group peer hidden text-sidebar-foreground md:block"
         data-collapsible={state === "collapsed" ? collapsible : ""}
+        data-collapsible-mode={collapsible}
+        inert={offcanvasCollapsed}
         data-side={side}
         data-slot="sidebar"
         data-state={state}
@@ -381,23 +417,9 @@ function clampSidebarWidth(width: number, options: SidebarResolvedResizableOptio
   return Math.max(options.minWidth, Math.min(width, options.maxWidth));
 }
 
-// The resize path only ever writes pixels. Anything else (the "16rem" default, a
-// calc(), a caller managing the variable itself) is not ours to reconcile, and
-// parsing it as a number would read "16rem" as 16 and collapse the sidebar.
-function parseSidebarPixelWidth(value: string): number | null {
-  const match = /^\s*(\d+(?:\.\d+)?)px\s*$/.exec(value);
-  if (!match?.[1]) {
-    return null;
-  }
-
-  const width = Number.parseFloat(match[1]);
-  return Number.isFinite(width) ? width : null;
-}
-
 function SidebarRail({
   className,
   onClick,
-  onDoubleClick,
   onPointerCancel,
   onLostPointerCapture,
   onPointerDown,
@@ -405,24 +427,16 @@ function SidebarRail({
   onPointerUp,
   ...props
 }: React.ComponentProps<"button">) {
-  const { open, toggleSidebar } = useSidebar();
+  const { open, toggleSidebar, onCollapse } = useSidebar();
   const sidebarInstance = React.use(SidebarInstanceContext);
-  const railRef = React.useRef<HTMLButtonElement | null>(null);
   const suppressClickRef = React.useRef(false);
-  const resizingRef = React.useRef(false);
-  const hydratedStorageKeyRef = React.useRef<string | null>(null);
-  const observedStorageKeyRef = React.useRef<string | null>(null);
-  // The user's requested width, unclamped so a window that grows again restores it.
-  // Tagged with its storage key so a sidebar that switches keys does not inherit the
-  // previous key's preference.
-  const preferredWidthRef = React.useRef<{ storageKey: string | null; width: number } | null>(null);
   const resolvedResizable = sidebarInstance?.resizable ?? null;
-  const latestResizable = React.useRef(resolvedResizable);
   const canResize = resolvedResizable !== null && open;
   const railLabel = canResize ? "Resize Sidebar" : "Toggle Sidebar";
   const railTitle = canResize ? "Drag to resize sidebar" : "Toggle Sidebar";
   const resize = useResizeDrag<HTMLButtonElement>((event) => {
-    if (!resolvedResizable || !open) return null;
+    const options = resolvedResizable;
+    if (!options || !open) return null;
     const rail = event.currentTarget;
     const wrapper = rail.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
     const sidebarRoot = rail.closest<HTMLElement>("[data-slot='sidebar']");
@@ -432,10 +446,7 @@ function SidebarRail({
     if (!wrapper || !sidebarRoot || !sidebarContainer) return null;
 
     const side = sidebarInstance?.side ?? "left";
-    let width = clampSidebarWidth(
-      sidebarContainer.getBoundingClientRect().width,
-      resolvedResizable,
-    );
+    let width = clampSidebarWidth(sidebarContainer.getBoundingClientRect().width, options);
     // Write width only to gap/container during drag; inherited --sidebar-width restyles the whole app, so
     // update it at commit.
     const widthTargets = [
@@ -452,14 +463,11 @@ function SidebarRail({
     });
     setTargetWidth(width);
 
-    resizingRef.current = true;
     return {
       width,
       edge: side === "left" ? "right" : "left",
-      resize(value) {
-        const options = latestResizable.current;
-        if (!options) return width;
-        const nextWidth = clampSidebarWidth(value, options);
+      bounds: { min: options.minWidth, max: options.maxWidth },
+      resize(nextWidth) {
         const accepted =
           options.shouldAcceptWidth?.({
             currentWidth: width,
@@ -478,9 +486,6 @@ function SidebarRail({
       finish(finalWidth, moved) {
         wrapper.style.setProperty("--sidebar-width", `${finalWidth}px`);
         suppressClickRef.current = moved;
-        const options = latestResizable.current;
-        if (!options) return;
-        preferredWidthRef.current = { storageKey: options.storageKey, width: finalWidth };
         if (options.storageKey) {
           try {
             setLocalStorageItem(options.storageKey, finalWidth, Schema.Finite);
@@ -491,19 +496,27 @@ function SidebarRail({
         options.onResize?.(finalWidth);
       },
       cleanup() {
-        resizingRef.current = false;
         widthTargets.forEach((element) => {
           element.style.removeProperty("width");
           element.style.removeProperty("transition-duration");
         });
       },
     };
-  }, String(open));
-  const refreshResize = React.useEffectEvent(() => resize.refresh());
-  React.useLayoutEffect(() => {
-    latestResizable.current = resolvedResizable;
-    refreshResize();
-  }, [resolvedResizable]);
+  });
+  // Collapsing mid-drag abandons the drag instead of committing a width to a hidden sidebar.
+  // Created once: a new ref callback would run the old one's cleanup, which ends a live drag.
+  const [railRef] = React.useState(() => {
+    const { ref: dragRef, cancel } = resize;
+    return (node: HTMLButtonElement | null) => {
+      const releaseDrag = dragRef(node);
+      if (!releaseDrag) return undefined;
+      const stopCancelOnCollapse = onCollapse(cancel);
+      return () => {
+        stopCancelOnCollapse();
+        releaseDrag();
+      };
+    };
+  });
 
   const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
     onClick?.(event);
@@ -519,110 +532,6 @@ function SidebarRail({
     }
     toggleSidebar();
   };
-
-  // A caller's reset clears only its own state and storage; the reconciliation
-  // effect would restore the unclamped preference before paint, so the reset drops
-  // it too or the sidebar snaps back until a reload.
-  const handleDoubleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
-    onDoubleClick?.(event);
-    if (event.defaultPrevented) return;
-    if (!resolvedResizable || !open) return;
-    preferredWidthRef.current = null;
-  };
-
-  React.useLayoutEffect(() => {
-    const storageKey = resolvedResizable?.storageKey ?? null;
-    // Tracked separately from the hydrated key so that leaving a key and coming
-    // back to it counts as a fresh restore. Recording only successful hydrations
-    // would let a key that was never re-observed look permanently settled.
-    if (observedStorageKeyRef.current !== storageKey) {
-      observedStorageKeyRef.current = storageKey;
-      hydratedStorageKeyRef.current = null;
-    }
-    if (!resolvedResizable || !storageKey || typeof window === "undefined") return;
-    // Callers pass their resizable options as an object literal, so this effect
-    // re-runs on every parent render. Restoring is a mount concern: repeating it
-    // would overwrite a live drag (which only writes storage once it settles)
-    // with the pre-drag width every time an unrelated render lands.
-    if (hydratedStorageKeyRef.current === storageKey) return;
-    // A drag owns the width until it settles, so restoring waits rather than
-    // racing it.
-    if (resizingRef.current) return;
-    const rail = railRef.current;
-    if (!rail) return;
-    const wrapper = rail.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
-    if (!wrapper) return;
-
-    let storedWidth: number | null;
-    try {
-      storedWidth = getLocalStorageItem(storageKey, Schema.Finite);
-    } catch (error) {
-      console.error("Could not restore persisted sidebar width.", error);
-      return;
-    }
-    hydratedStorageKeyRef.current = storageKey;
-    if (storedWidth === null) return;
-    preferredWidthRef.current = { storageKey, width: storedWidth };
-    const clampedWidth = clampSidebarWidth(storedWidth, resolvedResizable);
-    wrapper.style.setProperty("--sidebar-width", `${clampedWidth}px`);
-    resolvedResizable.onResize?.(clampedWidth);
-  }, [resolvedResizable]);
-
-  // Hydration above runs once, so the applied width would otherwise ignore later
-  // changes to the limits: shrinking the window used to leave an oversized
-  // sidebar squeezing the main content until the next drag. Reconciling is
-  // separate from restoring, and idempotent, so an unrelated render is a no-op.
-  // oxlint-disable-next-line t3code/react-effect-budget -- re-clamps the DOM sidebar width to current limits
-  React.useLayoutEffect(() => {
-    if (!resolvedResizable || typeof window === "undefined") return;
-    // Never fight a drag in progress — the pointer owns the width until it settles.
-    if (resizingRef.current) return;
-    const rail = railRef.current;
-    if (!rail) return;
-    const wrapper = rail.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
-    if (!wrapper) return;
-
-    // Only widths this component owns are reconcilable: the resize path writes
-    // px, so anything else (the provider's "16rem" default, a caller managing
-    // the variable itself) is left alone rather than reinterpreted.
-    const appliedWidth = parseSidebarPixelWidth(
-      window.getComputedStyle(wrapper).getPropertyValue("--sidebar-width"),
-    );
-    if (appliedWidth === null) return;
-
-    const preference = preferredWidthRef.current;
-    const preferredWidth =
-      preference && preference.storageKey === resolvedResizable.storageKey
-        ? preference.width
-        : null;
-    const clampedWidth = clampSidebarWidth(preferredWidth ?? appliedWidth, resolvedResizable);
-    if (clampedWidth === appliedWidth) return;
-
-    // Pulling an out-of-bounds width inside the limits skips the predicate, or a
-    // caller that rejects shrinking would pin it above a lowered maxWidth. The
-    // predicate governs only optional moves between valid widths (growing back).
-    const appliedWithinLimits =
-      appliedWidth >= resolvedResizable.minWidth && appliedWidth <= resolvedResizable.maxWidth;
-    if (appliedWithinLimits) {
-      const sidebarRoot = rail.closest<HTMLElement>("[data-slot='sidebar']");
-      if (!sidebarRoot) return;
-      const accepted =
-        resolvedResizable.shouldAcceptWidth?.({
-          currentWidth: appliedWidth,
-          nextWidth: clampedWidth,
-          rail,
-          side: sidebarInstance?.side ?? "left",
-          sidebarRoot,
-          wrapper,
-        }) ?? true;
-      if (!accepted) return;
-    }
-
-    wrapper.style.setProperty("--sidebar-width", `${clampedWidth}px`);
-    // Deliberately not persisted: storage holds the width the user asked for, so
-    // a window that grows again restores it instead of keeping the smaller cap.
-    resolvedResizable.onResize?.(clampedWidth);
-  });
 
   return (
     <Tooltip>
@@ -644,7 +553,6 @@ function SidebarRail({
             data-sidebar="rail"
             data-slot="sidebar-rail"
             onClick={handleClick}
-            onDoubleClick={handleDoubleClick}
             onLostPointerCapture={(event) => {
               onLostPointerCapture?.(event);
               if (!event.defaultPrevented) resize.onLostPointerCapture(event);
@@ -933,7 +841,6 @@ function SidebarMenuSubButton({
 export {
   SidebarInput,
   Sidebar,
-  parseSidebarPixelWidth,
   SidebarContent,
   SidebarFooter,
   SidebarGroup,

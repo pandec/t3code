@@ -465,7 +465,9 @@ export function layerWithRegistry<Error>(
   const layerThreadTitleRegenerationTest = Layer.succeed(
     ThreadTitleRegenerationService.ThreadTitleRegenerationService,
     ThreadTitleRegenerationService.ThreadTitleRegenerationService.of({
-      execute: () => Effect.void,
+      execute: Effect.fn("ThreadTitleRegenerationService.execute")(function () {
+        return Effect.void;
+      }),
     }),
   );
   const layerOrchestratorProvided = Orchestrator.layer.pipe(
@@ -493,23 +495,20 @@ export function layerWithRegistry<Error>(
       // failure would retry and, under per-thread effect order, hold back every
       // later effect on the stopped thread. Mirrors the service, minus logging.
       const stopDelegatedTasks: ThreadManagementService.ThreadManagementServiceShape["stopDelegatedTasks"] =
-        (input) =>
-          Effect.gen(function* () {
-            const { subagents } = yield* orchestrator.getThreadRecords(input.threadId, [
-              "subagents",
-            ]);
-            for (const task of subagents) {
-              if (task.origin !== "app_owned" || task.childThreadId === null) continue;
-              const threadId = task.childThreadId;
-              yield* orchestrator.dispatch({
-                type: "thread.stop",
-                commandId: CommandId.make(`${input.commandId}:stop:${threadId}`),
-                threadId,
-                ...(input.reason === undefined ? {} : { reason: input.reason }),
-              });
-              yield* stopDelegatedTasks({ ...input, threadId });
-            }
-          });
+        Effect.fn("stopDelegatedTasks")(function* (input) {
+          const { subagents } = yield* orchestrator.getThreadRecords(input.threadId, ["subagents"]);
+          for (const task of subagents) {
+            if (task.origin !== "app_owned" || task.childThreadId === null) continue;
+            const threadId = task.childThreadId;
+            yield* orchestrator.dispatch({
+              type: "thread.stop",
+              commandId: CommandId.make(`${input.commandId}:stop:${threadId}`),
+              threadId,
+              ...(input.reason === undefined ? {} : { reason: input.reason }),
+            });
+            yield* stopDelegatedTasks({ ...input, threadId });
+          }
+        });
       return Layer.mock(ThreadManagementService.ThreadManagementService)({
         dispatch: orchestrator.dispatch,
         getThreadRecords: orchestrator.getThreadRecords,

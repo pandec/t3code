@@ -838,7 +838,7 @@ export function createServerEnvironmentAtoms<R, E>(
     label: "environment-data:server:update-server",
     scheduler: updateScheduler,
     concurrency: configConcurrency,
-    execute: (target, atomRegistry) => {
+    execute: Effect.fn("ServerUpdate.updateServer")(function (target, atomRegistry) {
       const stateAtom = serverUpdateStateAtom(target.environmentId);
       let targetVersion = target.input.targetVersion;
       let fromVersion =
@@ -1053,7 +1053,7 @@ export function createServerEnvironmentAtoms<R, E>(
           }),
         ),
       );
-    },
+    }),
   });
   const settingsValueAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => get(configValueAtom(environmentId))?.settings ?? null).pipe(
@@ -1313,20 +1313,20 @@ export function createServerEnvironmentAtoms<R, E>(
       refreshTrigger: ({ environmentId }) => usageScanSettingsAtom(environmentId),
       execute: (input, emit) =>
         request(WS_METHODS.serverGetUsageSummary, input).pipe(
-          Effect.flatMap((summary) =>
-            summary.sources.some((source) => source.refreshing === true)
-              ? emit(summary).pipe(
-                  Effect.andThen(
-                    request(WS_METHODS.serverGetUsageSummary, { ...input, awaitRefresh: true }),
+          Effect.filterOrElse(
+            (summary) => !summary.sources.some((source) => source.refreshing === true),
+            (summary) =>
+              emit(summary).pipe(
+                Effect.andThen(
+                  request(WS_METHODS.serverGetUsageSummary, { ...input, awaitRefresh: true }),
+                ),
+                Effect.catch((error) =>
+                  Effect.logWarning("Could not refresh slow usage sources.").pipe(
+                    Effect.annotateLogs({ ...safeErrorLogAttributes(error) }),
+                    Effect.as(summary),
                   ),
-                  Effect.catch((error) =>
-                    Effect.logWarning("Could not refresh slow usage sources.").pipe(
-                      Effect.annotateLogs({ ...safeErrorLogAttributes(error) }),
-                      Effect.as(summary),
-                    ),
-                  ),
-                )
-              : Effect.succeed(summary),
+                ),
+              ),
           ),
         ),
     }),
@@ -1351,8 +1351,8 @@ export function createServerEnvironmentAtoms<R, E>(
     searchAcpRegistry: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:acp-registry:search",
       tag: WS_METHODS.serverSearchAcpRegistry,
-      staleTimeMs: 0,
-      idleTtlMs: 0,
+      // Reopening Add provider reuses recent results; submitting the same search refreshes it.
+      staleTimeMs: 5 * 60_000,
     }),
     configProjection,
     welcome,

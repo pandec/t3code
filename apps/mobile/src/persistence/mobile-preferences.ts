@@ -80,6 +80,11 @@ export type WorkspaceSelections = typeof WorkspaceSelections.Type;
 const isThreadListFilters = Schema.is(ThreadListFilters);
 const isWorkspaceSelections = Schema.is(WorkspaceSelections);
 const isPullRequestListPreferences = Schema.is(PullRequestListPreferences);
+const ThreadProject = Schema.Struct({
+  environmentId: Schema.NonEmptyString,
+  projectId: Schema.NonEmptyString,
+});
+const isThreadProject = Schema.is(ThreadProject);
 
 export interface Preferences {
   readonly archivedSectionVisibleCount?: number;
@@ -129,6 +134,8 @@ export interface Preferences {
   readonly threadListWorkingShelfExpanded?: boolean;
   readonly planModeEnabled?: boolean;
   readonly workingShelfEnabled?: boolean;
+  readonly useLastProjectForNewThreads?: boolean;
+  readonly lastThreadProject?: typeof ThreadProject.Type;
   readonly modelFavorites?: ReadonlyArray<{
     readonly provider: ProviderInstanceId;
     readonly model: string;
@@ -215,6 +222,8 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     sidebarSnoozedShelfExpanded?: boolean;
     sidebarSettledShelfExpanded?: boolean;
     sidebarArchivedShelfExpanded?: boolean;
+    useLastProjectForNewThreads?: boolean;
+    lastThreadProject?: typeof ThreadProject.Type;
     threadListSettledShelfExpanded?: boolean;
     threadListSnoozedShelfExpanded?: boolean;
     threadListWorkingShelfExpanded?: boolean;
@@ -367,6 +376,12 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.workingShelfEnabled === "boolean") {
     preferences.workingShelfEnabled = parsed.workingShelfEnabled;
+  }
+  if (typeof parsed.useLastProjectForNewThreads === "boolean") {
+    preferences.useLastProjectForNewThreads = parsed.useLastProjectForNewThreads;
+  }
+  if (isThreadProject(parsed.lastThreadProject)) {
+    preferences.lastThreadProject = parsed.lastThreadProject;
   }
   if (Array.isArray(parsed.modelFavorites)) {
     preferences.modelFavorites = parsed.modelFavorites.filter(

@@ -102,7 +102,7 @@ export const layer: Layer.Layer<NativeContinuationStore, never, SqlClient.SqlCli
             ),
           ),
       ),
-      get: (ref) =>
+      get: Effect.fn("NativeContinuationStore.get")((ref) =>
         sql<{ readonly continuation_key: string }>`
           SELECT continuation_key FROM fork_native_continuation
           WHERE provider_instance_id = ${ref.providerInstanceId}
@@ -118,6 +118,7 @@ export const layer: Layer.Layer<NativeContinuationStore, never, SqlClient.SqlCli
               }),
           ),
         ),
+      ),
     });
   }),
 );

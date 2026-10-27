@@ -14,6 +14,7 @@ import { AsyncResult } from "effect/reactivity";
 
 import { resolveAccentTintAlphas, type AccentTintAlphas } from "../lib/accentTint";
 import type { Preferences } from "../persistence/mobile-preferences";
+import { appAtomRegistry } from "./atom-registry";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "./preferences";
 import {
   resolveThreadShelfExpanded,
@@ -27,7 +28,7 @@ const EMPTY_PREFERENCES: Preferences = {};
 /**
  * Mobile has no client-settings sync, so these are the fork's Extras settings stored on this
  * device. They load asynchronously; `hydrated` lets a consumer that cannot afford the default
- * (the steer hold in `use-thread-outbox-drain`) wait for the stored value.
+ * wait for the stored value.
  */
 export function useMobilePreferences(): {
   readonly preferences: Preferences;
@@ -49,6 +50,13 @@ export function useMobilePreferencesHydrated(): boolean {
 export function useSteerGraceWindowMs(): SteerGraceWindowMs {
   const { preferences } = useMobilePreferences();
   const value = preferences.steerGraceWindowMs;
+  return clampSteerGraceWindowMs(value ?? DEFAULT_STEER_GRACE_WINDOW_MS);
+}
+
+/** The steer grace window for app services outside React (the outbox delivery). */
+export function readSteerGraceWindowMs(): SteerGraceWindowMs {
+  const result = appAtomRegistry.get(mobilePreferencesAtom);
+  const value = AsyncResult.isSuccess(result) ? result.value.steerGraceWindowMs : undefined;
   return clampSteerGraceWindowMs(value ?? DEFAULT_STEER_GRACE_WINDOW_MS);
 }
 

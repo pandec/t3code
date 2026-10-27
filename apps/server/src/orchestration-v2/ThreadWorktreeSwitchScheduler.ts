@@ -176,13 +176,13 @@ export const make = Effect.gen(function* () {
   const worker = yield* makeDrainableWorker((threadId: ThreadId) =>
     Effect.sync(() => queued.delete(threadId)).pipe(
       Effect.andThen(process(threadId)),
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
-          : Effect.logWarning("deferred worktree switch check failed", {
-              threadId,
-              cause: Cause.pretty(cause),
-            }),
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) =>
+          Effect.logWarning("deferred worktree switch check failed", {
+            threadId,
+            cause: Cause.pretty(cause),
+          }),
       ),
     ),
   );

@@ -34,8 +34,10 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const queue = yield* Queue.unbounded<ProviderSessionCwdObservation>();
     return {
-      offer: (observation: ProviderSessionCwdObservation) =>
-        Queue.offer(queue, observation).pipe(Effect.asVoid),
+      offer: Effect.fn("ProviderSessionCwdObservations.offer")(
+        (observation: ProviderSessionCwdObservation) =>
+          Queue.offer(queue, observation).pipe(Effect.asVoid),
+      ),
       take: Queue.take(queue),
     };
   }),

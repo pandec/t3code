@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import { EnvironmentId, RuntimeRequestId } from "@t3tools/contracts";
-import type { ThreadUserInputQuestion } from "@t3tools/client-runtime/state/thread-requests";
+import { EnvironmentId, RuntimeRequestId, ThreadId } from "@t3tools/contracts";
+import {
+  type ThreadUserInputQuestion,
+  userInputDraftKey,
+} from "@t3tools/client-runtime/state/thread-requests";
 
-import { scopedRequestKey } from "../lib/scopedEntities";
 import { appAtomRegistry } from "./atom-registry";
 import {
   readLatestPendingUserInputAnswers,
@@ -10,8 +12,9 @@ import {
   userInputDraftsByRequestKeyAtom,
 } from "./pending-user-input-drafts";
 
-const requestKey = scopedRequestKey(
+const requestKey = userInputDraftKey(
   EnvironmentId.make("environment-1"),
+  ThreadId.make("thread-1"),
   RuntimeRequestId.make("request-1"),
 );
 const question: ThreadUserInputQuestion = {

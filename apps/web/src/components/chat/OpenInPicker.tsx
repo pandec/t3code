@@ -6,9 +6,10 @@ import {
   type EnvironmentId,
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
-import { memo, use, useEffect, useRef } from "react";
+import { memo, use, useRef } from "react";
 import { BackgroundThreadContext } from "./backgroundThread";
-import { isOpenFavoriteEditorShortcut, shortcutLabelForCommand } from "../../keybindings";
+import { shortcutLabelForCommand } from "../../keybindings";
+import { OPEN_FAVORITE_EDITOR_ATTRIBUTE } from "./OpenInPickerShortcut";
 import { usePreferredEditor } from "../../editorPreferences";
 import { editorLabelForPlatform } from "../../editorLabels";
 import {
@@ -76,7 +77,6 @@ import { cn, isMacPlatform, isWindowsPlatform } from "~/lib/utils";
 import { shellEnvironment } from "~/state/shell";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useThreadPaneId } from "../thread-split/threadPaneContext";
-import { isThreadPaneActive } from "../thread-split/threadSplitStore";
 import {
   THREAD_DETAILS_PANEL_CHEVRON_CLASS,
   THREAD_DETAILS_PANEL_ICON_CLASS,
@@ -356,42 +356,6 @@ export const OpenInPicker = memo(function OpenInPicker({
 
   const threadPaneId = useThreadPaneId();
   const backgroundThread = use(BackgroundThreadContext);
-  useEffect(() => {
-    if (!enableShortcut || !canOpenEditor || backgroundThread) return;
-    const handler = (e: globalThis.KeyboardEvent) => {
-      // Split view: both panes' headers mount this picker — only the active
-      // pane's shortcut may open its cwd (possibly on another machine).
-      if (!isThreadPaneActive(threadPaneId)) return;
-      if (e.defaultPrevented || !isOpenFavoriteEditorShortcut(e, keybindings)) return;
-      if (!openInCwd) return;
-      if (!preferredEditor) return;
-      if (
-        remote.mode === "local-exec" &&
-        !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
-      )
-        return;
-
-      e.preventDefault();
-      const label = editorLabelForPlatform(preferredEditor, navigator.platform);
-      void openInEditor(preferredEditor).then((opened) => {
-        if (opened) announce(`Opened in ${label}`);
-      });
-    };
-    window.addEventListener("keydown", handler, true);
-    return () => window.removeEventListener("keydown", handler, true);
-  }, [
-    backgroundThread,
-    canOpenEditor,
-    enableShortcut,
-    environmentId,
-    keybindings,
-    openInCwd,
-    openInEditor,
-    preferredEditor,
-    remote.mode,
-    threadPaneId,
-  ]);
-  // Derive after the shortcut effect to preserve the editor list's compiler cache.
   const options = resolveOpenInOptions(
     navigator.platform,
     effectiveEditors,
@@ -513,7 +477,16 @@ export const OpenInPicker = memo(function OpenInPicker({
         part="primary"
         panel={isPanel}
         disabled={!preferredEditor || !openInCwd || !canOpenEditor}
-        onClick={() => openInEditor(preferredEditor)}
+        {...(enableShortcut && !backgroundThread
+          ? { [OPEN_FAVORITE_EDITOR_ATTRIBUTE]: threadPaneId }
+          : {})}
+        onClick={() => {
+          if (!preferredEditor) return;
+          const label = editorLabelForPlatform(preferredEditor, navigator.platform);
+          void openInEditor(preferredEditor).then((opened) => {
+            if (opened) announce(`Opened in ${label}`);
+          });
+        }}
       >
         {primaryOption?.Icon ? (
           <primaryOption.Icon
@@ -521,10 +494,6 @@ export const OpenInPicker = memo(function OpenInPicker({
             className={cn(
               isPanel ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3.5",
               getOpenInIconClass(primaryOption.kind),
-              // A hairline keeps pale app icons from dissolving into the card.
-              isPanel &&
-                primaryOption.kind === "brand" &&
-                "redesign:rounded-sm redesign:ring-1 redesign:ring-black/10 redesign:dark:ring-white/15",
             )}
           />
         ) : isPanel ? (

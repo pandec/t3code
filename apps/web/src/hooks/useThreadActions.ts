@@ -1020,9 +1020,9 @@ export function useThreadActions() {
       );
     }
     const resolved = resolveThreadTarget(target);
-    const wokeAt = resolved
-      ? threadWokeAt(resolved.thread, { now: new Date().toISOString() })
-      : null;
+    // oxlint-disable-next-line react/purity -- reads the clock in the settle event handler
+    const nowIso = new Date().toISOString();
+    const wokeAt = resolved ? threadWokeAt(resolved.thread, { now: nowIso }) : null;
     // Fork: restore only a timed snooze that still held; an expired or
     // raised-hand one had already woken. Settling stops the work an "until
     // it's done" snooze waits on (DECISIONS Q3.1), so that snooze would have
@@ -1030,7 +1030,7 @@ export function useThreadActions() {
     const restoresSnooze =
       resolved !== null &&
       resolved.thread.snoozedUntilRunId == null &&
-      effectiveSnoozed(resolved.thread, { now: new Date().toISOString() });
+      effectiveSnoozed(resolved.thread, { now: nowIso });
     const undoPlan = ThreadUndo.planThreadUndo(
       "settle",
       resolved && {
@@ -1230,6 +1230,7 @@ export function useThreadActions() {
         threadKey,
         currentThreadKey: routeKey,
         action: "snooze",
+        // oxlint-disable-next-line react/purity -- reads the clock after the snooze mutation
         now: new Date().toISOString(),
         thread: readThreadShell(target),
       })

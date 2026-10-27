@@ -1,6 +1,6 @@
 import {
+  NavigationContext,
   NavigationRouteContext,
-  useNavigation,
   type ParamListBase,
 } from "@react-navigation/native";
 import type {
@@ -44,7 +44,8 @@ export type AppNativeStackNavigationOptions = Omit<
 };
 
 function useNativeStackNavigation(): NativeStackNavigationProp<ParamListBase> | null {
-  return useNavigation<NativeStackNavigationProp<ParamListBase>>();
+  const navigation = use(NavigationContext);
+  return navigation ? (navigation as NativeStackNavigationProp<ParamListBase>) : null;
 }
 
 function normalizeScreenOptions(
@@ -201,24 +202,28 @@ export function NativeStackScreenOptions(props: {
   const lastAppliedOptionsSignatureRef = useRef<string | undefined>(undefined);
   const latestOptionFunctionsRef = useRef(new Map<string, (...args: unknown[]) => unknown>());
   const optionFunctionWrappersRef = useRef(new Map<string, (...args: unknown[]) => unknown>());
-  const normalizedOptions = useMemo(() => normalizeScreenOptions(props.options), [props.options]);
-  const stabilizationStartedAt = startHeaderDiagnosticWork();
-  const stableOptions = normalizedOptions
-    ? (stabilizeOptionFunctions(
-        normalizedOptions,
-        "options",
-        latestOptionFunctionsRef.current,
-        optionFunctionWrappersRef.current,
-      ) as NativeStackNavigationOptions)
-    : undefined;
-  finishHeaderDiagnosticWork("stabilize", stabilizationStartedAt);
 
+  // Stabilizing records each factory's latest closure, so it runs in the commit
+  // phase: a render React discards must not leak its closures into the header.
+  // It runs before the tab check so wrappers already installed in an inactive
+  // tab's header still call the newest closures.
   useLayoutEffect(() => {
+    const normalizedOptions = normalizeScreenOptions(props.options);
+    const stabilizationStartedAt = startHeaderDiagnosticWork();
+    const stableOptions = normalizedOptions
+      ? stabilizeOptionFunctions(
+          normalizedOptions,
+          "options",
+          latestOptionFunctionsRef.current,
+          optionFunctionWrappersRef.current,
+        )
+      : undefined;
+    finishHeaderDiagnosticWork("stabilize", stabilizationStartedAt);
     if (!tabActive) {
       lastAppliedOptionsSignatureRef.current = undefined;
       return;
     }
-    if (!setOptions || !stableOptions) {
+    if (!setOptions || !normalizedOptions) {
       return;
     }
     const signatureStartedAt = startHeaderDiagnosticWork();
@@ -243,7 +248,7 @@ export function NativeStackScreenOptions(props: {
         optionFunctionWrappersRef.current,
       ) as NativeStackNavigationOptions,
     );
-  }, [setOptions, normalizedOptions, props.optionsVersion, stableOptions, tabActive]);
+  }, [setOptions, props.options, props.optionsVersion, tabActive]);
 
   useEffect(() => {
     if (!navigation || !props.listeners) {

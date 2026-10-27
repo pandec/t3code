@@ -5,7 +5,7 @@ also lists the command IDs and defaults available in your version.
 
 ## Composer controls
 
-In **Settings → General → Send shortcut**, choose whether Enter sends, requires
+In **Settings → Chat → Send shortcut**, choose whether Enter sends, requires
 `mod+Enter` for multiline prompts, or always requires `mod+Enter`. `Shift+Enter`
 inserts a new line. This applies to the web and desktop composer at desktop widths.
 
@@ -217,7 +217,7 @@ through the pages you have visited, like a browser's back and forward buttons.
 
 In the desktop app, `mod+w` closes the focused terminal or the active right-panel
 tab. With nothing else to close in split view, it closes the active pane's thread and
-keeps the other one. When nothing remains to close, it closes the window. In a browser, `mod+w`
+keeps the other one. When nothing remains to close, it does nothing; it never closes the window. In a browser, `mod+w`
 closes the browser tab; rebind `rightPanel.close` and `terminal.close` to an available
 shortcut such as `alt+w`.
 

@@ -1,3 +1,4 @@
+import type { ThreadRouteTarget } from "../../threadRoutes";
 /**
  * Active-pane-aware thread opening (fork feature). The sidebar and the
  * command palette both funnel plain thread picks through here so the picked
@@ -133,4 +134,13 @@ export function shouldCloseSplitForRoute(input: {
     return false;
   }
   return input.pendingSwap === null || input.now > input.pendingSwap.expiresAt;
+}
+
+export function readActivePaneThreadTarget(
+  routeTarget: ThreadRouteTarget | null,
+): ThreadRouteTarget | null {
+  const split = useThreadSplitStore.getState();
+  return split.splitMounted && split.activePaneId === "secondary" && split.secondaryRef
+    ? { kind: "server", threadRef: split.secondaryRef }
+    : routeTarget;
 }
