@@ -125,6 +125,11 @@ export class LabsService extends Context.Service<
     readonly prepareAgentThread: (
       input: LabsAgentThreadInput,
     ) => Effect.Effect<LabsPrepareThreadResult, LabsError>;
+    /** Releases (stopping first) `leaseId` when it still holds `labId`; never fails. */
+    readonly abandonThread: (input: {
+      readonly labId: string;
+      readonly leaseId: string;
+    }) => Effect.Effect<void>;
     readonly action: (input: LabsActionInput) => Effect.Effect<LabsActionResult, LabsError>;
     readonly release: (input: LabsReleaseInput) => Effect.Effect<LabsReleaseResult, LabsError>;
     readonly history: (input: LabsHistoryInput) => Effect.Effect<LabsHistoryResult, LabsError>;
@@ -619,17 +624,6 @@ const make = Effect.gen(function* () {
     "LabsService.prepareAgentThread",
   )(function* (input) {
     yield* requireDirectory;
-    yield* refresh;
-    const state = yield* Ref.get(core);
-    if (state.projectId === null || state.projectId !== input.projectId) {
-      return yield* new LabsError({
-        reason: "invalid_input",
-        detail: "Labs exist only in the SalesPros project.",
-      });
-    }
-    if (state.error !== null) {
-      return yield* new LabsError({ reason: "cli_failed", detail: state.error });
-    }
     const { kind } = input;
     if ((kind === undefined) === (input.labId === undefined)) {
       return yield* new LabsError({
@@ -637,20 +631,65 @@ const make = Effect.gen(function* () {
         detail: "Pass exactly one of kind or labId.",
       });
     }
-    const labId =
-      input.labId ?? (kind === undefined ? undefined : findFreeLab(state.environments, kind)?.id);
-    if (labId === undefined) {
-      return yield* new LabsError({ reason: "not_found", detail: `No ${kind} lab is free.` });
-    }
     const continues = input.branch !== undefined && input.baseRef === undefined;
-    return yield* prepareThread({
-      threadId: input.threadId,
-      labId,
-      branch: input.branch ?? null,
-      baseRef: continues ? null : (input.baseRef ?? LAB_DEFAULT_BASE_REF),
-      purpose: input.purpose,
-    });
+    // A free lab someone else takes between the pick and the acquire is skipped for the next.
+    const taken = new Set<string>();
+    while (true) {
+      yield* refresh;
+      const state = yield* Ref.get(core);
+      if (state.projectId === null || state.projectId !== input.projectId) {
+        return yield* new LabsError({
+          reason: "invalid_input",
+          detail: "Labs exist only in the SalesPros project.",
+        });
+      }
+      if (state.error !== null) {
+        return yield* new LabsError({ reason: "cli_failed", detail: state.error });
+      }
+      const labId =
+        input.labId ??
+        (kind === undefined
+          ? undefined
+          : findFreeLab(
+              state.environments.filter((environment) => !taken.has(environment.id)),
+              kind,
+            )?.id);
+      if (labId === undefined) {
+        return yield* new LabsError({ reason: "not_found", detail: `No ${kind} lab is free.` });
+      }
+      const prepared = yield* prepareThread({
+        threadId: input.threadId,
+        labId,
+        branch: input.branch ?? null,
+        baseRef: continues ? null : (input.baseRef ?? LAB_DEFAULT_BASE_REF),
+        purpose: input.purpose,
+      }).pipe(Effect.exit);
+      if (Exit.isSuccess(prepared)) return prepared.value;
+      // `prepareThread` refreshes before it returns, so this is the lab as it is now.
+      const lab = (yield* Ref.get(core)).environments.find((candidate) => candidate.id === labId);
+      const lostRace =
+        input.labId === undefined &&
+        lab !== undefined &&
+        ((lab.lease !== null && lab.lease.threadId !== input.threadId) || lab.hold !== null);
+      if (!lostRace) return yield* prepared;
+      taken.add(labId);
+    }
   });
+
+  /** In the background, releases a reservation whose launch never created its thread. */
+  const abandonThread: LabsService["Service"]["abandonThread"] = Effect.fn(
+    "LabsService.abandonThread",
+  )(
+    function* (input) {
+      const { environment } = yield* findLab(input.labId);
+      if (environment.lease?.id !== input.leaseId) return;
+      const result = yield* release({ labId: input.labId, stopFirst: true });
+      if (result.status === "blocked") {
+        yield* Effect.logWarning("Could not release an unlaunched lab thread's lab", result);
+      }
+    },
+    (effect) => effect.pipe(Effect.ignore, Effect.forkIn(scope), Effect.asVoid),
+  );
 
   const release: LabsService["Service"]["release"] = (input) =>
     mutate(
@@ -824,6 +863,7 @@ const make = Effect.gen(function* () {
     getInventory,
     prepareThread,
     prepareAgentThread,
+    abandonThread,
     action,
     release,
     history,

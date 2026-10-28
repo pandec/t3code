@@ -21,13 +21,13 @@ import { Input } from "../ui/input";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Radio, RadioGroup } from "../ui/radio-group";
 import { LabAvailabilityBadge, LabOwnerLink, LiteLabBadge, useLabOwnerThread } from "./LabParts";
-import { resolveDraftLabKind, resolveLabAvailability } from "./labs.logic";
+import { availableLabKinds, resolveDraftLabKind, resolveLabAvailability } from "./labs.logic";
 
 /** Radio values for "First free full/lite lab"; lab ids never take this form. */
 const AUTO_LAB_VALUES: Record<LabKind, string> = { full: "auto:full", lite: "auto:lite" };
 
-function intentLabel(intent: DraftLabIntent): string {
-  const lab = intent.labId ?? `First free ${resolveDraftLabKind(intent)}`;
+function intentLabel(intent: DraftLabIntent, autoKind: LabKind): string {
+  const lab = intent.labId ?? `First free ${autoKind} lab`;
   const name = intent.branchName.trim();
   if (intent.branchMode === "continue") return `${lab} · ${name || "choose branch"}`;
   return `${lab} · ${name || "new branch"} from ${intent.baseRef.trim() || LAB_DEFAULT_BASE_REF}`;
@@ -62,11 +62,16 @@ export const LabWorkspacePicker = memo(function LabWorkspacePicker({
     (environment) => environment.kind === "lab",
   );
   const selected = labs.find((environment) => environment.id === intent.labId);
+  const autoKind = resolveDraftLabKind(intent, labs);
+  // Both while labs load; then only the kinds sp-labs has.
+  const loadedKinds = availableLabKinds(labs);
+  const autoKinds: ReadonlyArray<LabKind> =
+    loadedKinds.length > 0 ? loadedKinds : (["lite", "full"] as const);
   const suggestedBranch = lastLabBranch(selected);
   const fieldId = useId();
   const update = (patch: Partial<DraftLabIntent>) => onIntentChange({ ...intent, ...patch });
   const isPanel = displayMode === "panel";
-  const label = intentLabel(intent);
+  const label = intentLabel(intent, autoKind);
   const [open, setOpen] = useState(false);
 
   return (
@@ -106,7 +111,7 @@ export const LabWorkspacePicker = memo(function LabWorkspacePicker({
               <p className="text-destructive-foreground">{snapshot.error}</p>
             ) : null}
             <RadioGroup
-              value={intent.labId ?? AUTO_LAB_VALUES[resolveDraftLabKind(intent)]}
+              value={intent.labId ?? AUTO_LAB_VALUES[autoKind]}
               onValueChange={(value) =>
                 update(
                   value === AUTO_LAB_VALUES.full || value === AUTO_LAB_VALUES.lite
@@ -115,7 +120,7 @@ export const LabWorkspacePicker = memo(function LabWorkspacePicker({
                 )
               }
             >
-              {(["lite", "full"] as const).map((kind) => (
+              {autoKinds.map((kind) => (
                 <label key={kind} className="flex cursor-pointer items-center gap-2 py-0.5">
                   <Radio value={AUTO_LAB_VALUES[kind]} />
                   <span>First free {kind} lab</span>

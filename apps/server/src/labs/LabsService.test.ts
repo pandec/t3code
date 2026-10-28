@@ -88,6 +88,8 @@ const makeFakeCli = Effect.gen(function* () {
   /** Fields a newer CLI adds to `acquire`; empty is an older CLI's output. */
   const acquireExtra = yield* Ref.make<Record<string, unknown>>({});
   const statusFails = yield* Ref.make(false);
+  /** A lab someone else reserves just before this acquire reaches it. */
+  const stolenOnAcquire = yield* Ref.make<string | null>(null);
   /** A reservation someone else takes while `down` runs. */
   const leaseAfterDown = yield* Ref.make<LabLease | null | undefined>(undefined);
   const setLab = (id: string, update: (lab: FakeLab) => FakeLab) =>
@@ -111,6 +113,14 @@ const makeFakeCli = Effect.gen(function* () {
           };
         }
         case "acquire": {
+          if ((yield* Ref.get(stolenOnAcquire)) === target) {
+            const lease = { ...LEASE, labId: target, threadId: "someone-else" };
+            yield* setLab(target, (lab) => ({ ...lab, lease }));
+          }
+          const holder = (yield* Ref.get(labs))[target]?.lease;
+          if (holder && holder.threadId !== input.threadId) {
+            return yield* new LabsError({ reason: "cli_failed", detail: `${target} is reserved` });
+          }
           const branch = input.args[input.args.indexOf("--branch") + 1]!;
           const lease: LabLease = { ...LEASE, labId: target, threadId: input.threadId ?? null };
           yield* setLab(target, (lab) => ({ ...lab, lease, branch }));
@@ -147,6 +157,7 @@ const makeFakeCli = Effect.gen(function* () {
     acquireExtra,
     statusFails,
     leaseAfterDown,
+    stolenOnAcquire,
     labs,
     setLab,
     layer: Layer.succeed(LabsCli.LabsCli, LabsCli.LabsCli.of({ run })),
@@ -429,9 +440,49 @@ describe("LabsService", () => {
               reason: "not_found",
               detail: "No full lab is free.",
             });
+
+            // A free lab taken between the pick and the acquire is skipped for the next one;
+            // a named lab is never swapped.
+            const third = ThreadId.make("thread-third");
+            yield* Ref.update(fake.labs, (all) => ({
+              ...all,
+              "sp-lab-8": { ...idle, lender: "sp-lab-3" },
+            }));
+            yield* Ref.set(fake.stolenOnAcquire, "sp-lab-7");
+            assert.include(yield* launch({ threadId: third, labId: "sp-lab-7" }), {
+              reason: "cli_failed",
+            });
+            yield* fake.setLab("sp-lab-7", (lab) => ({ ...lab, lease: null }));
+            assert.include(yield* launch({ threadId: third, kind: "lite" }), {
+              labId: "sp-lab-8",
+            });
           }),
         );
       }),
+  );
+
+  it.effect("abandoning an unlaunched thread stops and releases its lab", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeCli;
+      yield* withService(
+        fake,
+        Effect.gen(function* () {
+          const labs = yield* LabsService.LabsService;
+          const prepared = yield* labs.prepareAgentThread({
+            threadId: THREAD,
+            projectId: PROJECT,
+            kind: "full",
+            purpose: "Fix",
+          });
+          yield* takeCall(fake, "up");
+          yield* labs.abandonThread({ labId: prepared.labId, leaseId: prepared.leaseId });
+          const down = yield* takeCall(fake, "down");
+          assert.deepEqual(down.args, ["down", "sp-lab-1", "--lease", prepared.leaseId]);
+          const release = yield* takeCall(fake, "release");
+          assert.deepEqual(release.args, ["release", "sp-lab-1", "--lease", prepared.leaseId]);
+        }),
+      );
+    }),
   );
 
   it.effect(

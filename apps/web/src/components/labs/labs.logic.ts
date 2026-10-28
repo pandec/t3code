@@ -170,8 +170,27 @@ export type LabSendTarget =
   | { readonly ok: true; readonly labId: string }
   | { readonly ok: false; readonly error: string };
 
-/** What "First free lab" reserves; drafts from before lite labs pick lite, as the CLI does. */
-export const resolveDraftLabKind = (intent: DraftLabIntent): LabKind => intent.labKind ?? "lite";
+/** The lab kinds sp-labs has; an sp-labs checkout from before lite labs has only full ones. */
+export function availableLabKinds(
+  environments: ReadonlyArray<Pick<LabEnvironment, "kind" | "labKind">>,
+): LabKind[] {
+  return (["lite", "full"] as const).filter((kind) =>
+    environments.some((environment) => resolveLabKind(environment) === kind),
+  );
+}
+
+/**
+ * What "First free lab" reserves: the draft's kind, lite when unset as the CLI prefers, or the
+ * kind sp-labs actually has when it has only one.
+ */
+export function resolveDraftLabKind(
+  intent: DraftLabIntent,
+  environments: ReadonlyArray<Pick<LabEnvironment, "kind" | "labKind">>,
+): LabKind {
+  const kind = intent.labKind ?? "lite";
+  const kinds = availableLabKinds(environments);
+  return kinds.length === 1 ? kinds[0]! : kind;
+}
 
 /**
  * The lab a first send reserves: the draft's pick, else the first free lab of its kind. A pick
@@ -201,7 +220,7 @@ export function resolveLabSendTarget(
     }
     return { ok: true, labId: intent.labId };
   }
-  const kind = resolveDraftLabKind(intent);
+  const kind = resolveDraftLabKind(intent, labs);
   const free = findFreeLab(labs, kind);
   return free
     ? { ok: true, labId: free.id }

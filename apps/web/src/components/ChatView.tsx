@@ -3309,7 +3309,6 @@ export default function ChatView(props: ChatViewProps) {
         onPendingChange: handleFilePendingChangeStable,
       }}
       linearIssuesSupported={serverConfig?.environment.capabilities.linearIssues === true}
-      labsProjectId={activeProject?.id ?? null}
     />
   ) : null;
   const panelToggleControlProps = {

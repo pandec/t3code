@@ -218,6 +218,21 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           createdBy: "agent",
           creationSource: "mcp",
         }).pipe(
+          // These reject the launch before any thread exists, so its lab would stay reserved.
+          Effect.tapError((error) =>
+            labWorkspace !== undefined &&
+            (error._tag === "AttachmentClaimError" ||
+              error._tag === "ThreadManagementProviderInstanceDisabledError")
+              ? LabsService.LabsService.pipe(
+                  Effect.flatMap((labs) =>
+                    labs.abandonThread({
+                      labId: labWorkspace.labId,
+                      leaseId: labWorkspace.leaseId,
+                    }),
+                  ),
+                )
+              : Effect.void,
+          ),
           Effect.mapError((error) => {
             if (error._tag === "AttachmentClaimError") {
               return new OrchestratorMcpFailure({

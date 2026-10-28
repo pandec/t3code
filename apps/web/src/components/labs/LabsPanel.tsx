@@ -91,24 +91,16 @@ const CHECK_BADGE: Record<LabCheckState, "success" | "error" | "outline"> = {
  */
 export function LabsPanel({
   threadRef,
-  projectId,
   visible,
 }: {
   readonly threadRef: ScopedThreadRef;
-  readonly projectId: ProjectId | null;
   readonly visible: boolean;
 }) {
   if (!visible) return null;
-  return <VisibleLabsPanel threadRef={threadRef} projectId={projectId} />;
+  return <VisibleLabsPanel threadRef={threadRef} />;
 }
 
-function VisibleLabsPanel({
-  threadRef,
-  projectId,
-}: {
-  readonly threadRef: ScopedThreadRef;
-  readonly projectId: ProjectId | null;
-}) {
+function VisibleLabsPanel({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
   const environmentId = threadRef.environmentId;
   const snapshot = useLabsSnapshot(environmentId);
   const commands = useLabCommands(environmentId);
@@ -137,8 +129,9 @@ function VisibleLabsPanel({
   // Ages are measured at the snapshot's arrival: it is pushed at least every poll, so they stay
   // current without a ticking timer.
   const now = snapshot.dataUpdatedAt;
-  // The labs project, where "New thread" stages a draft.
-  const labsProjectId = data.projectId ?? projectId;
+  // The labs project, where "New thread" stages a draft; never the sp-labs project the panel may
+  // be open in, which has no Lab mode.
+  const labsProjectId = data.projectId;
   const selected = data.environments.find((environment) => environment.id === selectedId);
   if (selected) {
     return (

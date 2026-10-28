@@ -144,6 +144,14 @@ describe("lab send target", () => {
     ).toEqual({ ok: false, error: "No full lab is free. Release one in the Labs panel." });
   });
 
+  it("picks the only kind an sp-labs checkout from before lite labs has", () => {
+    const older = { environments: [lab("sp-lab-3", { labKind: null })] };
+    expect(resolveLabSendTarget(DEFAULT_DRAFT_LAB_INTENT, older, "thread-1")).toEqual({
+      ok: true,
+      labId: "sp-lab-3",
+    });
+  });
+
   it("refuses a pick that another thread reserved or the human holds", () => {
     const pick = (labId: string) => ({ ...DEFAULT_DRAFT_LAB_INTENT, labId });
     expect(resolveLabSendTarget(pick("sp-lab-1"), snapshot, "thread-1").ok).toBe(false);

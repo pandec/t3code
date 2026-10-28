@@ -43,6 +43,9 @@ const clientLaunchHarness = (input: {
   readonly workspaceRoot?: string;
   readonly checkWorktreeBase?: ThreadLaunch.ThreadLaunchService["Service"]["checkWorktreeBase"];
   readonly prepareAgentThread?: LabsService.LabsService["Service"]["prepareAgentThread"];
+  readonly abandoned?: Array<{ readonly labId: string; readonly leaseId: string }>;
+  /** The launch is rejected before any thread exists. */
+  readonly providerDisabled?: boolean;
 }) => {
   const projectId = ProjectId.make("project:client-target");
   const modelSelection = {
@@ -80,6 +83,13 @@ const clientLaunchHarness = (input: {
     Layer.mock(ThreadLaunch.ThreadLaunchService)({
       checkWorktreeBase: input.checkWorktreeBase ?? (() => Effect.void),
       launch: (launch) => {
+        if (input.providerDisabled === true)
+          return Effect.fail(
+            new ThreadManagement.ThreadManagementProviderInstanceDisabledError({
+              projectId: launch.projectId,
+              instanceId: launch.modelSelection.instanceId,
+            }),
+          );
         input.launched.push(launch);
         return Effect.succeed({
           threadId: launch.threadId,
@@ -109,11 +119,12 @@ const clientLaunchHarness = (input: {
         ),
     }),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
-    Layer.mock(LabsService.LabsService)(
-      input.prepareAgentThread === undefined
+    Layer.mock(LabsService.LabsService)({
+      ...(input.prepareAgentThread === undefined
         ? {}
-        : { prepareAgentThread: input.prepareAgentThread },
-    ),
+        : { prepareAgentThread: input.prepareAgentThread }),
+      abandonThread: (abandoned) => Effect.sync(() => void input.abandoned?.push(abandoned)),
+    }),
     Layer.mock(ThreadGroupsMcpService.ThreadGroupsMcpService)({
       requireGroup: (groupId) =>
         groupId === "group-1"
@@ -295,6 +306,35 @@ it.effect("a lab launch reserves the lab for the new thread before binding its w
     });
     expect(mixed.at(-1)?.result).toMatchObject({ code: "invalid_request" });
     expect(launched).toHaveLength(1);
+  }),
+);
+
+it.effect("a lab launch rejected before its thread exists gives the lab back", () =>
+  Effect.gen(function* () {
+    const abandoned: Array<{ readonly labId: string; readonly leaseId: string }> = [];
+    const { projectId, dependencies } = clientLaunchHarness({
+      runtimeModeCeiling: "full-access",
+      launched: [],
+      abandoned,
+      providerDisabled: true,
+      prepareAgentThread: () =>
+        Effect.succeed({
+          labId: "sp-lab-6",
+          worktreePath: "/labs/sp-lab-6",
+          branch: "t3/abc",
+          leaseId: "lease-1",
+        }),
+    });
+    const toolkit = yield* ProjectToolkit.pipe(
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(Layer.provide(dependencies)),
+      ),
+    );
+    const result = yield* toolkit
+      .handle("t3_thread_launch", { title: "Fix", projectId, lab: { kind: "lite" } })
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+    expect(result.at(-1)?.result).toMatchObject({ code: "invalid_request" });
+    expect(abandoned).toEqual([{ labId: "sp-lab-6", leaseId: "lease-1" }]);
   }),
 );
 
