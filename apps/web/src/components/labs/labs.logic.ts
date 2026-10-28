@@ -1,5 +1,9 @@
 import {
+  findFreeLab,
   isLabStackStopped,
+  resolveLabKind,
+  LAB_DEFAULT_BASE_REF,
+  type LabKind,
   type LabEnvironment,
   type LabInventoryEntry,
   type LabReleaseBlocker,
@@ -155,16 +159,23 @@ export function resolveLabBranchRequest(intent: DraftLabIntent): LabBranchReques
       : { ok: true, branch, baseRef: null };
   }
   const baseRef = intent.baseRef.trim();
-  return { ok: true, branch: branch.length === 0 ? null : branch, baseRef: baseRef || "master" };
+  return {
+    ok: true,
+    branch: branch.length === 0 ? null : branch,
+    baseRef: baseRef || LAB_DEFAULT_BASE_REF,
+  };
 }
 
 export type LabSendTarget =
   | { readonly ok: true; readonly labId: string }
   | { readonly ok: false; readonly error: string };
 
+/** What "First free lab" reserves; drafts from before lite labs pick lite, as the CLI does. */
+export const resolveDraftLabKind = (intent: DraftLabIntent): LabKind => intent.labKind ?? "lite";
+
 /**
- * The lab a first send reserves: the draft's pick, else the first free lab. A pick that is no
- * longer free fails here rather than late in the CLI.
+ * The lab a first send reserves: the draft's pick, else the first free lab of its kind. A pick
+ * that is no longer free fails here rather than late in the CLI.
  */
 export function resolveLabSendTarget(
   intent: DraftLabIntent,
@@ -190,10 +201,11 @@ export function resolveLabSendTarget(
     }
     return { ok: true, labId: intent.labId };
   }
-  const free = labs.find((environment) => resolveLabAvailability(environment) === "free");
+  const kind = resolveDraftLabKind(intent);
+  const free = findFreeLab(labs, kind);
   return free
     ? { ok: true, labId: free.id }
-    : { ok: false, error: "No lab is free. Release one in the Labs panel." };
+    : { ok: false, error: `No ${kind} lab is free. Release one in the Labs panel.` };
 }
 
 /** The reservation purpose recorded in sp-labs: the first line of the first message. */
@@ -206,7 +218,7 @@ export function resolveLabPurpose(message: string, fallback: string): string {
 // ── Dashboard-style summaries (the sp-labs dashboard's phrasing) ─────────
 
 /** A reservation whose owner went quiet this long counts as an idle hold. */
-export const LAB_IDLE_HOLD_HOURS = 18;
+const LAB_IDLE_HOLD_HOURS = 18;
 
 const parseTime = (value: string | null | undefined): number | null => {
   if (!value) return null;
@@ -438,21 +450,18 @@ export function summarizeLabEnvironment(
   };
 }
 
-/** "3 of 5 labs free, 1 in use." then "sp-lab-2 needs a look." or "Nothing needs you." */
-export function summarizeLabsHeadline(
+/** A group's count: "4 of 5 free". */
+export function countFreeLabs(summaries: ReadonlyArray<LabSummary>): string {
+  return `${summaries.filter((summary) => summary.word === "Free").length} of ${summaries.length} free`;
+}
+
+/** "sp-lab-2 needs a look." or "2 need a look."; null when nothing does. */
+export function summarizeLabsAttention(
   labs: ReadonlyArray<{ readonly name: string; readonly summary: LabSummary }>,
-): { readonly counts: string; readonly followUp: string; readonly needsLook: boolean } {
-  const free = labs.filter((lab) => lab.summary.word === "Free").length;
-  const inUse = labs.filter((lab) => lab.summary.tone === "reserved").length;
-  const counts = `${free} of ${labs.length} labs free${inUse > 0 ? `, ${inUse} in use` : ""}.`;
+): string | null {
   const look = labs.filter((lab) => lab.summary.needsLook);
-  const followUp =
-    look.length === 1
-      ? `${look[0]!.name} needs a look.`
-      : look.length > 1
-        ? `${look.length} need a look.`
-        : "Nothing needs you.";
-  return { counts, followUp, needsLook: look.length > 0 };
+  if (look.length === 0) return null;
+  return look.length === 1 ? `${look[0]!.name} needs a look.` : `${look.length} need a look.`;
 }
 
 export type LabCheckState = "ok" | "off" | "bad" | "unknown" | "na";
@@ -551,14 +560,23 @@ export function resolveLabBranch(environment: Pick<LabEnvironment, "runtime" | "
     : { name: "unknown", commit: "", fromHandoff: false, dirty: false };
 }
 
-/** Labs first in numeric order, then the shared checkouts. */
-export function orderLabEnvironments<T extends Pick<LabEnvironment, "kind" | "name">>(
+/** Full then lite labs, each in numeric order and only when present, then the shared checkouts. */
+export function orderLabEnvironments<T extends Pick<LabEnvironment, "kind" | "labKind" | "name">>(
   environments: ReadonlyArray<T>,
-): { readonly labs: T[]; readonly shared: T[] } {
+): {
+  readonly groups: ReadonlyArray<{ readonly kind: LabKind; readonly labs: T[] }>;
+  readonly shared: T[];
+} {
+  const labs = environments
+    .filter((environment) => environment.kind === "lab")
+    .toSorted((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true }));
   return {
-    labs: environments
-      .filter((environment) => environment.kind === "lab")
-      .toSorted((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true })),
+    groups: (["full", "lite"] as const)
+      .map((kind) => ({
+        kind,
+        labs: labs.filter((environment) => resolveLabKind(environment) === kind),
+      }))
+      .filter((group) => group.labs.length > 0),
     shared: environments.filter((environment) => environment.kind !== "lab"),
   };
 }

@@ -4,6 +4,8 @@ import { elementContextToPreviewAnnotation } from "./lib/elementContext";
 import {
   ElementContextDetails,
   DEFAULT_MODEL,
+  LAB_DEFAULT_BASE_REF,
+  LabKind,
   DEFAULT_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
   EnvironmentId,
@@ -111,11 +113,12 @@ export type DraftThreadEnvMode = typeof DraftThreadEnvModeSchema.Type;
 
 /**
  * Fork (SP Labs): what a Lab-mode draft reserves on first send. `labId` null picks the first free
- * lab then. "create" makes `branchName` from `baseRef` (empty name: an automatic one);
- * "continue" checks out the existing `branchName`.
+ * lab of `labKind` (absent: lite) then. "create" makes `branchName` from `baseRef` (empty name:
+ * an automatic one); "continue" checks out the existing `branchName`.
  */
 const DraftLabIntentSchema = Schema.Struct({
   labId: Schema.NullOr(Schema.String),
+  labKind: Schema.optional(LabKind),
   branchMode: Schema.Literals(["create", "continue"]),
   branchName: Schema.String,
   baseRef: Schema.String,
@@ -123,9 +126,10 @@ const DraftLabIntentSchema = Schema.Struct({
 export type DraftLabIntent = typeof DraftLabIntentSchema.Type;
 export const DEFAULT_DRAFT_LAB_INTENT: DraftLabIntent = {
   labId: null,
+  labKind: "lite",
   branchMode: "create",
   branchName: "",
-  baseRef: "master",
+  baseRef: LAB_DEFAULT_BASE_REF,
 };
 const isDraftLabIntent = Schema.is(DraftLabIntentSchema);
 
@@ -141,6 +145,7 @@ function draftLabIntentsEqual(
   if (!left || !right) return (left ?? null) === (right ?? null);
   return (
     left.labId === right.labId &&
+    left.labKind === right.labKind &&
     left.branchMode === right.branchMode &&
     left.branchName === right.branchName &&
     left.baseRef === right.baseRef

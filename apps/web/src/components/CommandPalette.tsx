@@ -165,7 +165,7 @@ import {
   useThreadShells,
   waitForProject,
 } from "../state/entities";
-import { useIsLabsProject } from "../state/labs";
+import { useIsLabsPanelProject } from "../state/labs";
 import { openLabsPanel } from "./labs/labsPanelStore";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
@@ -622,8 +622,8 @@ function OpenCommandPaletteDialog(props: {
   const currentThreadRef =
     splitMounted && threadActionPane === "secondary" ? splitSecondaryRef : routeThreadRef;
   const currentThread = useThreadShell(currentThreadRef);
-  // Fork (SP Labs): "Open Labs panel" is offered in threads of the labs project.
-  const currentThreadInLabsProject = useIsLabsProject(
+  // Fork (SP Labs): "Open Labs panel" is offered in threads of the labs and sp-labs projects.
+  const currentThreadInLabsProject = useIsLabsPanelProject(
     currentThread?.environmentId ?? null,
     currentThread?.projectId ?? null,
   );

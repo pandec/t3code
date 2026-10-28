@@ -1,12 +1,13 @@
-import type {
-  EnvironmentId,
-  LabEnvironment,
-  LabHistoryItem,
-  LabRecentLease,
-  LabT3State,
-  LabsSnapshot,
-  ProjectId,
-  ScopedThreadRef,
+import {
+  resolveLabKind,
+  type EnvironmentId,
+  type LabEnvironment,
+  type LabHistoryItem,
+  type LabRecentLease,
+  type LabT3State,
+  type LabsSnapshot,
+  type ProjectId,
+  type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { ChevronLeftIcon, FlaskConicalIcon } from "lucide-react";
 import type { KeyboardEvent, ReactNode } from "react";
@@ -25,9 +26,15 @@ import {
   useLabCommands,
   type LabCommands,
 } from "./LabActions";
-import { LabOwnerLink, LabSummarySentence, useLabOwnerView, useLabOwnerViews } from "./LabParts";
 import {
-  LAB_IDLE_HOLD_HOURS,
+  LabOwnerLink,
+  LabSummarySentence,
+  LiteLabBadge,
+  useLabOwnerView,
+  useLabOwnerViews,
+} from "./LabParts";
+import {
+  countFreeLabs,
   formatLabAgo,
   isLabHeldByArchivedThread,
   labOperationLabel,
@@ -35,7 +42,7 @@ import {
   resolveLabBranch,
   resolveLabChecks,
   summarizeLabEnvironment,
-  summarizeLabsHeadline,
+  summarizeLabsAttention,
   type LabCheck,
   type LabCheckState,
   type LabOwnerView,
@@ -196,45 +203,60 @@ function LabList({
   readonly now: number;
   readonly onOpen: (labId: string) => void;
 }) {
-  const { labs, shared } = orderLabEnvironments(data.environments);
-  const headline = summarizeLabsHeadline(
-    labs.map((environment) => ({
+  const { groups, shared } = orderLabEnvironments(data.environments);
+  const summarized = groups.map((group) => ({
+    ...group,
+    labs: group.labs.map((environment) => ({
+      environment,
       name: environment.name,
       summary: summarizeLabEnvironment(environment, ownerOf(owners, environment), now),
     })),
-  );
+  }));
+  const attention = summarizeLabsAttention(summarized.flatMap((group) => group.labs));
   return (
     <ScrollArea className="h-full min-h-0">
       {/* Centered while shorter than the panel; scrolls normally once taller. */}
       <div className="flex min-h-full flex-col justify-center gap-1 px-2 py-4">
-        <div className="flex flex-col gap-1 px-1 pb-3">
-          <p className="font-medium text-base leading-snug">
-            {headline.counts}
-            <br />
-            <span className={headline.needsLook ? "text-warning-foreground" : undefined}>
-              {headline.followUp}
-            </span>
-          </p>
-          <p className="text-muted-foreground text-xs">
-            Checked {formatLabAgo(data.checkedAt, now)}. Holds count as idle after{" "}
-            {LAB_IDLE_HOLD_HOURS} h.
-          </p>
-          {data.error ? <p className="text-destructive-foreground text-xs">{data.error}</p> : null}
-        </div>
-        {labs.map((environment) => (
-          <LabListRow
-            key={environment.id}
-            environmentId={environmentId}
-            environment={environment}
-            owner={ownerOf(owners, environment)}
-            t3={data.t3[environment.id]}
-            commands={commands}
-            now={now}
-            onOpen={onOpen}
-          />
+        {attention || data.error ? (
+          <div className="flex flex-col gap-1 px-1 pb-3">
+            {attention ? (
+              <p className="font-medium text-base text-warning-foreground leading-snug">
+                {attention}
+              </p>
+            ) : null}
+            {data.error ? (
+              <p className="text-destructive-foreground text-xs">{data.error}</p>
+            ) : null}
+          </div>
+        ) : null}
+        {summarized.map((group, position) => (
+          <section key={group.kind} className="flex flex-col gap-1">
+            <h3
+              className={cn(
+                "px-1 pb-1 font-medium text-muted-foreground text-xs",
+                position > 0 && "pt-6",
+              )}
+            >
+              {groups.length > 1 ? (group.kind === "lite" ? "Lite labs" : "Full labs") : "Labs"}
+              {" · "}
+              {countFreeLabs(group.labs.map((lab) => lab.summary))}
+            </h3>
+            {group.labs.map(({ environment }) => (
+              <LabListRow
+                key={environment.id}
+                environmentId={environmentId}
+                environment={environment}
+                owner={ownerOf(owners, environment)}
+                t3={data.t3[environment.id]}
+                commands={commands}
+                now={now}
+                onOpen={onOpen}
+              />
+            ))}
+          </section>
         ))}
         {shared.length > 0 ? (
-          <h3 className="px-1 pt-8 pb-1 font-medium text-muted-foreground text-xs">
+          <h3 className="px-1 pt-6 pb-1 font-medium text-muted-foreground text-xs">
             Shared checkouts
           </h3>
         ) : null}
@@ -324,6 +346,9 @@ function LabListRow({
       <div className="flex min-w-16 flex-col">
         <span className="font-medium text-sm">{environment.name}</span>
         <span className="text-3xs text-muted-foreground">{labSubtitle(environment)}</span>
+        {environment.lender ? (
+          <span className="text-3xs text-muted-foreground">borrows {environment.lender}</span>
+        ) : null}
       </div>
       <div className="flex min-w-0 flex-col gap-0.5">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -414,7 +439,15 @@ function LabDetail({
             All labs
           </Button>
           <div className="flex flex-col gap-1">
-            <h2 className="font-semibold text-lg leading-tight">{environment.name}</h2>
+            <h2 className="flex items-center gap-2 font-semibold text-lg leading-tight">
+              {environment.name}
+              {resolveLabKind(environment) === "lite" ? <LiteLabBadge /> : null}
+            </h2>
+            {environment.lender ? (
+              <p className="text-muted-foreground">
+                Borrows {environment.lender}'s WorkOS environment and personas.
+              </p>
+            ) : null}
             <p className="text-sm leading-snug">
               <span className={cn("font-medium", WORD_COLOR[summary.tone])}>{summary.word}</span>
               {". "}

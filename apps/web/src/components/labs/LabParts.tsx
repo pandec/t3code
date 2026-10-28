@@ -47,6 +47,14 @@ const AVAILABILITY: Record<
   unavailable: { label: "Unavailable", variant: "outline" },
 };
 
+export function LiteLabBadge() {
+  return (
+    <Badge size="sm" variant="outline">
+      Lite
+    </Badge>
+  );
+}
+
 export function LabAvailabilityBadge({ availability }: { readonly availability: LabAvailability }) {
   const { label, variant } = AVAILABILITY[availability];
   return (

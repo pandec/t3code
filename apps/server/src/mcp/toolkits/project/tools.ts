@@ -13,6 +13,7 @@ import {
   ProjectCreatePayload,
   ProjectUpdatePayload,
   ProjectId,
+  LabKind,
   OrchestratorMcpFailure,
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
@@ -31,6 +32,7 @@ import * as ThreadManagementService from "../../../orchestration-v2/ThreadManage
 import * as ThreadGroupsMcpService from "../../ThreadGroupsMcpService.ts";
 import * as SourceControlRepositoryService from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
+import * as LabsService from "../../../labs/LabsService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const shared = {
@@ -121,6 +123,18 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
           "'worktree': new checkout from `baseRef`. 'existing_worktree': bind `worktreePath`, a project worktree. 'root': project checkout, the default, not your worktree. Stack: parent branch as `baseRef`, `startFromOrigin: false`. Uncommitted edits are not copied.",
       }),
     ),
+    // Fork (SP Labs): every agent sees this tool, so the text stays short; the skill has the rest.
+    lab: Schema.optional(
+      Schema.Struct({
+        kind: Schema.optional(LabKind),
+        labId: Schema.optional(TrimmedNonEmptyString),
+        branch: Schema.optional(TrimmedNonEmptyString),
+        baseRef: Schema.optional(TrimmedNonEmptyString),
+      }).annotate({
+        description:
+          "SalesPros only; see its sp-labs skill. Runs in the first free lab of `kind`, or `labId`. `branch` alone continues it, else new from `baseRef` (master).",
+      }),
+    ),
     message: Schema.optional(
       Schema.String.check(Schema.isMaxLength(120000)).annotate({
         description: "First prompt. Omit it and `attachments` for idle.",
@@ -152,6 +166,7 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
     ServerConfig.ServerConfig,
     ServerSettings.ServerSettingsService,
     DocumentText.DocumentText,
+    LabsService.LabsService,
   ],
 })
   .annotate(Tool.Destructive, true)

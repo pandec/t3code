@@ -5,6 +5,7 @@ import {
   type LabLease,
   type LabsSnapshot,
   LabsError,
+  ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
@@ -28,6 +29,7 @@ import * as LabsService from "./LabsService.ts";
 const DIRECTORY = "/fake/sp-labs";
 const SOURCE = "/fake/salespros";
 const THREAD = ThreadId.make("thread-lab");
+const PROJECT = ProjectId.make("project-salespros");
 const LEASE: LabLease = {
   id: "lease-1",
   labId: "sp-lab-1",
@@ -41,6 +43,8 @@ interface FakeLab {
   readonly running: boolean;
   readonly dirty: boolean;
   readonly branch: string;
+  /** A lite lab's WorkOS lender; absent for a full lab. */
+  readonly lender?: string;
 }
 
 type UpBehaviour = { readonly type: "ok" } | { readonly type: "fail"; readonly error: string };
@@ -49,6 +53,8 @@ const environment = (id: string, lab: FakeLab | null): LabEnvironment => ({
   id,
   name: id === "staging" ? "Main / Staging" : id,
   kind: lab === null ? "staging" : "lab",
+  labKind: lab === null ? null : lab.lender === undefined ? "full" : "lite",
+  lender: lab?.lender ?? null,
   phase: lab === null ? "unmanaged" : "ready",
   available: lab === null ? null : lab.lease === null,
   worktree: lab === null ? SOURCE : `/fake/${id}`,
@@ -141,6 +147,7 @@ const makeFakeCli = Effect.gen(function* () {
     acquireExtra,
     statusFails,
     leaseAfterDown,
+    labs,
     setLab,
     layer: Layer.succeed(LabsCli.LabsCli, LabsCli.LabsCli.of({ run })),
   };
@@ -167,7 +174,9 @@ const withService = <A, E>(
         Layer.provide(
           Layer.mergeAll(
             fake.layer,
-            ServerSettings.layerTest({ labs: { spLabsDirectory: DIRECTORY } }),
+            ServerSettings.layerTest({
+              labs: { spLabsDirectory: DIRECTORY, projectId: PROJECT },
+            }),
             Layer.mock(ProjectService.ProjectService)({
               getByWorkspaceRoot: () => Effect.succeedNone,
             }),
@@ -365,6 +374,64 @@ describe("LabsService", () => {
         }),
       );
     }),
+  );
+
+  it.effect(
+    "an agent launch reserves the first free lab of its kind, in the labs project only",
+    () =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakeCli;
+        const idle = { lease: null, running: false, dirty: false, branch: "Detached HEAD" };
+        yield* Ref.update(fake.labs, (all) => ({
+          ...all,
+          "sp-lab-6": { ...idle, lender: "sp-lab-1" },
+          "sp-lab-7": { ...idle, lender: "sp-lab-2" },
+        }));
+        yield* withService(
+          fake,
+          Effect.gen(function* () {
+            const labs = yield* LabsService.LabsService;
+            const notes = yield* ThreadHiddenNotes.ThreadHiddenNotes;
+            const launch = (input: Partial<LabsService.LabsAgentThreadInput>) =>
+              labs
+                .prepareAgentThread({
+                  threadId: THREAD,
+                  projectId: PROJECT,
+                  purpose: "Fix",
+                  ...input,
+                })
+                .pipe(Effect.match({ onFailure: (error) => error, onSuccess: (result) => result }));
+
+            const elsewhere = yield* launch({ projectId: ProjectId.make("other"), kind: "lite" });
+            assert.include(elsewhere, { reason: "invalid_input" });
+            assert.include(yield* launch({ kind: "lite", labId: "sp-lab-7" }), {
+              reason: "invalid_input",
+            });
+
+            assert.include(yield* launch({ kind: "lite" }), { labId: "sp-lab-6" });
+            const acquire = yield* takeCall(fake, "acquire");
+            assert.deepEqual(acquire.args.slice(0, 2), ["acquire", "sp-lab-6"]);
+            assert.deepEqual(acquire.args.slice(-2), ["--base", "master"]);
+            const [note] = yield* notes.pending(THREAD, { worktreePath: "/fake/sp-lab-6" });
+            assert.include(
+              note!.text,
+              "sp-lab-6 is a lite lab sharing sp-lab-1's WorkOS environment and personas",
+            );
+
+            // A branch alone is continued, so no base is passed.
+            const other = ThreadId.make("thread-other");
+            assert.include(yield* launch({ threadId: other, kind: "full", branch: "feature/x" }), {
+              labId: "sp-lab-1",
+            });
+            const continued = yield* takeCall(fake, "acquire");
+            assert.deepEqual(continued.args.slice(-2), ["--branch", "feature/x"]);
+            assert.include(yield* launch({ threadId: other, kind: "full" }), {
+              reason: "not_found",
+              detail: "No full lab is free.",
+            });
+          }),
+        );
+      }),
   );
 
   it.effect(

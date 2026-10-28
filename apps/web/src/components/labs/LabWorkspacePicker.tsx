@@ -1,4 +1,10 @@
-import type { EnvironmentId, LabEnvironment } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  LAB_DEFAULT_BASE_REF,
+  type LabEnvironment,
+  type LabKind,
+  resolveLabKind,
+} from "@t3tools/contracts";
 import { FlaskConicalIcon } from "lucide-react";
 import { memo, useId, useState } from "react";
 
@@ -14,16 +20,17 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Radio, RadioGroup } from "../ui/radio-group";
-import { LabAvailabilityBadge, LabOwnerLink, useLabOwnerThread } from "./LabParts";
-import { resolveLabAvailability } from "./labs.logic";
+import { LabAvailabilityBadge, LabOwnerLink, LiteLabBadge, useLabOwnerThread } from "./LabParts";
+import { resolveDraftLabKind, resolveLabAvailability } from "./labs.logic";
 
-const AUTO_LAB_VALUE = "auto";
+/** Radio values for "First free full/lite lab"; lab ids never take this form. */
+const AUTO_LAB_VALUES: Record<LabKind, string> = { full: "auto:full", lite: "auto:lite" };
 
 function intentLabel(intent: DraftLabIntent): string {
-  const lab = intent.labId ?? "First free lab";
+  const lab = intent.labId ?? `First free ${resolveDraftLabKind(intent)}`;
   const name = intent.branchName.trim();
   if (intent.branchMode === "continue") return `${lab} · ${name || "choose branch"}`;
-  return `${lab} · ${name || "new branch"} from ${intent.baseRef.trim() || "master"}`;
+  return `${lab} · ${name || "new branch"} from ${intent.baseRef.trim() || LAB_DEFAULT_BASE_REF}`;
 }
 
 /** The branch a lab was last left on: its standing handoff, else its checkout. */
@@ -99,15 +106,21 @@ export const LabWorkspacePicker = memo(function LabWorkspacePicker({
               <p className="text-destructive-foreground">{snapshot.error}</p>
             ) : null}
             <RadioGroup
-              value={intent.labId ?? AUTO_LAB_VALUE}
+              value={intent.labId ?? AUTO_LAB_VALUES[resolveDraftLabKind(intent)]}
               onValueChange={(value) =>
-                update({ labId: value === AUTO_LAB_VALUE ? null : String(value) })
+                update(
+                  value === AUTO_LAB_VALUES.full || value === AUTO_LAB_VALUES.lite
+                    ? { labId: null, labKind: value === AUTO_LAB_VALUES.full ? "full" : "lite" }
+                    : { labId: String(value) },
+                )
               }
             >
-              <label className="flex cursor-pointer items-center gap-2 py-0.5">
-                <Radio value={AUTO_LAB_VALUE} />
-                <span>First free lab</span>
-              </label>
+              {(["lite", "full"] as const).map((kind) => (
+                <label key={kind} className="flex cursor-pointer items-center gap-2 py-0.5">
+                  <Radio value={AUTO_LAB_VALUES[kind]} />
+                  <span>First free {kind} lab</span>
+                </label>
+              ))}
               {labs.map((environment) => {
                 const availability = resolveLabAvailability(environment);
                 return (
@@ -122,6 +135,7 @@ export const LabWorkspacePicker = memo(function LabWorkspacePicker({
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="flex items-center gap-1.5">
                         <span className="font-medium">{environment.name}</span>
+                        {resolveLabKind(environment) === "lite" ? <LiteLabBadge /> : null}
                         <LabAvailabilityBadge availability={availability} />
                       </span>
                       <LabPickerDetail
@@ -176,7 +190,7 @@ export const LabWorkspacePicker = memo(function LabWorkspacePicker({
                   <Input
                     size="sm"
                     aria-label="Base branch"
-                    placeholder="master"
+                    placeholder={LAB_DEFAULT_BASE_REF}
                     spellCheck={false}
                     autoComplete="off"
                     value={intent.baseRef}

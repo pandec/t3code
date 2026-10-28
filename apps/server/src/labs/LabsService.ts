@@ -20,8 +20,12 @@ import {
   type LabsSnapshot,
   type LabT3Operation,
   type LabT3State,
+  type LabKind,
   type ProjectId,
+  findFreeLab,
   isLabStackStopped,
+  LAB_DEFAULT_BASE_REF,
+  resolveLabKind,
   LabEnvironment as LabEnvironmentSchema,
   LabHandoff,
   LabLease,
@@ -96,6 +100,18 @@ const UpOutput = Schema.Struct({
 });
 const ReleaseOutput = Schema.Struct({ handoff: Schema.NullOr(LabHandoff) });
 
+/** A thread an agent launches into a lab: exactly one of `kind` (its first free lab) or `labId`. */
+export interface LabsAgentThreadInput {
+  readonly threadId: ThreadId;
+  readonly projectId: ProjectId;
+  readonly kind?: LabKind | undefined;
+  readonly labId?: string | undefined;
+  /** Alone, an existing branch to continue; otherwise a new branch from `baseRef`. */
+  readonly branch?: string | undefined;
+  readonly baseRef?: string | undefined;
+  readonly purpose: string;
+}
+
 export class LabsService extends Context.Service<
   LabsService,
   {
@@ -104,6 +120,10 @@ export class LabsService extends Context.Service<
     readonly getInventory: Effect.Effect<LabsInventory>;
     readonly prepareThread: (
       input: LabsPrepareThreadInput,
+    ) => Effect.Effect<LabsPrepareThreadResult, LabsError>;
+    /** `prepareThread` for agent launches, which name a kind instead of reading the panel. */
+    readonly prepareAgentThread: (
+      input: LabsAgentThreadInput,
     ) => Effect.Effect<LabsPrepareThreadResult, LabsError>;
     readonly action: (input: LabsActionInput) => Effect.Effect<LabsActionResult, LabsError>;
     readonly release: (input: LabsReleaseInput) => Effect.Effect<LabsReleaseResult, LabsError>;
@@ -115,6 +135,7 @@ export class LabsService extends Context.Service<
 interface CoreState {
   readonly directory: string | null;
   readonly projectId: ProjectId | null;
+  readonly spLabsProjectId: ProjectId | null;
   readonly sourceCheckout: string | null;
   readonly checkedAt: string | null;
   readonly environments: ReadonlyArray<LabEnvironment>;
@@ -126,6 +147,7 @@ interface CoreState {
 const INITIAL_CORE: CoreState = {
   directory: null,
   projectId: null,
+  spLabsProjectId: null,
   sourceCheckout: null,
   checkedAt: null,
   environments: [],
@@ -144,6 +166,8 @@ const labThreadNote = (input: {
   readonly worktreePath: string;
   readonly branch: string;
   readonly autoBranch: boolean;
+  readonly lite: boolean;
+  readonly lender: string | null;
   readonly handoff: LabHandoff | null;
   readonly personaPlanWarnings: ReadonlyArray<string>;
 }): string =>
@@ -155,6 +179,11 @@ const labThreadNote = (input: {
       `When done: commit, then \`sp-labs down ${input.labId}\` and \`sp-labs release ${input.labId}\` (pass --handoff only for surprising state).`,
       "Run `sp-labs status` for the lab's handoff note and persona-plan warnings.",
     ].join(" "),
+    ...(input.lite
+      ? [
+          `${input.labId} is a lite lab${input.lender === null ? "" : ` sharing ${input.lender}'s WorkOS environment and personas`}; the sp-labs skill covers what it lacks.`,
+        ]
+      : []),
     ...(input.handoff === null || input.handoff.summary.trim() === ""
       ? []
       : [
@@ -241,6 +270,7 @@ const make = Effect.gen(function* () {
       configured: state.directory !== null,
       spLabsDirectory: state.directory,
       projectId: state.projectId,
+      spLabsProjectId: state.spLabsProjectId,
       sourceCheckout: state.sourceCheckout,
       error: state.error,
       checkedAt: state.checkedAt,
@@ -282,6 +312,12 @@ const make = Effect.gen(function* () {
     return { directory, projectId: settings.projectId };
   });
 
+  const projectAt = (workspaceRoot: string, fallback: ProjectId | null) =>
+    projects.getByWorkspaceRoot(workspaceRoot).pipe(
+      Effect.map(Option.match({ onNone: () => null, onSome: (project) => project.id })),
+      Effect.orElseSucceed(() => fallback),
+    );
+
   /** Reads `status --runtime` into the snapshot. Failures land in `error`; never fails. */
   const refresh = refreshLock.withPermits(1)(
     Effect.gen(function* () {
@@ -295,6 +331,7 @@ const make = Effect.gen(function* () {
         yield* Ref.set(core, { ...base, projectId: settings.projectId, loaded: true });
         return yield* publish;
       }
+      const spLabsProjectId = yield* projectAt(settings.directory, base.spLabsProjectId);
       const status = yield* cli
         .run({
           directory: settings.directory,
@@ -307,6 +344,7 @@ const make = Effect.gen(function* () {
         yield* Ref.set(core, {
           ...base,
           projectId: settings.projectId ?? base.projectId,
+          spLabsProjectId,
           error: Option.isSome(error) ? error.value.message : "sp-labs status failed.",
           loaded: true,
         });
@@ -317,15 +355,11 @@ const make = Effect.gen(function* () {
         null;
       const projectId =
         settings.projectId ??
-        (sourceCheckout === null
-          ? null
-          : yield* projects.getByWorkspaceRoot(sourceCheckout).pipe(
-              Effect.map(Option.match({ onNone: () => null, onSome: (project) => project.id })),
-              Effect.orElseSucceed(() => base.projectId),
-            ));
+        (sourceCheckout === null ? null : yield* projectAt(sourceCheckout, base.projectId));
       yield* Ref.set(core, {
         directory: settings.directory,
         projectId,
+        spLabsProjectId,
         sourceCheckout,
         checkedAt: status.value.checkedAt,
         environments: status.value.environments,
@@ -507,6 +541,8 @@ const make = Effect.gen(function* () {
             branch: environment.runtime.git?.branch ?? input.branch ?? "",
             leaseId: environment.lease.id,
             autoBranch: false,
+            lite: resolveLabKind(environment) === "lite",
+            lender: environment.lender,
             stackStopped: isLabStackStopped(environment.runtime),
             handoff: environment.handoff,
             // `status --runtime` does not carry the plan check; the note points at `sp-labs status`.
@@ -539,6 +575,8 @@ const make = Effect.gen(function* () {
           branch,
           leaseId: acquired.lease.id,
           autoBranch: input.branch === null,
+          lite: resolveLabKind(environment) === "lite",
+          lender: environment.lender,
           stackStopped: true,
           handoff: acquired.handoff ?? null,
           personaPlanWarnings: acquired.personaPlans?.warnings ?? [],
@@ -575,6 +613,43 @@ const make = Effect.gen(function* () {
       branch: prepared.branch,
       leaseId: prepared.leaseId,
     };
+  });
+
+  const prepareAgentThread: LabsService["Service"]["prepareAgentThread"] = Effect.fn(
+    "LabsService.prepareAgentThread",
+  )(function* (input) {
+    yield* requireDirectory;
+    yield* refresh;
+    const state = yield* Ref.get(core);
+    if (state.projectId === null || state.projectId !== input.projectId) {
+      return yield* new LabsError({
+        reason: "invalid_input",
+        detail: "Labs exist only in the SalesPros project.",
+      });
+    }
+    if (state.error !== null) {
+      return yield* new LabsError({ reason: "cli_failed", detail: state.error });
+    }
+    const { kind } = input;
+    if ((kind === undefined) === (input.labId === undefined)) {
+      return yield* new LabsError({
+        reason: "invalid_input",
+        detail: "Pass exactly one of kind or labId.",
+      });
+    }
+    const labId =
+      input.labId ?? (kind === undefined ? undefined : findFreeLab(state.environments, kind)?.id);
+    if (labId === undefined) {
+      return yield* new LabsError({ reason: "not_found", detail: `No ${kind} lab is free.` });
+    }
+    const continues = input.branch !== undefined && input.baseRef === undefined;
+    return yield* prepareThread({
+      threadId: input.threadId,
+      labId,
+      branch: input.branch ?? null,
+      baseRef: continues ? null : (input.baseRef ?? LAB_DEFAULT_BASE_REF),
+      purpose: input.purpose,
+    });
   });
 
   const release: LabsService["Service"]["release"] = (input) =>
@@ -693,6 +768,7 @@ const make = Effect.gen(function* () {
       configured: state.directory !== null,
       spLabsDirectory: state.directory,
       projectId: state.projectId,
+      spLabsProjectId: state.spLabsProjectId,
       sourceCheckout: state.sourceCheckout,
       error: state.error,
       environments: state.environments.map(({ id, name, kind, worktree, lease }) => ({
@@ -747,6 +823,7 @@ const make = Effect.gen(function* () {
     subscribe,
     getInventory,
     prepareThread,
+    prepareAgentThread,
     action,
     release,
     history,

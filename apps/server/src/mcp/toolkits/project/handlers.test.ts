@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  LabsError,
   OrchestratorMcpFailure,
   ProjectId,
   ProviderInstanceId,
@@ -18,6 +19,7 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import * as DocumentText from "../../../provider/DocumentText.ts";
+import * as LabsService from "../../../labs/LabsService.ts";
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ServerConfig from "../../../config.ts";
@@ -40,6 +42,7 @@ const clientLaunchHarness = (input: {
   readonly launched: Array<ThreadLaunch.ThreadLaunchInput>;
   readonly workspaceRoot?: string;
   readonly checkWorktreeBase?: ThreadLaunch.ThreadLaunchService["Service"]["checkWorktreeBase"];
+  readonly prepareAgentThread?: LabsService.LabsService["Service"]["prepareAgentThread"];
 }) => {
   const projectId = ProjectId.make("project:client-target");
   const modelSelection = {
@@ -106,6 +109,11 @@ const clientLaunchHarness = (input: {
         ),
     }),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
+    Layer.mock(LabsService.LabsService)(
+      input.prepareAgentThread === undefined
+        ? {}
+        : { prepareAgentThread: input.prepareAgentThread },
+    ),
     Layer.mock(ThreadGroupsMcpService.ThreadGroupsMcpService)({
       requireGroup: (groupId) =>
         groupId === "group-1"
@@ -232,6 +240,60 @@ it.effect("a launch starts the thread in a requested group and rejects unknown g
 
     const unknown = yield* handle({ title: "Lost", projectId, groupId: "deleted-group" });
     expect(unknown.at(-1)?.result).toMatchObject({ code: "invalid_request" });
+    expect(launched).toHaveLength(1);
+  }),
+);
+
+it.effect("a lab launch reserves the lab for the new thread before binding its worktree", () =>
+  Effect.gen(function* () {
+    const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
+    const prepared: Array<LabsService.LabsAgentThreadInput> = [];
+    const { projectId, dependencies } = clientLaunchHarness({
+      runtimeModeCeiling: "full-access",
+      launched,
+      prepareAgentThread: (input) => {
+        prepared.push(input);
+        return input.kind === "full"
+          ? Effect.fail(new LabsError({ reason: "not_found", detail: "No full lab is free." }))
+          : Effect.succeed({
+              labId: "sp-lab-6",
+              worktreePath: "/labs/sp-lab-6",
+              branch: "t3/abc",
+              leaseId: "lease-1",
+            });
+      },
+    });
+    const toolkit = yield* ProjectToolkit.pipe(
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(Layer.provide(dependencies)),
+      ),
+    );
+    const handle = (params: Parameters<typeof toolkit.handle<"t3_thread_launch">>[1]) =>
+      toolkit
+        .handle("t3_thread_launch", params)
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+
+    yield* handle({ title: "Fix", projectId, lab: { kind: "lite" } });
+    expect(prepared[0]).toMatchObject({ projectId, kind: "lite", purpose: "Fix" });
+    expect(launched[0]?.threadId).toBe(prepared[0]?.threadId);
+    expect(launched[0]?.workspaceStrategy).toEqual({
+      type: "existing_worktree",
+      worktreePath: "/labs/sp-lab-6",
+      branch: "t3/abc",
+    });
+
+    const busy = yield* handle({ title: "Fix", projectId, lab: { kind: "full" } });
+    expect(busy.at(-1)?.result).toMatchObject({
+      code: "invalid_request",
+      message: "No full lab is free. No thread was created.",
+    });
+    const mixed = yield* handle({
+      title: "Fix",
+      projectId,
+      lab: { kind: "lite" },
+      workspaceStrategy: { type: "root" },
+    });
+    expect(mixed.at(-1)?.result).toMatchObject({ code: "invalid_request" });
     expect(launched).toHaveLength(1);
   }),
 );
