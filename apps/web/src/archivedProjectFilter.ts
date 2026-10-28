@@ -2,7 +2,7 @@ import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId } from "@t3tools/contracts";
 
 import type { ResolvedSettingsScope } from "./components/settings/settingsScope";
-import { derivePhysicalProjectKey } from "./logicalProject";
+import { derivePhysicalProjectKey } from "@t3tools/client-runtime/state/project-grouping";
 
 type ProjectIdentity = Pick<EnvironmentProject, "environmentId" | "workspaceRoot">;
 

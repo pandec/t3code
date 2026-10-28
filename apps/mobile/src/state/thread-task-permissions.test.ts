@@ -165,7 +165,6 @@ vi.mock("./use-thread-staged-settings", async (importOriginal) => ({
 }));
 vi.mock("../lib/composerImages", () => ({
   convertPastedImagesToAttachments: vi.fn(),
-  pasteComposerClipboard: vi.fn(),
   pickComposerFiles: vi.fn(),
   pickComposerMedia: vi.fn(),
 }));

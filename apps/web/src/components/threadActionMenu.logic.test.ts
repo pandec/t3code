@@ -97,7 +97,7 @@ describe("buildThreadActionMenuItems", () => {
     ]);
   });
 
-  it("keeps branch copy before the single upstream-owned thread ID copy", () => {
+  it("keeps branch copy before the thread and thread ID copies", () => {
     const copyItem = buildThreadActionMenuItems({
       ...baseState,
       branch: "main",
@@ -106,6 +106,7 @@ describe("buildThreadActionMenuItems", () => {
     expect(copyItem?.children?.map((child) => child.id)).toEqual([
       "copy-path",
       "copy-branch",
+      "copy-thread",
       "copy-thread-id",
     ]);
   });

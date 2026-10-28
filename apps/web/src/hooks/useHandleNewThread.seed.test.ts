@@ -15,7 +15,7 @@ import { DraftId, useComposerDraftStore } from "../composerDraftStore";
 import {
   deriveLogicalProjectKeyFromSettings,
   type ProjectGroupingSettings,
-} from "../logicalProject";
+} from "@t3tools/client-runtime/state/project-grouping";
 import {
   applyCarryModelSelectionToReusedDraft,
   resolveCarrySourceLogicalProjectKey,

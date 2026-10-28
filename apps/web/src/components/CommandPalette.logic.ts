@@ -1,5 +1,5 @@
 import {
-  resolveThreadReferenceCopyTarget,
+  threadIdCopyTarget,
   type ThreadReferenceCopyTarget,
 } from "@t3tools/client-runtime/thread-reference";
 import {
@@ -61,7 +61,7 @@ export function buildThreadCopyActionItems(input: {
 }): CommandPaletteActionItem[] {
   const items: CommandPaletteActionItem[] = [];
   if (input.threadId !== null) {
-    const target = resolveThreadReferenceCopyTarget({ threadId: input.threadId });
+    const target = threadIdCopyTarget(input.threadId);
     items.push({
       kind: "action",
       value: "action:copy-thread-id",
@@ -74,13 +74,16 @@ export function buildThreadCopyActionItems(input: {
     });
   }
   const reference = input.reference;
-  if (reference?.kind === "pull-request") {
+  if (reference !== null) {
     items.push({
       kind: "action",
       value: "action:copy-thread-reference",
-      searchTerms: ["copy", "pull request", "pr link", "reference"],
-      title: "Copy PR link",
-      description: reference.value,
+      searchTerms:
+        reference.kind === "pull-request"
+          ? ["copy", "pull request", "pr link", "reference"]
+          : ["copy", "thread", "reference"],
+      title: reference.kind === "pull-request" ? "Copy PR link" : "Copy thread",
+      description: reference.description,
       icon: input.icon,
       shortcutCommand: "thread.copyReference",
       run: () => input.copy(reference),

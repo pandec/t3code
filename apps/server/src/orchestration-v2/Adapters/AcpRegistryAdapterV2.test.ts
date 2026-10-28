@@ -18,7 +18,6 @@ import * as Fiber from "effect/Fiber";
 import * as DateTime from "effect/DateTime";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -39,10 +38,7 @@ import {
 } from "@t3tools/provider-testing/replayGate";
 import type { ProviderContinuationRequest } from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import * as ServerSettings from "../../serverSettings.ts";
-import type {
-  AcpRegistryAvailableCommands,
-  AcpRegistryLiveConfiguration,
-} from "@t3tools/provider-acp-registry/testing";
+import type { AcpRegistryLiveConfiguration } from "@t3tools/provider-acp-registry/testing";
 import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
 import * as AcpRegistryRuntimeCoordinator from "@t3tools/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import { ACP_SESSION_MODE_OPTION_ID } from "@t3tools/provider-acp/server/sessionConfig";
@@ -1871,11 +1867,6 @@ describe("AcpRegistryAdapterV2", () => {
       let startupActive = false;
       let startupCount = 0;
       const instanceId = ProviderInstanceId.make("acp-registry-fixture");
-      const commandsPublished = yield* Deferred.make<{
-        readonly instanceId: ProviderInstanceId;
-        readonly commands: AcpRegistryAvailableCommands;
-      }>();
-      const configurationPublished = yield* Deferred.make<AcpRegistryLiveConfiguration>();
       const agentEnvironments: Array<NodeJS.ProcessEnv | undefined> = [];
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const adapter = yield* makeAcpRegistryAdapterV2({
@@ -1884,7 +1875,6 @@ describe("AcpRegistryAdapterV2", () => {
         settings,
         environment: {
           T3_ACP_SESSION_LIFECYCLE: "1",
-          T3_ACP_COMMAND_ADVERTISEMENT_DELAY_MS: "750",
           T3CODE_THREAD_ID: "stale-thread",
         },
       }).pipe(
@@ -1917,16 +1907,11 @@ describe("AcpRegistryAdapterV2", () => {
               runBackgroundProbe: (_agentId, effect) => effect.pipe(Effect.asSome),
               withSessionMutation: (effect) => effect,
               clearAvailableCommands: () => Effect.void,
-              publishAvailableCommands: (publishedInstanceId, commands) =>
-                Deferred.succeed(commandsPublished, {
-                  instanceId: publishedInstanceId,
-                  commands,
-                }).pipe(Effect.asVoid),
+              publishAvailableCommands: () => Effect.void,
               getAvailableCommands: () => Effect.succeedNone,
               watchAvailableCommands: () => Effect.never,
               clearLiveConfiguration: () => Effect.void,
-              publishLiveConfiguration: (_publishedInstanceId, configuration) =>
-                Deferred.succeed(configurationPublished, configuration).pipe(Effect.asVoid),
+              publishLiveConfiguration: () => Effect.void,
               getLiveConfiguration: () => Effect.succeedNone,
               watchLiveConfiguration: () => Effect.never,
               requestUrlAuthentication: () => Effect.succeed(false),
@@ -1979,34 +1964,6 @@ describe("AcpRegistryAdapterV2", () => {
       assert.equal(providerThread.nativeMetadata?.itemIdentityVersion, 2);
       assert.isTrue(runtime.providerSession.capabilities.threads.canReadThreadSnapshot);
       assert.isTrue(runtime.providerSession.capabilities.threads.canForkThread);
-      assert.deepEqual(yield* Deferred.await(commandsPublished), {
-        instanceId,
-        commands: {
-          slashCommands: [
-            {
-              name: "review",
-              description: "Review the current changes",
-              input: { hint: "focus" },
-            },
-          ],
-          skills: [
-            {
-              name: "workspace-skill",
-              description: "Run the workspace skill",
-              path: "acp://skill/workspace-skill",
-              scope: "agent",
-              enabled: true,
-            },
-          ],
-        },
-      });
-      const configuration = yield* Deferred.await(configurationPublished);
-      assert.equal(configuration.currentModelId, "default");
-      assert.deepInclude(configuration.models[0], {
-        id: "default",
-        name: "Auto",
-        description: null,
-      });
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 });

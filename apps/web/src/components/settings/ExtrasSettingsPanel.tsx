@@ -28,11 +28,7 @@ import { linearEnvironment } from "../../state/linear";
 import { serverEnvironment } from "../../state/server";
 import { useEnvironmentsWithScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
-import {
-  usePrimarySettings,
-  useLegacySidebarEnabled,
-  useUpdatePrimarySettings,
-} from "../../hooks/useSettings";
+import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
 import { DraftInput } from "../ui/draft-input";
 import {
   NumberField,
@@ -618,7 +614,6 @@ function LinearExtrasSection() {
 function SidebarExtrasSection() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
-  const defaultSidebarEnabled = !useLegacySidebarEnabled();
   const archivedSectionVisibleCount = clampArchivedSectionVisibleCount(
     settings.archivedSectionVisibleCount,
   );
@@ -667,148 +662,141 @@ function SidebarExtrasSection() {
         }
       />
 
-      {defaultSidebarEnabled ? (
-        <>
-          <SettingsRow
-            {...searchableSetting("sidebar-thread-groups-button")}
-            description="Show a Thread groups button in the sidebar toolbar. The command palette can always open the same dialog."
-            resetAction={
-              settings.sidebarThreadGroupsButton !==
-              DEFAULT_UNIFIED_SETTINGS.sidebarThreadGroupsButton ? (
-                <SettingResetButton
-                  label="thread groups button"
-                  onClick={() =>
-                    updateSettings({
-                      sidebarThreadGroupsButton: DEFAULT_UNIFIED_SETTINGS.sidebarThreadGroupsButton,
-                    })
-                  }
-                />
-              ) : null
+      <SettingsRow
+        {...searchableSetting("sidebar-thread-groups-button")}
+        description="Show a Thread groups button in the sidebar toolbar. The command palette can always open the same dialog."
+        resetAction={
+          settings.sidebarThreadGroupsButton !==
+          DEFAULT_UNIFIED_SETTINGS.sidebarThreadGroupsButton ? (
+            <SettingResetButton
+              label="thread groups button"
+              onClick={() =>
+                updateSettings({
+                  sidebarThreadGroupsButton: DEFAULT_UNIFIED_SETTINGS.sidebarThreadGroupsButton,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.sidebarThreadGroupsButton}
+            onCheckedChange={(checked) =>
+              updateSettings({ sidebarThreadGroupsButton: Boolean(checked) })
             }
-            control={
-              <Switch
-                checked={settings.sidebarThreadGroupsButton}
-                onCheckedChange={(checked) =>
-                  updateSettings({ sidebarThreadGroupsButton: Boolean(checked) })
-                }
-                aria-label="Show thread groups button in the sidebar"
-              />
-            }
+            aria-label="Show thread groups button in the sidebar"
           />
-          <SettingsRow
-            title="New thread button in the project row"
-            description="Show the New thread button at the end of the project filter row instead of the search row."
-            resetAction={
-              settings.sidebarV2NewThreadButtonInProjectRow !==
-              DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow ? (
-                <SettingResetButton
-                  label="new thread button position"
-                  onClick={() =>
-                    updateSettings({
-                      sidebarV2NewThreadButtonInProjectRow:
-                        DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow,
-                    })
-                  }
-                />
-              ) : null
+        }
+      />
+      <SettingsRow
+        title="New thread button in the project row"
+        description="Show the New thread button at the end of the project filter row instead of the search row."
+        resetAction={
+          settings.sidebarV2NewThreadButtonInProjectRow !==
+          DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow ? (
+            <SettingResetButton
+              label="new thread button position"
+              onClick={() =>
+                updateSettings({
+                  sidebarV2NewThreadButtonInProjectRow:
+                    DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.sidebarV2NewThreadButtonInProjectRow}
+            onCheckedChange={(checked) =>
+              updateSettings({ sidebarV2NewThreadButtonInProjectRow: Boolean(checked) })
             }
-            control={
-              <Switch
-                checked={settings.sidebarV2NewThreadButtonInProjectRow}
-                onCheckedChange={(checked) =>
-                  updateSettings({ sidebarV2NewThreadButtonInProjectRow: Boolean(checked) })
-                }
-                aria-label="Show new thread button in the project row"
-              />
-            }
+            aria-label="Show new thread button in the project row"
           />
+        }
+      />
 
-          <SettingsRow
-            title="Compact thread cards"
-            description="Show active threads in two lines: the branch line is hidden and its metadata moves beside the title."
-            resetAction={
-              settings.sidebarV2CompactCards !== DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards ? (
-                <SettingResetButton
-                  label="compact thread cards"
-                  onClick={() =>
-                    updateSettings({
-                      sidebarV2CompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards,
-                    })
-                  }
-                />
-              ) : null
+      <SettingsRow
+        title="Compact thread cards"
+        description="Show active threads in two lines: the branch line is hidden and its metadata moves beside the title."
+        resetAction={
+          settings.sidebarV2CompactCards !== DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards ? (
+            <SettingResetButton
+              label="compact thread cards"
+              onClick={() =>
+                updateSettings({
+                  sidebarV2CompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.sidebarV2CompactCards}
+            onCheckedChange={(checked) =>
+              updateSettings({ sidebarV2CompactCards: Boolean(checked) })
             }
-            control={
-              <Switch
-                checked={settings.sidebarV2CompactCards}
-                onCheckedChange={(checked) =>
-                  updateSettings({ sidebarV2CompactCards: Boolean(checked) })
-                }
-                aria-label="Compact sidebar v2 thread cards"
-              />
-            }
+            aria-label="Compact sidebar v2 thread cards"
           />
-          <SettingsRow
-            {...searchableSetting("sidebar-hide-settle-button")}
-            description="Hide the Settle button that appears when hovering a thread. Settle stays available from the thread menu, command palette, and shortcuts."
-            resetAction={
-              settings.sidebarHideSettleButton !==
-              DEFAULT_UNIFIED_SETTINGS.sidebarHideSettleButton ? (
-                <SettingResetButton
-                  label="hide settle button"
-                  onClick={() =>
-                    updateSettings({
-                      sidebarHideSettleButton: DEFAULT_UNIFIED_SETTINGS.sidebarHideSettleButton,
-                    })
-                  }
-                />
-              ) : null
+        }
+      />
+      <SettingsRow
+        {...searchableSetting("sidebar-hide-settle-button")}
+        description="Hide the Settle button that appears when hovering a thread. Settle stays available from the thread menu, command palette, and shortcuts."
+        resetAction={
+          settings.sidebarHideSettleButton !== DEFAULT_UNIFIED_SETTINGS.sidebarHideSettleButton ? (
+            <SettingResetButton
+              label="hide settle button"
+              onClick={() =>
+                updateSettings({
+                  sidebarHideSettleButton: DEFAULT_UNIFIED_SETTINGS.sidebarHideSettleButton,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.sidebarHideSettleButton}
+            onCheckedChange={(checked) =>
+              updateSettings({ sidebarHideSettleButton: Boolean(checked) })
             }
-            control={
-              <Switch
-                checked={settings.sidebarHideSettleButton}
-                onCheckedChange={(checked) =>
-                  updateSettings({ sidebarHideSettleButton: Boolean(checked) })
-                }
-                aria-label="Hide Settle button on thread hover"
-              />
-            }
+            aria-label="Hide Settle button on thread hover"
           />
-          <SettingsRow
-            title="Recent archived threads"
-            description="Choose how many recently archived threads appear at the end of Sidebar V2."
-            resetAction={
-              archivedSectionVisibleCount !==
-              DEFAULT_UNIFIED_SETTINGS.archivedSectionVisibleCount ? (
-                <SettingResetButton
-                  label="recent archived threads"
-                  onClick={() =>
-                    updateSettings({
-                      archivedSectionVisibleCount:
-                        DEFAULT_UNIFIED_SETTINGS.archivedSectionVisibleCount,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <SettingsNumberField
-                ariaLabel="Recent archived threads"
-                max={MAX_ARCHIVED_SECTION_VISIBLE_COUNT}
-                min={MIN_ARCHIVED_SECTION_VISIBLE_COUNT}
-                onCommit={(next) => {
-                  if (next === null) return;
-                  updateSettings({
-                    archivedSectionVisibleCount: clampArchivedSectionVisibleCount(next),
-                  });
-                }}
-                suffix="threads"
-                value={archivedSectionVisibleCount}
-              />
-            }
+        }
+      />
+      <SettingsRow
+        title="Recent archived threads"
+        description="Choose how many recently archived threads appear at the end of Sidebar V2."
+        resetAction={
+          archivedSectionVisibleCount !== DEFAULT_UNIFIED_SETTINGS.archivedSectionVisibleCount ? (
+            <SettingResetButton
+              label="recent archived threads"
+              onClick={() =>
+                updateSettings({
+                  archivedSectionVisibleCount: DEFAULT_UNIFIED_SETTINGS.archivedSectionVisibleCount,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <SettingsNumberField
+            ariaLabel="Recent archived threads"
+            max={MAX_ARCHIVED_SECTION_VISIBLE_COUNT}
+            min={MIN_ARCHIVED_SECTION_VISIBLE_COUNT}
+            onCommit={(next) => {
+              if (next === null) return;
+              updateSettings({
+                archivedSectionVisibleCount: clampArchivedSectionVisibleCount(next),
+              });
+            }}
+            suffix="threads"
+            value={archivedSectionVisibleCount}
           />
-        </>
-      ) : null}
+        }
+      />
     </SettingsSection>
   );
 }

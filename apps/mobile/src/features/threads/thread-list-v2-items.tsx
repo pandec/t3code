@@ -26,6 +26,7 @@ import {
   resolveThreadWorkingStartedAt,
 } from "@t3tools/client-runtime/state/models";
 import { AuthOrchestrationOperateScope, type EnvironmentMachineKind } from "@t3tools/contracts";
+import type { SnoozePresetSetting } from "@t3tools/contracts/settings";
 import {
   canForkConversation,
   canForkImportedSessionWith,
@@ -35,9 +36,9 @@ import {
   canSnoozeUntilDone,
   hasPendingArchive,
   resolveArchiveToggleAction,
-  resolveSnoozePresets,
   SNOOZE_UNTIL_DONE_PRESET,
 } from "@t3tools/client-runtime/state/thread-settled";
+import { threadChipCopyTarget } from "@t3tools/client-runtime/thread-reference";
 import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useMemo, useState, type ComponentProps } from "react";
 import { Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
@@ -53,6 +54,7 @@ import { resolveRowAccentTintAlpha, withAccentAlpha } from "../../lib/accentTint
 import { ProviderIcon, ProviderInstanceIcon } from "../../components/ProviderIcon";
 import { cn } from "../../lib/cn";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
+import { copyThreadReference } from "../../lib/copyThreadReference";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useThreadListeningState } from "../../state/listeningPlayback";
 import { toggleLoadedListeningTrack } from "../../state/listeningPlayer";
@@ -77,6 +79,7 @@ import {
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
   resolveThreadListV2MenuActionIds,
   resolveThreadListV2SnoozeMenuSelection,
+  resolveThreadListV2SnoozePresets,
   threadHasUnseenCompletion,
   resolveThreadListV2Status,
   resolveThreadListV2ProviderDrivers,
@@ -310,7 +313,7 @@ function ThreadListV2Section(props: {
   );
 }
 
-export const ThreadListV2SectionDivider = memo(function ThreadListV2SectionDivider(props: {
+const ThreadListV2SectionDivider = memo(function ThreadListV2SectionDivider(props: {
   readonly label: string;
   readonly pane?: "screen" | "sidebar";
 }) {
@@ -752,6 +755,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly snoozeSupported: boolean;
   /** Fork: false on servers that predate "Until it's done" (untilDone). */
   readonly snoozeUntilDoneSupported?: boolean;
+  readonly snoozePresets: ReadonlyArray<SnoozePresetSetting> | undefined;
   readonly pinningSupported: boolean;
   readonly autoSettleOptOutSupported: boolean;
   readonly titleRegenerationSupported: boolean;
@@ -992,10 +996,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     forkable,
   });
   const snoozePresets = useMemo(
-    // oxlint-disable-next-line react/purity -- The memo recomputes on the snoozePresetMinute tick, so preset times refresh every minute.
-    () => (swipeActions.secondary === "snooze" ? resolveSnoozePresets(new Date()) : ([] as const)),
-    // oxlint-disable-next-line react/memo-dependencies -- The minute tick refreshes relative snooze times while the row remains mounted.
-    [props.snoozePresetMinute, swipeActions.secondary],
+    () =>
+      resolveThreadListV2SnoozePresets({
+        secondary: swipeActions.secondary,
+        // oxlint-disable-next-line react/purity -- Only rows without the list's minute tick read the clock.
+        now: props.snoozePresetMinute || new Date().toISOString(),
+        presets: props.snoozePresets,
+      }),
+    [props.snoozePresetMinute, props.snoozePresets, swipeActions.secondary],
   );
   // Fork: "Until it's done" leads while the thread is working; it has no
   // clock, so it stays outside the timed preset resolution.
@@ -1184,6 +1192,15 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       if (nativeEvent.event === "fork") handleFork();
       if (nativeEvent.event === "rename") handleRename();
       if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
+      if (nativeEvent.event === "copy-thread") {
+        const target = threadChipCopyTarget(
+          { environmentId: thread.environmentId, threadId: thread.id },
+          thread.title,
+        );
+        void copyThreadReference(target).then((didCopy) => {
+          if (!didCopy) Dialog.alert(target.failureTitle, "Try copying this thread again.");
+        });
+      }
       if (nativeEvent.event === "copy-thread-id") {
         copyTextWithHaptic(thread.id, { target: "thread-id" });
       }
@@ -1201,6 +1218,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         event: nativeEvent.event,
         displayedPresets: snoozePresets,
         now: new Date(),
+        presets: props.snoozePresets,
       });
       if (snoozeSelection._tag === "selected") {
         handleSnooze(snoozeSelection.preset.snoozedUntil);
@@ -1231,6 +1249,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       onSnoozeThread,
       setCustomSnoozeOpen,
       snoozePresets,
+      props.snoozePresets,
     ],
   );
   const primaryAction = useMemo(() => {
@@ -1802,6 +1821,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                     },
                   ]
                 : []),
+              { id: "copy-thread", title: "Copy thread", image: "text.bubble" },
               { id: "copy-thread-id", title: "Copy thread ID", image: "doc.on.doc" },
               ...(snoozedRow
                 ? snoozedMenuActions

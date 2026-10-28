@@ -48,13 +48,10 @@ vi.mock("../state/session", () => ({
 }));
 vi.mock("../state/entities", () => ({
   readConversationForkOptions: () => ({}),
+  readEnvironmentServerConfigLoaded: () => true,
   readEnvironmentSupportsActiveMark: () => true,
   readEnvironmentSupportsAutoSettleOptOut: () => true,
-  readEnvironmentSupportsPinning: () => true,
-  readEnvironmentSupportsSettlement: () => true,
-  readEnvironmentSupportsSnooze: () => true,
   readEnvironmentSupportsSnoozeUntilDone: () => true,
-  readEnvironmentSupportsTitleRegeneration: () => true,
   readThreadShell: () => ({
     id: "thread",
     environmentId: "secondary",
@@ -87,7 +84,7 @@ vi.mock("../localApi", () => ({
     },
   }),
 }));
-vi.mock("../logicalProject", () => ({
+vi.mock("@t3tools/client-runtime/state/project-grouping", () => ({
   deriveLogicalProjectKeyFromSettings: () => "project",
   derivePhysicalProjectKey: () => "project",
   selectProjectGroupingSettings: () => ({}),

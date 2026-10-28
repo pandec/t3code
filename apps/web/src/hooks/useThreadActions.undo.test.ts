@@ -74,10 +74,7 @@ const threadShell = vi.hoisted(() => ({
 const shellLookup = vi.hoisted(() => ({ missing: false }));
 vi.mock("../state/entities", async (original) => ({
   ...(await original<typeof import("../state/entities")>()),
-  readEnvironmentSupportsPinning: () => true,
-  readEnvironmentSupportsPinReorder: () => true,
-  readEnvironmentSupportsSettlement: () => true,
-  readEnvironmentSupportsSnooze: () => true,
+  readEnvironmentServerConfigLoaded: () => true,
   readThreadShell: () => (shellLookup.missing ? null : threadShell),
 }));
 const visitAfterPark = vi.hoisted(() => ({

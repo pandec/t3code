@@ -116,6 +116,11 @@ export function useAllEnvironmentProjectSnapshotsReady(): boolean {
   return useAtomValue(allEnvironmentProjectSnapshotsReadyAtom);
 }
 
+/** Tasks linked environments run for a listed thread, by thread key; lists show them under it. */
+export function useDelegatedUnderParent(): ReadonlySet<string> {
+  return useAtomValue(environmentThreadShells.delegatedUnderParentAtom);
+}
+
 export function useThreadShellsForProjectRefs(
   refs: ReadonlyArray<ScopedProjectRef>,
 ): ReadonlyArray<EnvironmentThreadShell> {
@@ -307,6 +312,10 @@ export function readEnvironmentSupportsServerBrowser(environmentId: EnvironmentI
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
       .serverBrowser === true
   );
+}
+
+export function readEnvironmentServerConfigLoaded(environmentId: EnvironmentId): boolean {
+  return appAtomRegistry.get(environmentServerConfigsAtom).has(environmentId);
 }
 
 export function readEnvironmentSupportsTitleRegeneration(environmentId: EnvironmentId): boolean {

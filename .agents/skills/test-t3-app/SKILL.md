@@ -34,6 +34,19 @@ When another person will use the printed pairing URL, first open the shared orig
 
 Do not open the other person's complete pairing URL during this reachability check; doing so consumes its one-time token. If the agent also needs an authenticated browser, create and consume a separate pairing token, then leave a fresh token for the other person.
 
+## Drive agent turns for free
+
+Do not spend a paid model to see a turn render. `vp run dev` registers the
+`Replay (dev)` provider, which replays recorded turns with simulated streaming
+through the real adapter and orchestration. Its models are scenarios:
+`showcase` covers thinking, a plan, tool calls, an approval, and markdown.
+Press `Ctrl+Alt+Shift+R` for a picker (GNOME takes that key for screen
+recording), call `window.t3dev.replay("showcase")`
+with `preview_evaluate`, or run
+`node apps/server/src/bin.ts thread start --base-dir .t3 --provider devReplay --model showcase <project> "go"`.
+When the test needs real provider behavior, use that provider's cheapest
+model, such as Haiku for Claude or Luna for Codex.
+
 ## Preserve the environment while iterating
 
 Treat the overall testing or implementation loop—not an assistant turn or one verification pass—as the environment lifecycle boundary.

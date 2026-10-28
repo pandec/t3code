@@ -203,7 +203,7 @@ export async function removePersistedComposerAttachmentFile(uri: string): Promis
   }
 }
 
-async function createComposerFileAttachment(input: {
+export async function createComposerFileAttachment(input: {
   readonly uri: string;
   readonly name: string;
   readonly mimeType: string;
@@ -347,14 +347,6 @@ async function loadImagePicker() {
     // cause, and an import failure here otherwise leaves no trace at all.
     console.warn("expo-image-picker failed to load", error);
     throw new Error("Image attachments are unavailable right now.", { cause: error });
-  }
-}
-
-async function loadClipboard() {
-  try {
-    return await import("expo-clipboard");
-  } catch (error) {
-    throw new Error("Clipboard paste is unavailable right now.", { cause: error });
   }
 }
 
@@ -581,94 +573,6 @@ async function pickComposerMediaOnce(input: {
   };
 }
 
-export async function pasteComposerClipboard(input: { readonly existingCount: number }): Promise<
-  | {
-      readonly images: ReadonlyArray<DraftComposerImageAttachment>;
-      readonly text: null;
-      readonly error: string | null;
-    }
-  | {
-      readonly images: readonly [];
-      readonly text: string;
-      readonly error: null;
-    }
-> {
-  let clipboard: Awaited<ReturnType<typeof loadClipboard>>;
-  try {
-    clipboard = await loadClipboard();
-  } catch (error) {
-    return {
-      images: [],
-      text: null,
-      error: error instanceof Error ? error.message : "Clipboard paste is unavailable right now.",
-    };
-  }
-
-  const remainingSlots = PROVIDER_SEND_TURN_MAX_ATTACHMENTS - input.existingCount;
-
-  if (await clipboard.hasImageAsync()) {
-    if (remainingSlots <= 0) {
-      return {
-        images: [],
-        text: null,
-        error: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} images per message.`,
-      };
-    }
-    const image = await clipboard.getImageAsync({ format: "png" });
-    if (!image) {
-      return {
-        images: [],
-        text: null,
-        error: "Clipboard image is unavailable.",
-      };
-    }
-
-    // Data URLs are accepted by the manipulator on iOS; where they aren't,
-    // the helper falls back to the original PNG payload.
-    const reencoded = await reencodeImageAsJpeg({ uri: image.data, mimeType: "image/png" });
-    const dataUrl = reencoded ? `data:image/jpeg;base64,${reencoded.base64}` : image.data;
-    const sizeBytes =
-      reencoded?.sizeBytes ?? estimateBase64ByteSize(image.data.split(",")[1] ?? "");
-    if (sizeBytes <= 0 || sizeBytes > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
-      return {
-        images: [],
-        text: null,
-        error: "Clipboard image exceeds the 10 MB attachment limit.",
-      };
-    }
-
-    return {
-      images: [
-        {
-          id: uuidv4(),
-          type: "image",
-          name: reencoded ? "pasted-image.jpg" : "pasted-image.png",
-          mimeType: reencoded ? "image/jpeg" : "image/png",
-          sizeBytes,
-          dataUrl,
-          previewUri: dataUrl,
-        },
-      ],
-      text: null,
-      error: null,
-    };
-  }
-
-  if (await clipboard.hasStringAsync()) {
-    const text = await clipboard.getStringAsync();
-    return {
-      images: [],
-      ...(text.length > 0 ? { text, error: null } : { text: null, error: "Clipboard is empty." }),
-    };
-  }
-
-  return {
-    images: [],
-    text: null,
-    error: "Clipboard does not contain pasteable text or image content.",
-  };
-}
-
 function mimeTypeFromUri(uri: string): string {
   const ext = uri.split(".").pop()?.toLowerCase();
   switch (ext) {
@@ -688,7 +592,7 @@ function mimeTypeFromUri(uri: string): string {
   }
 }
 
-export function isOwnedPastedImageUri(uri: string): boolean {
+function isOwnedPastedImageUri(uri: string): boolean {
   try {
     const url = new URL(uri);
     if (url.protocol !== "file:") {

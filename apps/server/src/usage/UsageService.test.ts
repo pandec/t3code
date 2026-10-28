@@ -52,7 +52,7 @@ import { totalTokens, type UsageRecord } from "@t3tools/provider-core/server/usa
 import * as UsageService from "./UsageService.ts";
 import * as MuseSdk from "../../../../packages/provider-muse/src/server/sdk.ts";
 import { MuseUsageHome } from "@t3tools/provider-muse/server";
-import { decodeScanCache, encodeScanCache, SCAN_CACHE_FILE_NAME } from "./usageScanCache.ts";
+import { decodeScanCache, makeScanCacheWriter, SCAN_CACHE_FILE_NAME } from "./usageScanCache.ts";
 import { TEST_FORMAT_MAP, TEST_FORMATS } from "./usageTestFormats.ts";
 import { readTranscriptRecords } from "./usageTranscriptReader.ts";
 
@@ -2603,9 +2603,22 @@ describe("UsageService", () => {
         const first = yield* service.readSummary(WINDOW);
         yield* service.awaitPersisted;
         const document = yield* Effect.promise(() => NodeFSP.readFile(cachePath, "utf8"));
-        const encoded = encodeScanCache(
-          decodeScanCache(yield* decodeScanCacheDocument(document), TEST_FORMAT_MAP),
-        );
+        const encoded = (yield* decodeScanCacheDocument(
+          makeScanCacheWriter()(
+            decodeScanCache(yield* decodeScanCacheDocument(document), TEST_FORMAT_MAP),
+            {},
+          ),
+        )) as {
+          readonly files: Readonly<
+            Record<
+              string,
+              {
+                readonly r: ReadonlyArray<ReadonlyArray<unknown>>;
+                readonly t: ReadonlyArray<ReadonlyArray<unknown>>;
+              }
+            >
+          >;
+        };
         const v4 = {
           ...encoded,
           version: 4,
@@ -2691,7 +2704,7 @@ describe("UsageService", () => {
           const config = yield* ServerConfig.ServerConfig;
           const source = "cursor-account:retained-account";
           const now = DateTime.toEpochMillis(yield* DateTime.now);
-          const cache = encodeScanCache(
+          const cache = makeScanCacheWriter()(
             new Map([
               [
                 source,
@@ -2725,15 +2738,12 @@ describe("UsageService", () => {
                 },
               ],
             ]),
+            {
+              sources: { [`cursor\0${authPath}`]: { dir: source, volumeId: "retained-account" } },
+            },
           );
           yield* Effect.promise(() =>
-            NodeFSP.writeFile(
-              NodePath.join(config.stateDir, SCAN_CACHE_FILE_NAME),
-              encodeUnknownJsonString({
-                ...cache,
-                sources: { [`cursor\0${authPath}`]: { dir: source, volumeId: "retained-account" } },
-              }),
-            ),
+            NodeFSP.writeFile(NodePath.join(config.stateDir, SCAN_CACHE_FILE_NAME), cache),
           );
           const service = yield* UsageService.make;
           const summary = yield* service.readSummary({ ...WINDOW, awaitRefresh: true });
@@ -3319,7 +3329,7 @@ describe("UsageService", () => {
       yield* Effect.gen(function* () {
         const { stateDir } = yield* ServerConfig.ServerConfig;
         const mtimeMs = yield* Clock.currentTimeMillis;
-        const cache = encodeScanCache(
+        const cache = makeScanCacheWriter()(
           new Map([
             [
               transcript,
@@ -3335,13 +3345,11 @@ describe("UsageService", () => {
               },
             ],
           ]),
+          {},
         );
         yield* Effect.promise(async () => {
           await NodeFSP.mkdir(stateDir, { recursive: true });
-          await NodeFSP.writeFile(
-            NodePath.join(stateDir, SCAN_CACHE_FILE_NAME),
-            encodeUnknownJsonString(cache),
-          );
+          await NodeFSP.writeFile(NodePath.join(stateDir, SCAN_CACHE_FILE_NAME), cache);
         });
         const summary = yield* (yield* UsageService.make).readSummary(WINDOW);
         const source = summary.sources.find((source) => source.fingerprint.provider === "claude");

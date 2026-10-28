@@ -52,7 +52,7 @@ const queuedRunEdits = makeQueuedRunEditStore<QueuedRunEdit>({
 
 export const queuedRunEditsAtom = queuedRunEdits.atom;
 
-export { isQueuedEditDraftKey, queuedEditDraftKey } from "./queued-edit-draft-key";
+export { queuedEditDraftKey } from "./queued-edit-draft-key";
 
 export const getQueuedRunEdit = queuedRunEdits.get;
 

@@ -107,7 +107,7 @@ export function DesktopThreadLinkCoordinator() {
     });
   });
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- subscribes to desktop thread-link IPC
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to desktop thread-link IPC
   useEffect(() => {
     if (threadLinks === undefined || !catalogReady) return;
     const unsubscribe = threadLinks.onOpen((link) => void openLink(link));

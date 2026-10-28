@@ -20,6 +20,7 @@ import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterReg
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as RemoteDelegation from "../peer/RemoteDelegation.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
@@ -27,7 +28,7 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 
-// Fork: t3_thread_list across projects and by worktree path.
+// Fork: t3_thread_list by worktree path.
 const projectA = ProjectId.make("project:list-a");
 const projectB = ProjectId.make("project:list-b");
 
@@ -97,6 +98,7 @@ const layer = OrchestratorMcpService.layer.pipe(
       }),
       Layer.mock(ProjectService.ProjectService)({}),
       Layer.mock(SecretRequests.SecretRequests)({}),
+      Layer.mock(RemoteDelegation.RemoteDelegation)({}),
       Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
       Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
       Layer.mock(GitVcsDriver.GitVcsDriver)({}),
@@ -115,30 +117,14 @@ const scope: McpInvocationScope = {
   issuedAt: 1,
 };
 
-it.effect("lists one project, every project, or the threads bound to a worktree", () =>
+it.effect("lists the threads bound to a worktree and reports each one's checkout", () =>
   Effect.gen(function* () {
     const service = yield* OrchestratorMcpService.OrchestratorMcpService;
 
     const one = yield* service.listThreads(scope, { projectId: projectA });
-    expect(one.projectId).toBe(projectA);
-    expect(one.threads.map((thread) => thread.threadId)).toEqual([
-      "thread:a-tree",
-      "thread:a-root",
-    ]);
-    expect(one.threads[0]).toMatchObject({
-      projectId: projectA,
-      worktreePath: "/work/trees/feature",
-    });
-    expect(one.threads[1]?.worktreePath).toBeNull();
-
-    const all = yield* service.listThreads(scope, { allProjects: true });
-    expect(all.projectId).toBeNull();
-    expect(all.total).toBe(4);
-    expect(all.threads.map((thread) => thread.threadId)).toEqual([
-      "thread:b-other",
-      "thread:b-tree",
-      "thread:a-tree",
-      "thread:a-root",
+    expect(one.threads.map((thread) => [thread.threadId, thread.worktreePath])).toEqual([
+      ["thread:a-tree", "/work/trees/feature"],
+      ["thread:a-root", null],
     ]);
 
     // Trailing slashes are ignored on both sides; a prefix is not a match.
@@ -156,13 +142,5 @@ it.effect("lists one project, every project, or the threads bound to a worktree"
       worktreePath: "/work/trees/feature",
     });
     expect(inProject.threads.map((thread) => thread.threadId)).toEqual(["thread:a-tree"]);
-
-    const conflict = yield* service
-      .listThreads(scope, { projectId: projectA, allProjects: true })
-      .pipe(Effect.flip);
-    expect(conflict.code).toBe("invalid_request");
-
-    // Without projectId or allProjects, a caller outside a thread must name a target.
-    expect((yield* service.listThreads(scope, {}).pipe(Effect.flip)).code).toBe("target_required");
   }).pipe(Effect.provide(layer)),
 );

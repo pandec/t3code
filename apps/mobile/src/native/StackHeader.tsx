@@ -23,7 +23,6 @@ import {
 
 export {
   nativeHeaderScrollEdgeEffects,
-  nativeTopScrollEdgeEffect,
   type NativeHeaderScrollEdgeEffects,
   type NativeTopScrollEdgeEffect,
 } from "./scrollEdgeEffects";
@@ -207,6 +206,7 @@ export function NativeStackScreenOptions(props: {
   // phase: a render React discards must not leak its closures into the header.
   // It runs before the tab check so wrappers already installed in an inactive
   // tab's header still call the newest closures.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- writes stabilized header options to the navigator after commit so discarded renders leave no closures
   useLayoutEffect(() => {
     const normalizedOptions = normalizeScreenOptions(props.options);
     const stabilizationStartedAt = startHeaderDiagnosticWork();
@@ -250,6 +250,7 @@ export function NativeStackScreenOptions(props: {
     );
   }, [setOptions, props.options, props.optionsVersion, tabActive]);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes the given listeners to navigator events for the screen's lifetime
   useEffect(() => {
     if (!navigation || !props.listeners) {
       return;

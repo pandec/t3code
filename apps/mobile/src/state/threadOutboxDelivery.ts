@@ -1,7 +1,6 @@
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import * as Dialog from "../components/ui/Dialog";
 import {
-  threadRuntimeIsActive,
   type EnvironmentProject,
   type EnvironmentShellStatus,
   type EnvironmentThreadShell,
@@ -231,7 +230,6 @@ export function resolveQueuedMessageDeliveryAction(input: {
     threadExists: input.thread.kind === "found",
     shellStatus: input.shellStatus,
     environmentConnected: input.environmentConnected,
-    threadBusy: input.thread.kind === "found" && threadRuntimeIsActive(input.thread.thread.runtime),
     ...(input.familyRead === undefined ? {} : { familyRead: input.familyRead }),
   });
 }
@@ -251,10 +249,7 @@ function settingsCommandId(message: QueuedThreadMessage, setting: string): Comma
   return CommandId.make(`${message.commandId}:${setting}`);
 }
 
-export async function prepareQueuedMessageAttachments(
-  queuedMessage: QueuedThreadMessage,
-  supportsImageUploads = false,
-): Promise<
+export async function prepareQueuedMessageAttachments(queuedMessage: QueuedThreadMessage): Promise<
   | {
       readonly status: "ready";
       readonly prepared: PreparedTurnAttachments;
@@ -278,7 +273,7 @@ export async function prepareQueuedMessageAttachments(
   const result = await prepareTurnAttachments({
     environmentId: queuedMessage.environmentId,
     attachments: queuedMessage.attachments,
-    supportsImageUploads,
+    supportsImageUploads: true,
     persistUploadedReferences: async (draftAttachments) => {
       if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[queuedMessage.messageId]) {
         return "abandon";
@@ -884,10 +879,7 @@ export function createThreadOutboxDelivery(): {
     let deliveryRevision: number;
     if (!hasAccess()) return true;
     try {
-      const preparedResult = await prepareQueuedMessageAttachments(
-        queuedMessage,
-        serverConfig.environment.capabilities.attachmentUploads === true,
-      );
+      const preparedResult = await prepareQueuedMessageAttachments(queuedMessage);
       if (preparedResult.status === "abandoned") {
         return true;
       }
@@ -946,7 +938,6 @@ export function createThreadOutboxDelivery(): {
               queuedMessage.attachments,
               prepared.attachments,
             ),
-            currentConfig.environment.capabilities.inlineMessageContext === true,
           ),
           ...(queuedMessage.inputOrigin ? { inputOrigin: queuedMessage.inputOrigin } : {}),
           attachments: prepared.attachments,
@@ -1022,10 +1013,7 @@ export function createThreadOutboxDelivery(): {
     let persistedMessage: QueuedThreadMessage;
     let deliveryRevision: number;
     try {
-      const preparedResult = await prepareQueuedMessageAttachments(
-        queuedMessage,
-        serverConfig.environment.capabilities.attachmentUploads === true,
-      );
+      const preparedResult = await prepareQueuedMessageAttachments(queuedMessage);
       if (preparedResult.status === "abandoned") {
         return true;
       }
@@ -1116,7 +1104,6 @@ export function createThreadOutboxDelivery(): {
             queuedMessage.attachments,
             prepared.attachments,
           ),
-          currentConfig.environment.capabilities.inlineMessageContext === true,
         ),
         ...(queuedMessage.inputOrigin ? { inputOrigin: queuedMessage.inputOrigin } : {}),
         uploadedAttachments: prepared.attachments,

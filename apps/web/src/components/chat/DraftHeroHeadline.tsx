@@ -13,13 +13,14 @@ import { primaryServerKeybindingsAtom } from "~/state/server";
 import { useProjectAccentColors } from "~/hooks/useProjectAccentColors";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useScratchProject } from "~/hooks/useScratchProject";
+import { isTriagePrompt } from "~/hooks/useStartTriage";
 import { useAccentTintSettings, useClientSettings } from "~/hooks/useSettings";
 import { useThreadGroupCatalog } from "~/hooks/useThreadGroups";
 import { hasExplicitComposerModelSelection } from "~/lib/chatThreadActions";
 import {
   deriveLogicalProjectKeyFromSettings,
   selectProjectGroupingSettings,
-} from "~/logicalProject";
+} from "@t3tools/client-runtime/state/project-grouping";
 import { projectAccentTintStyle } from "~/projectAccentTint";
 import { projectIconColorClassName } from "~/projectIconColors";
 import {
@@ -54,6 +55,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { InlineButton } from "../ui/button";
 import { DraftProjectName } from "./DraftProjectName";
 import { DraftHeroProjectHeading } from "./DraftHeroProjectHeading";
+import { TriageDraftHero } from "./TriageDraftHero";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 
 // Picker values for the "No project" and "Add project" rows; real entries
@@ -91,6 +93,10 @@ export function DraftHeroHeadline({
     (store) => store.setLogicalProjectDraftThreadId,
   );
   const getComposerDraft = useComposerDraftStore((store) => store.getComposerDraft);
+  // A boolean, so typing in a draft does not re-render the hero.
+  const isTriageDraftPrompt = useComposerDraftStore((store) =>
+    draftId ? isTriagePrompt(store.getComposerDraft(draftId)?.prompt ?? "") : false,
+  );
   const applyStickyState = useComposerDraftStore((store) => store.applyStickyState);
   const setModelSelection = useComposerDraftStore((store) => store.setModelSelection);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
@@ -163,12 +169,11 @@ export function DraftHeroHeadline({
             project.environmentId === activeProjectRef.environmentId &&
             project.id === activeProjectRef.projectId,
         ) ?? null);
-  const scratchTargetEnvironmentId = scratchEnvironmentId(
-    activeProjectRef?.environmentId ?? primaryEnvironmentId,
-  );
+  const scratchTargetEnvironmentId = scratchEnvironmentId(activeProjectRef?.environmentId ?? null);
   const scratchWorkspaceRoot = scratchWorkspaceRootFor(scratchTargetEnvironmentId);
   const isScratchDraft =
-    activeProject !== null && isScratchProject(activeProject, scratchWorkspaceRoot);
+    activeProject !== null &&
+    isScratchProject(activeProject, scratchWorkspaceRootFor(activeProject.environmentId));
 
   const pickerItems: readonly PickerItem[] = [
     ...(scratchWorkspaceRoot === null ? [] : [{ value: NO_PROJECT_VALUE, label: "No project" }]),
@@ -450,6 +455,18 @@ export function DraftHeroHeadline({
       </MenuPopup>
     </Menu>
   );
+
+  if (isScratchDraft && isTriageDraftPrompt) {
+    const environment = environments.find(
+      (entry) => entry.environmentId === activeProject.environmentId,
+    );
+    return (
+      <TriageDraftHero
+        machineLabel={environment?.label ?? null}
+        serverVersion={environment?.serverConfig?.environment.serverVersion ?? null}
+      />
+    );
+  }
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col items-center">

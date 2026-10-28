@@ -1,5 +1,5 @@
 import type {
-  ConnectionTargetKind,
+  ConnectionTarget,
   SupervisorConnectionState,
 } from "@t3tools/client-runtime/connection";
 import { safeTraceId } from "@t3tools/client-runtime/errors";
@@ -40,7 +40,7 @@ export function diagnosticEnvironmentKey(environmentId: EnvironmentId): string {
 
 export function connectionDiagnosticDetails(
   environmentId: EnvironmentId,
-  targetKind: ConnectionTargetKind,
+  targetKind: ConnectionTarget["_tag"],
   state: SupervisorConnectionState,
   nowMs: number,
 ): MobileDiagnosticDetails {

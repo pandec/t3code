@@ -105,6 +105,7 @@ const LOGIN_SHELL_PASSTHROUGH_ENV_NAMES = [
   "NODE_EXTRA_CA_CERTS",
   // The telemetry opt-out is documented as a shell variable; GUI launches never see it.
   "T3CODE_TELEMETRY_ENABLED",
+  "T3CODE_GITHUB_APP_CLIENT_ID",
 ] as const;
 const WINDOWS_PROFILE_ENV_NAMES = ["PATH", "FNM_DIR", "FNM_MULTISHELL_PATH"] as const;
 /**

@@ -224,7 +224,7 @@ describe("ClientSettings sidebar", () => {
   });
 
   it("discards retired Older section settings without changing other preferences", () => {
-    const preferences = { sidebarV2CompactCards: true, sidebarThreadPreviewCount: 12 };
+    const preferences = { sidebarV2CompactCards: true };
     const stored = {
       ...preferences,
       sidebarOlderSectionEnabled: true,

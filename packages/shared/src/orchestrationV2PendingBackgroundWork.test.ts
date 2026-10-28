@@ -380,19 +380,26 @@ describe("derivePendingBackgroundWork kinds", () => {
     };
     const link = (
       number: number,
-      extra: { source?: "agent" | "stack-dismissed"; watched?: boolean },
+      extra: {
+        source?: "agent" | "stack-dismissed";
+        watched?: boolean;
+        state?: "open" | "closed" | "merged";
+      },
     ) => ({
       host: "github.com",
       repository: "acme/app",
       number,
       url: `https://github.com/acme/app/pull/${number}`,
       source: extra.source ?? "agent",
+      snapshot: extra.state === undefined ? null : { state: extra.state },
       ...(extra.watched === false ? {} : { watch }),
     });
     const pullRequests = [
       link(1, {}),
       link(2, { watched: false }),
       link(3, { source: "stack-dismissed" }),
+      link(4, { state: "merged" }),
+      link(5, { state: "closed" }),
     ];
 
     it("keeps a settled run waiting on each visible watch, as an awaited monitor", () => {
@@ -402,10 +409,23 @@ describe("derivePendingBackgroundWork kinds", () => {
         turnItems: [],
         pullRequests,
       });
+      // Fork: a merged watch holds until PullRequestWatchReactor clears it and wakes the agent.
       expect(tasks).toEqual([
         {
           taskId: "pull-request-watch:github.com/acme/app#1",
           description: "Watching pull request #1",
+          kind: "monitor",
+          awaited: true,
+        },
+        {
+          taskId: "pull-request-watch:github.com/acme/app#4",
+          description: "Watching pull request #4",
+          kind: "monitor",
+          awaited: true,
+        },
+        {
+          taskId: "pull-request-watch:github.com/acme/app#5",
+          description: "Watching pull request #5",
           kind: "monitor",
           awaited: true,
         },
@@ -421,7 +441,11 @@ describe("derivePendingBackgroundWork kinds", () => {
           turnItems: [],
           pullRequests,
         }).map((task) => task.taskId),
-      ).toEqual(["pull-request-watch:github.com/acme/app#1"]);
+      ).toEqual([
+        "pull-request-watch:github.com/acme/app#1",
+        "pull-request-watch:github.com/acme/app#4",
+        "pull-request-watch:github.com/acme/app#5",
+      ]);
     });
 
     it("lists no watch while a run is active", () => {

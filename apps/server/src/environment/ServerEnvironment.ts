@@ -272,12 +272,14 @@ export const make = Effect.gen(function* () {
       threadPullRequestLinking: true,
       serverResolvedCommandContext: true,
       threadStop: true,
+      ...(hostPlatform === "win32" ? {} : { localServerStop: true }),
       environmentIcon: true,
       projectCloneTracking: true,
       // Fork: bounded recent-archive query, project-filtered.
       recentArchivedThreads: true,
       recentArchivedThreadsProjectFilter: true,
       ignoredFileListing: true,
+      triage: true,
       ...(advertisedServerSelfUpdate === null
         ? {}
         : { serverSelfUpdate: advertisedServerSelfUpdate }),
@@ -287,6 +289,9 @@ export const make = Effect.gen(function* () {
         : {}),
       ...(desktopAppUpdate ? { desktopAppUpdate: true } : {}),
       serverBrowser: true,
+      peerLinks: true,
+      mcpModeLimitHeader: true,
+      linkFence: true,
     },
   };
 

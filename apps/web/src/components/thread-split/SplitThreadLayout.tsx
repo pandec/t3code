@@ -76,7 +76,7 @@ export function SplitThreadLayout({
   // The primary composer handle is the app-root one (the secondary pane gets
   // its own provider below, so the root ref only ever belongs to the primary).
   const primaryComposerRef = useComposerHandleContext();
-  // oxlint-disable-next-line t3code/react-effect-budget -- registers the primary composer handle
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers the primary composer handle
   useEffect(() => {
     registerThreadPaneComposer("primary", primaryComposerRef);
     return () => registerThreadPaneComposer("primary", null);
@@ -88,7 +88,7 @@ export function SplitThreadLayout({
   const pendingSwap = useThreadSplitStore((state) => state.pendingSwap);
   const abortPaneSwap = useThreadSplitStore((state) => state.abortPaneSwap);
   const routeThreadKey = routeThreadRef === null ? null : scopedThreadKey(routeThreadRef);
-  // oxlint-disable-next-line t3code/react-effect-budget -- closes the split when the route takes the secondary's thread
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- closes the split when the route takes the secondary's thread
   useEffect(() => {
     const shouldClose = shouldCloseSplitForRoute({
       routeThreadKey,
@@ -108,7 +108,7 @@ export function SplitThreadLayout({
   // attention and shortcut ownership to the primary, or the secondary keeps swallowing
   // thread shortcuts. A pane swap is exempt: the threads traded sides on purpose, so the
   // side the user was working on stays active.
-  // oxlint-disable-next-line t3code/react-effect-budget -- hands pane focus to primary on outside route changes
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- hands pane focus to primary on outside route changes
   useEffect(() => {
     if (lastSeenRouteThreadKey.value === routeThreadKey) return;
     const isFirstObservation = lastSeenRouteThreadKey.value === UNOBSERVED_ROUTE_THREAD_KEY;
@@ -176,7 +176,7 @@ function ParkedThreadWatcher({
       : detailState;
   const lastParkState = useRef<typeof parkState>(null);
   // Re-runs on route changes are no-ops: only a move into snoozed folds.
-  // oxlint-disable-next-line t3code/react-effect-budget -- folds the split when the parked thread snoozes
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- folds the split when the parked thread snoozes
   useEffect(() => {
     const previous = lastParkState.current;
     lastParkState.current = parkState;
@@ -206,7 +206,7 @@ function SplitThreadPanes({
   // splitMounted is the source of truth for "two panes on screen" that every active-pane
   // gate reads, including when this layout unmounts on a non-chat route. A layout effect:
   // a passive one leaves a stale-true window in which the only visible pane rejects shortcuts.
-  // oxlint-disable-next-line t3code/react-effect-budget -- publishes split-mounted before paint
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- publishes split-mounted before paint
   useLayoutEffect(() => {
     setSplitMounted(splitOpen);
     return () => setSplitMounted(false);
@@ -251,7 +251,7 @@ function SecondaryPaneComposerScope({ children }: { children: ReactNode }) {
   // ComposerHandleContext, whose single ref would otherwise be claimed by
   // whichever ChatComposer mounted last.
   const composerRef = useRef<ChatComposerHandle | null>(null);
-  // oxlint-disable-next-line t3code/react-effect-budget -- registers the secondary composer handle
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers the secondary composer handle
   useEffect(() => {
     registerThreadPaneComposer("secondary", composerRef);
     return () => registerThreadPaneComposer("secondary", null);

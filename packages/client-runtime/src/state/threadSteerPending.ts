@@ -45,6 +45,7 @@ const AGENT_PROGRESS_ITEM_TYPES: Record<OrchestrationV2TurnItem["type"], boolean
   todo_list: true,
   user_input_request: true,
   secret_request: true,
+  link_request: true,
   file_change: true,
   command_execution: true,
   file_search: true,

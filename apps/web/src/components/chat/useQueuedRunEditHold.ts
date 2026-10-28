@@ -26,7 +26,7 @@ export function useQueuedRunEditHold(
     reportFailure: false,
     reportDefect: false,
   });
-  // oxlint-disable-next-line t3code/react-effect-budget -- holds and renews the server edit lease
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- holds and renews the server edit lease
   useEffect(() => {
     if (threadId === null || runId === null) return;
     // One lease per edit session, so another client's release cannot drop it.

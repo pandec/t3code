@@ -3,7 +3,6 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   decodeScanCache,
   dedupeWithinFile,
-  encodeScanCache,
   makeScanCacheWriter,
   type CachedFile,
   type ScanCache,
@@ -75,6 +74,22 @@ function forkV7CodexState() {
     forkCopyAnchorMs: 0,
     deliberateSkips: 1,
   };
+}
+
+interface EncodedScanCacheFile {
+  readonly p: string;
+  readonly x: number;
+  readonly tx: number;
+  readonly r: ReadonlyArray<ReadonlyArray<unknown>>;
+  readonly t: ReadonlyArray<ReadonlyArray<unknown>>;
+}
+
+/** The written document, typed for fixtures that rewrite it into older layouts. */
+function encodeScanCache(cache: ScanCache): {
+  readonly version: number;
+  readonly files: Readonly<Record<string, EncodedScanCacheFile>>;
+} {
+  return JSON.parse(makeScanCacheWriter()(cache, {}));
 }
 
 function cacheWith(
@@ -543,7 +558,7 @@ describe("scan cache round trip", () => {
       ],
     });
     const restored = decodeScanCache(
-      JSON.parse(JSON.stringify(encodeScanCache(cached))),
+      JSON.parse(makeScanCacheWriter()(cached, {})),
       TEST_FORMAT_MAP,
     );
 
@@ -645,7 +660,9 @@ describe("scan cache round trip", () => {
   });
 
   it("skips malformed file entries but keeps good ones", () => {
-    const encoded = encodeScanCache(cacheWith([["/good.jsonl", 100, [record()]]]));
+    const encoded = JSON.parse(
+      makeScanCacheWriter()(cacheWith([["/good.jsonl", 100, [record()]]]), {}),
+    );
     const withJunk = {
       ...encoded,
       files: { ...encoded.files, "/bad.jsonl": { s: "nope", m: 1, p: "claude", r: [] } },
@@ -656,8 +673,11 @@ describe("scan cache round trip", () => {
   });
 
   it("drops the whole entry when any row is corrupt, forcing a cold re-parse", () => {
-    const encoded = encodeScanCache(
-      cacheWith([["/a.jsonl", 100, [record(), record({ dedupeKey: "msg_2:" })]]]),
+    const encoded = JSON.parse(
+      makeScanCacheWriter()(
+        cacheWith([["/a.jsonl", 100, [record(), record({ dedupeKey: "msg_2:" })]]]),
+        {},
+      ),
     );
     const rows = encoded.files["/a.jsonl"]!.r;
     const poisoned = {

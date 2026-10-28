@@ -33,6 +33,10 @@ import {
 
 describe("buildThreadCopyActionItems", () => {
   const threadId = "thread-current";
+  const threadRef = scopeThreadRef(
+    EnvironmentId.make("environment-local"),
+    ThreadId.make(threadId),
+  );
   const prUrl = "https://github.com/example/repo/pull/42";
 
   it.each([
@@ -65,13 +69,18 @@ describe("buildThreadCopyActionItems", () => {
     async ({ linkedPullRequestUrl, openPanelPullRequestUrl, hasPr }) => {
       const copy = vi.fn(async () => undefined);
       const reference = resolveThreadReferenceCopyTarget({
-        threadId,
+        threadRef,
+        title: "Current thread",
         linkedPullRequestUrl,
         openPanelPullRequestUrl,
       });
       const items = buildThreadCopyActionItems({ threadId, reference, icon: null, copy });
       expect(items.map((item) => item.title)).toEqual(
-        hasPr ? ["Copy thread ID", "Copy PR link"] : ["Copy thread ID"],
+        hasPr
+          ? ["Copy thread ID", "Copy PR link"]
+          : openPanelPullRequestUrl === null
+            ? ["Copy thread ID"]
+            : ["Copy thread ID", "Copy thread"],
       );
       await items[0]!.run();
       expect(copy).toHaveBeenLastCalledWith(
@@ -90,7 +99,8 @@ describe("buildThreadCopyActionItems", () => {
     const input = { threadId: null, icon: null, copy: vi.fn(async () => undefined) };
     expect(buildThreadCopyActionItems({ ...input, reference: null })).toEqual([]);
     const reference = resolveThreadReferenceCopyTarget({
-      threadId,
+      threadRef,
+      title: "Current thread",
       openPanelPullRequestUrl: prUrl,
     });
     expect(buildThreadCopyActionItems({ ...input, reference }).map((item) => item.title)).toEqual([

@@ -30,7 +30,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 
 function useMinuteClockMs(): number {
   const [nowMs, setNowMs] = useState(() => Date.now());
-  // oxlint-disable-next-line t3code/react-effect-budget -- minute clock interval
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- minute clock interval
   useEffect(() => {
     const timer = setInterval(() => setNowMs(Date.now()), 60_000);
     return () => clearInterval(timer);
@@ -179,7 +179,7 @@ export function useComposerProviderUsage(input: {
   // Identifies the in-flight refresh, so an older one finishing late cannot
   // clear a newer one's pending state.
   const refreshTokenRef = useRef(0);
-  // oxlint-disable-next-line t3code/react-effect-budget -- invalidates the in-flight refresh on unmount
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- invalidates the in-flight refresh on unmount
   useEffect(
     // Unmount invalidates any in-flight token so its completion is a no-op.
     () => () => {

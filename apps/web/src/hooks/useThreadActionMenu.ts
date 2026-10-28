@@ -21,25 +21,24 @@ import {
 } from "@t3tools/contracts";
 import { useRouter } from "@tanstack/react-router";
 
-import { resolveSnoozePresets } from "../components/Sidebar.snooze";
+import { pickSnoozePreset, resolveSnoozePresets } from "../components/Sidebar.snooze";
 import {
   buildThreadActionMenuItems,
   threadActionRequiresOperate,
   type ThreadActionMenuId,
 } from "../components/threadActionMenu.logic";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
+import { copyThreadReference } from "../lib/copyThreadReference";
+import { threadChipCopyTarget } from "@t3tools/client-runtime/thread-reference";
 import { threadEnvironment } from "../state/threads";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { readEnvironmentScope } from "../state/session";
 import {
   readConversationForkOptions,
+  readEnvironmentServerConfigLoaded,
   readEnvironmentSupportsAutoSettleOptOut,
   readEnvironmentSupportsActiveMark,
-  readEnvironmentSupportsPinning,
-  readEnvironmentSupportsSettlement,
-  readEnvironmentSupportsSnooze,
   readEnvironmentSupportsSnoozeUntilDone,
-  readEnvironmentSupportsTitleRegeneration,
   readThreadShell,
   useProjects,
 } from "../state/entities";
@@ -49,7 +48,7 @@ import {
   deriveLogicalProjectKeyFromSettings,
   derivePhysicalProjectKey,
   selectProjectGroupingSettings,
-} from "../logicalProject";
+} from "@t3tools/client-runtime/state/project-grouping";
 import { buildPhysicalToLogicalProjectKeyMap } from "../sidebarProjectGrouping";
 import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import { useCopyToClipboard } from "./useCopyToClipboard";
@@ -132,16 +131,17 @@ export function useThreadActionMenu(input: {
       const thread = readThreadShell(threadRef);
       if (!thread) return;
       const now = new Date();
+      const configLoaded = readEnvironmentServerConfigLoaded(threadRef.environmentId);
       const supports = {
-        settlement: readEnvironmentSupportsSettlement(threadRef.environmentId),
+        settlement: configLoaded,
         autoSettleOptOut: readEnvironmentSupportsAutoSettleOptOut(threadRef.environmentId),
-        snooze: readEnvironmentSupportsSnooze(threadRef.environmentId),
-        pinning: readEnvironmentSupportsPinning(threadRef.environmentId),
+        snooze: configLoaded,
+        pinning: configLoaded,
         activeMark: readEnvironmentSupportsActiveMark(threadRef.environmentId),
-        titleRegeneration: readEnvironmentSupportsTitleRegeneration(threadRef.environmentId),
+        titleRegeneration: configLoaded,
       };
       const isRegeneratingTitle = thread.titleRegeneration != null;
-      const snoozePresets = resolveSnoozePresets(now, timestampFormat, {
+      const snoozePresets = resolveSnoozePresets(now, timestampFormat, threadRef.environmentId, {
         untilDone:
           readEnvironmentSupportsSnoozeUntilDone(threadRef.environmentId) &&
           canSnoozeUntilDone(thread),
@@ -181,7 +181,12 @@ export function useThreadActionMenu(input: {
         const preset =
           action === "snooze:custom"
             ? await requestCustomSnooze()
-            : snoozePresets.find((candidate) => `snooze:${candidate.id}` === action);
+            : pickSnoozePreset(
+                snoozePresets,
+                action.slice("snooze:".length),
+                timestampFormat,
+                threadRef.environmentId,
+              );
         if (!preset) return;
         const result = await snoozeThread(threadRef, preset.snoozedUntil, {
           untilDone: "untilDone" in preset && preset.untilDone === true,
@@ -299,6 +304,9 @@ export function useThreadActionMenu(input: {
           if (thread.branch) {
             copyBranchToClipboard(thread.branch, { branch: thread.branch });
           }
+          return;
+        case "copy-thread":
+          void copyThreadReference(threadChipCopyTarget(threadRef, thread.title));
           return;
         case "copy-thread-id":
           copyThreadIdToClipboard(thread.id, { threadId: thread.id });
