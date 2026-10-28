@@ -180,7 +180,11 @@ import { threadPullRequestPanelTarget } from "./pullRequest/pullRequestDetail.lo
 import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
 import { GuestPendingMessages } from "./chat/GuestShareControls";
 import { useDeviceState } from "~/state/device";
-import { isLabsProjectInventory, useLabsInventory } from "~/state/labs";
+import {
+  isLabsPanelProjectInventory,
+  isLabsProjectInventory,
+  useLabsInventory,
+} from "~/state/labs";
 import { openLabsPanel } from "./labs/labsPanelStore";
 import { BranchToolbar, type BranchToolbarHandle } from "./BranchToolbar";
 import { ComposerContextPermissions } from "./ComposerContextPermissions";
@@ -2281,8 +2285,10 @@ export default function ChatView(props: ChatViewProps) {
     labsInventory === null
       ? null
       : isLabsProjectInventory(labsInventory, activeProject?.id ?? null);
-  // Fork (SP Labs): the Labs surface is offered only in threads of the labs project.
-  const labsSurfaceAvailable = labsProjectStatus === true && activeThreadRef !== null;
+  // Fork (SP Labs): the Labs surface is offered in threads of the labs and sp-labs projects.
+  const labsSurfaceAvailable =
+    isLabsPanelProjectInventory(labsInventory, activeProject?.id ?? null) &&
+    activeThreadRef !== null;
   const addLabsSurface = useStableCallback(() => {
     if (!activeThreadRef || !labsSurfaceAvailable) return;
     openLabsPanel(activeThreadRef);
@@ -3286,7 +3292,6 @@ export default function ChatView(props: ChatViewProps) {
         onPendingChange: handleFilePendingChangeStable,
       }}
       linearIssuesSupported={serverConfig?.environment.capabilities.linearIssues === true}
-      labsProjectId={activeProject?.id ?? null}
     />
   ) : null;
   const panelToggleControlProps = {

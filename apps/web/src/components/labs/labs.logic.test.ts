@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { DEFAULT_DRAFT_LAB_INTENT, normalizeDraftLabIntent } from "../../composerDraftStore";
 import {
+  countFreeLabs,
   findLabForThread,
   isLabHeldByArchivedThread,
   isLabIdleHold,
@@ -14,7 +15,7 @@ import {
   resolveLabStackHealth,
   shouldDefaultToLabMode,
   summarizeLabEnvironment,
-  summarizeLabsHeadline,
+  summarizeLabsAttention,
   type LabOwnerView,
   type LabSummary,
 } from "./labs.logic";
@@ -44,6 +45,8 @@ function lab(id: string, overrides: Partial<LabEnvironment> = {}): LabEnvironmen
     id,
     name: id,
     kind: "lab",
+    labKind: "full",
+    lender: null,
     phase: "ready",
     available: true,
     worktree: `/repos/${id}`,
@@ -115,11 +118,35 @@ describe("lab send target", () => {
         available: false,
       }),
       lab("sp-lab-3"),
+      lab("sp-lab-6", { labKind: "lite", lender: "sp-lab-1" }),
     ],
   };
 
-  it("falls back to the first free lab", () => {
+  it("falls back to the first free lab of the draft's kind, lite by default", () => {
     expect(resolveLabSendTarget(DEFAULT_DRAFT_LAB_INTENT, snapshot, "thread-1")).toEqual({
+      ok: true,
+      labId: "sp-lab-6",
+    });
+    const full = { ...DEFAULT_DRAFT_LAB_INTENT, labKind: "full" as const };
+    expect(resolveLabSendTarget(full, snapshot, "thread-1")).toEqual({
+      ok: true,
+      labId: "sp-lab-3",
+    });
+    // Drafts saved before lite labs carry no kind.
+    const { labKind: _labKind, ...legacy } = DEFAULT_DRAFT_LAB_INTENT;
+    expect(normalizeDraftLabIntent(legacy)).toEqual(legacy);
+    expect(resolveLabSendTarget(legacy, snapshot, "thread-1")).toEqual({
+      ok: true,
+      labId: "sp-lab-6",
+    });
+    expect(
+      resolveLabSendTarget(full, { environments: snapshot.environments.slice(0, 2) }, "t"),
+    ).toEqual({ ok: false, error: "No full lab is free. Release one in the Labs panel." });
+  });
+
+  it("picks the only kind an sp-labs checkout from before lite labs has", () => {
+    const older = { environments: [lab("sp-lab-3", { labKind: null })] };
+    expect(resolveLabSendTarget(DEFAULT_DRAFT_LAB_INTENT, older, "thread-1")).toEqual({
       ok: true,
       labId: "sp-lab-3",
     });
@@ -303,7 +330,7 @@ describe("dashboard summaries", () => {
     });
   });
 
-  it("writes the headline from the lab summaries", () => {
+  it("counts free labs and names what needs a look", () => {
     const summary = (word: string, tone: LabSummary["tone"], needsLook = false) => ({
       word,
       tone,
@@ -312,32 +339,32 @@ describe("dashboard summaries", () => {
       since: null,
       needsLook,
     });
-    expect(
-      summarizeLabsHeadline([
-        { name: "sp-lab-1", summary: summary("Reserved", "reserved") },
-        { name: "sp-lab-2", summary: summary("Idle hold", "attention", true) },
-        { name: "sp-lab-3", summary: summary("Free", "free") },
-      ]),
-    ).toEqual({
-      counts: "1 of 3 labs free, 1 in use.",
-      followUp: "sp-lab-2 needs a look.",
-      needsLook: true,
-    });
-    expect(summarizeLabsHeadline([{ name: "a", summary: summary("Free", "free") }])).toEqual({
-      counts: "1 of 1 labs free.",
-      followUp: "Nothing needs you.",
-      needsLook: false,
-    });
+    const labs = [
+      { name: "sp-lab-1", summary: summary("Reserved", "reserved") },
+      { name: "sp-lab-2", summary: summary("Idle hold", "attention", true) },
+      { name: "sp-lab-3", summary: summary("Free", "free") },
+    ];
+    expect(countFreeLabs(labs.map((lab) => lab.summary))).toBe("1 of 3 free");
+    expect(summarizeLabsAttention(labs)).toBe("sp-lab-2 needs a look.");
+    expect(summarizeLabsAttention([{ name: "a", summary: summary("Free", "free") }])).toBe(null);
   });
 
-  it("lists labs in numeric order before the shared checkouts", () => {
+  it("lists full then lite labs in numeric order before the shared checkouts", () => {
     const ordered = orderLabEnvironments([
-      { kind: "staging" as const, name: "Main / Staging" },
-      { kind: "lab" as const, name: "sp-lab-10" },
-      { kind: "lab" as const, name: "sp-lab-2" },
-      { kind: "preview" as const, name: "Preview" },
+      { kind: "staging" as const, labKind: null, name: "Main / Staging" },
+      { kind: "lab" as const, labKind: "lite" as const, name: "sp-lab-10" },
+      { kind: "lab" as const, labKind: "lite" as const, name: "sp-lab-6" },
+      { kind: "lab" as const, labKind: "full" as const, name: "sp-lab-2" },
+      // An sp-labs checkout from before lite labs reports no kind: full.
+      { kind: "lab" as const, labKind: null, name: "sp-lab-1" },
+      { kind: "preview" as const, labKind: null, name: "Preview" },
     ]);
-    expect(ordered.labs.map((entry) => entry.name)).toEqual(["sp-lab-2", "sp-lab-10"]);
+    expect(
+      ordered.groups.map((group) => [group.kind, group.labs.map((entry) => entry.name)]),
+    ).toEqual([
+      ["full", ["sp-lab-1", "sp-lab-2"]],
+      ["lite", ["sp-lab-6", "sp-lab-10"]],
+    ]);
     expect(ordered.shared.map((entry) => entry.name)).toEqual(["Main / Staging", "Preview"]);
   });
 });

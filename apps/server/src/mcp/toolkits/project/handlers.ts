@@ -17,6 +17,7 @@ import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
+import * as LabsService from "../../../labs/LabsService.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { formatThreadLink } from "@t3tools/shared/threadLinks";
@@ -96,6 +97,14 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           return yield* new OrchestratorMcpFailure({
             code: "invalid_request",
             message: "A new thread accepts only pending attachment uploads.",
+          });
+        if (
+          input.lab !== undefined &&
+          (input.workspaceStrategy !== undefined || input.scratch === true)
+        )
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message: "lab picks its own workspace; omit workspaceStrategy and scratch.",
           });
         if (
           input.scratch === true &&
@@ -201,6 +210,23 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
                 Effect.orElseSucceed(() => runtimeMode),
               )
             : runtimeMode;
+        // Fork (SP Labs): reserved for this thread id before the launch, as the composer does.
+        const { lab } = input;
+        const labWorkspace =
+          lab === undefined
+            ? undefined
+            : yield* LabsService.LabsService.pipe(
+                Effect.flatMap((labs) =>
+                  labs.prepareAgentThread({ ...lab, threadId, projectId, purpose: input.title }),
+                ),
+                Effect.mapError(
+                  (error) =>
+                    new OrchestratorMcpFailure({
+                      code: "invalid_request",
+                      message: `${error.message} No thread was created.`,
+                    }),
+                ),
+              );
         const result = yield* ThreadMessageIntake.launchThread({
           commandId,
           threadId,
@@ -209,7 +235,14 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           modelSelection,
           runtimeMode: startedRuntimeMode,
           interactionMode,
-          workspaceStrategy: input.workspaceStrategy ?? { type: "root" },
+          workspaceStrategy:
+            labWorkspace === undefined
+              ? (input.workspaceStrategy ?? { type: "root" })
+              : {
+                  type: "existing_worktree",
+                  worktreePath: labWorkspace.worktreePath,
+                  branch: labWorkspace.branch,
+                },
           ...(input.groupId === undefined ? {} : { customGroupId: input.groupId }),
           ...(input.message === undefined && attachments.length === 0
             ? {}
@@ -227,6 +260,20 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           // Kept only alongside linkOrigin: thread.create drops it otherwise.
           ...(input.delegatedFrom === undefined ? {} : { delegatedFrom: input.delegatedFrom }),
         }).pipe(
+          // These reject the launch before any thread exists, so its lab would stay reserved.
+          Effect.tapError((error) =>
+            labWorkspace !== undefined &&
+            (error._tag === "AttachmentClaimError" ||
+              error._tag === "ThreadManagementProviderInstanceDisabledError")
+              ? LabsService.LabsService.pipe(
+                  Effect.flatMap((labs) =>
+                    labs
+                      .abandonThread({ labId: labWorkspace.labId, leaseId: labWorkspace.leaseId })
+                      .pipe(Effect.forkDetach),
+                  ),
+                )
+              : Effect.void,
+          ),
           Effect.mapError((error) => {
             if (error._tag === "AttachmentClaimError") {
               return new OrchestratorMcpFailure({

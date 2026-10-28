@@ -54,6 +54,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
+import * as LabsService from "../labs/LabsService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
@@ -472,7 +473,12 @@ const boxToolkitLayer = (thread: BoxThread) => {
     Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
     Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
     Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
-    Layer.provide(Layer.mock(ThreadGroupsMcpService.ThreadGroupsMcpService)({})),
+    Layer.provide(
+      Layer.merge(
+        Layer.mock(ThreadGroupsMcpService.ThreadGroupsMcpService)({}),
+        Layer.mock(LabsService.LabsService)({}),
+      ),
+    ),
     Layer.provide(
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/p" }),
     ),
@@ -599,7 +605,12 @@ const makeLaptop = (
       Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
       Layer.provide(Layer.mock(ThreadLaunch.ThreadLaunchService)({})),
       Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
-      Layer.provide(Layer.mock(ThreadGroupsMcpService.ThreadGroupsMcpService)({})),
+      Layer.provide(
+        Layer.merge(
+          Layer.mock(ThreadGroupsMcpService.ThreadGroupsMcpService)({}),
+          Layer.mock(LabsService.LabsService)({}),
+        ),
+      ),
       Layer.fresh,
     );
     const here = yield* Layer.build(layerHere);

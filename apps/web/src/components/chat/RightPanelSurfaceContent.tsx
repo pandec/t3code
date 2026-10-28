@@ -81,8 +81,6 @@ export function RightPanelSurfaceContent(props: {
   readonly files: RightPanelFileProps;
   /** Fork: whether the thread's environment can read Linear issues. */
   readonly linearIssuesSupported: boolean;
-  /** Fork (SP Labs): the thread's project, which the Labs panel lists labs for. */
-  readonly labsProjectId: ProjectId | null;
 }) {
   const { surface, threadRef, visible } = props;
   if (surface === null) return null;
@@ -187,7 +185,7 @@ export function RightPanelSurfaceContent(props: {
     case "pull-requests":
       return <ThreadPullRequestsPanel threadRef={threadRef} />;
     case "labs":
-      return <LabsPanel threadRef={threadRef} projectId={props.labsProjectId} visible={visible} />;
+      return <LabsPanel threadRef={threadRef} visible={visible} />;
     case "device":
       return (
         <Suspense fallback={null}>

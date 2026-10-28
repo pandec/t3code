@@ -38,14 +38,6 @@ export function useLabsInventory(environmentId: EnvironmentId | null): LabsInven
 }
 
 /** Whether `projectId` is the environment's configured labs project. */
-export function useIsLabsProject(
-  environmentId: EnvironmentId | null,
-  projectId: ProjectId | null,
-): boolean {
-  const inventory = useLabsInventory(projectId === null ? null : environmentId);
-  return isLabsProjectInventory(inventory, projectId);
-}
-
 export function isLabsProjectInventory(
   inventory: LabsInventory | null,
   projectId: ProjectId | null,
@@ -55,6 +47,28 @@ export function isLabsProjectInventory(
     inventory.configured &&
     projectId !== null &&
     inventory.projectId === projectId
+  );
+}
+
+/** The Labs panel also opens in the sp-labs project itself; Lab mode stays in the labs project. */
+export function useIsLabsPanelProject(
+  environmentId: EnvironmentId | null,
+  projectId: ProjectId | null,
+): boolean {
+  const inventory = useLabsInventory(projectId === null ? null : environmentId);
+  return isLabsPanelProjectInventory(inventory, projectId);
+}
+
+export function isLabsPanelProjectInventory(
+  inventory: LabsInventory | null,
+  projectId: ProjectId | null,
+): boolean {
+  return (
+    isLabsProjectInventory(inventory, projectId) ||
+    (inventory !== null &&
+      inventory.configured &&
+      projectId !== null &&
+      inventory.spLabsProjectId === projectId)
   );
 }
 

@@ -14,6 +14,10 @@ import { PositiveInt, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseS
 export const LabEnvironmentKind = Schema.Literals(["lab", "staging", "preview"]);
 export type LabEnvironmentKind = typeof LabEnvironmentKind.Type;
 
+/** Lite labs borrow a full lab's WorkOS environment and lack billing and the optional components. */
+export const LabKind = Schema.Literals(["full", "lite"]);
+export type LabKind = typeof LabKind.Type;
+
 /** A reservation. Mutations T3 runs for the user pass its `id` as `--lease`. */
 export const LabLease = Schema.Struct({
   id: Schema.String,
@@ -90,6 +94,10 @@ export const LabEnvironment = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
   kind: LabEnvironmentKind,
+  /** Null for staging and preview, and from an sp-labs checkout that predates lite labs. */
+  labKind: Schema.NullOr(LabKind).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  /** A lite lab's WorkOS lender ("sp-lab-1"); null otherwise. */
+  lender: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   /** "pending" | "ready" | "quarantined"; "unmanaged" for staging and preview. */
   phase: Schema.String,
   /** Ready, unreserved and not held; null for staging and preview. */
@@ -111,6 +119,28 @@ export type LabEnvironment = typeof LabEnvironment.Type;
 /** The CLI's own definition: stopped only when no session and Chrome and WXT are down. */
 export const isLabStackStopped = (runtime: LabRuntime): boolean =>
   runtime.session === false && runtime.chrome.state === "down" && runtime.wxt.state === "down";
+
+/** Where a new lab branch starts when none is named. */
+export const LAB_DEFAULT_BASE_REF = "master";
+
+/** A lab's kind; labs from an sp-labs checkout without lite labs are all full. */
+export const resolveLabKind = (environment: Pick<LabEnvironment, "kind" | "labKind">) =>
+  environment.kind === "lab" ? (environment.labKind ?? "full") : null;
+
+/** The first free lab of `kind`, in the CLI's order; what "First free full/lite lab" reserves. */
+export const findFreeLab = <
+  T extends Pick<LabEnvironment, "kind" | "labKind" | "available" | "lease" | "hold">,
+>(
+  environments: ReadonlyArray<T>,
+  kind: LabKind,
+): T | undefined =>
+  environments.find(
+    (environment) =>
+      resolveLabKind(environment) === kind &&
+      environment.available === true &&
+      environment.lease === null &&
+      environment.hold === null,
+  );
 
 export const LabHistoryItem = Schema.Struct({
   /** "op:<id>" | "lease:<id>" | "handoff:<leaseId>". */
@@ -188,6 +218,8 @@ const LabsResolvedConfig = {
   spLabsDirectory: Schema.NullOr(Schema.String),
   /** The resolved labs project (the setting, or the project rooted at `sourceCheckout`). */
   projectId: Schema.NullOr(ProjectId),
+  /** The project rooted at the sp-labs checkout, which also shows the Labs panel. */
+  spLabsProjectId: Schema.NullOr(ProjectId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   /** The labs' source checkout (Main/Staging's worktree). */
   sourceCheckout: Schema.NullOr(Schema.String),
   /** The last CLI failure; previous data is kept. */

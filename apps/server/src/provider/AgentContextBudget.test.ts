@@ -6,6 +6,7 @@ import { ThreadWorktreeSwitchScheduler } from "../orchestration-v2/ThreadWorktre
 import { ThreadGroupsMcpService } from "../mcp/ThreadGroupsMcpService.ts";
 import { WorktreeMcpService } from "../mcp/WorktreeMcpService.ts";
 import { AgentVoiceReply } from "../voice/AgentVoiceReply.ts";
+import { LabsService } from "../labs/LabsService.ts";
 import { TelegramService } from "../telegram/TelegramService.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
@@ -63,6 +64,7 @@ const toolHandlerServices = Layer.mergeAll(
   Layer.mock(WorktreeMcpService)({}),
   Layer.mock(AgentVoiceReply)({}),
   Layer.mock(TelegramService)({}),
+  Layer.mock(LabsService)({}),
 
   Layer.mock(DeviceService)({}),
   Layer.mock(DocumentText)({}),
