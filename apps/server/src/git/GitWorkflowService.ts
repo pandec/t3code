@@ -200,13 +200,6 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
-    if (handle.kind !== "git") {
-      return yield* new GitManagerError({
-        operation,
-        cwd,
-        detail: `The ${operation} workflow currently supports Git repositories only; detected ${handle.kind}. (${cwd})`,
-      });
-    }
     return handle;
   });
 
@@ -226,14 +219,6 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
-    if (handle.kind !== "git") {
-      return yield* new GitCommandError({
-        operation,
-        command: "vcs-route",
-        cwd,
-        detail: `The ${operation} command currently supports Git repositories only; detected ${handle.kind}.`,
-      });
-    }
     return handle;
   });
 
@@ -252,13 +237,6 @@ export const make = Effect.gen(function* () {
       );
       if (!handle) {
         return false;
-      }
-      if (handle.kind !== "git") {
-        return yield* new GitManagerError({
-          operation,
-          cwd,
-          detail: `The ${operation} workflow currently supports Git repositories only; detected ${handle.kind}. (${cwd})`,
-        });
       }
       return true;
     },
@@ -281,14 +259,6 @@ export const make = Effect.gen(function* () {
     );
     if (!handle) {
       return false;
-    }
-    if (handle.kind !== "git") {
-      return yield* new GitCommandError({
-        operation,
-        command: "vcs-route",
-        cwd,
-        detail: `The ${operation} command currently supports Git repositories only; detected ${handle.kind}.`,
-      });
     }
     return true;
   });

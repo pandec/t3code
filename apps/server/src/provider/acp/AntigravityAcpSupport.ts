@@ -38,7 +38,6 @@ export interface AntigravityAcpRuntimeInput extends Omit<
 > {
   readonly threadId?: string;
   readonly t3Paths?: { readonly baseDir: string; readonly stateDir: string };
-  readonly agentDeviceEnvironment?: Readonly<Record<string, string>>;
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly onAuthorizationUrl?: (url: string) => Effect.Effect<void, EffectAcpErrors.AcpError>;
   readonly clientFileSystem?: boolean;

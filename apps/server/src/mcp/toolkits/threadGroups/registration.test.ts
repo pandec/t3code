@@ -29,6 +29,10 @@ import * as VcsStatusBroadcaster from "../../../vcs/VcsStatusBroadcaster.ts";
 import * as ServerSecretStore from "../../../auth/ServerSecretStore.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as ThreadArchiveScheduler from "../../../orchestration-v2/ThreadArchiveScheduler.ts";
+import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
+import * as PeerLinkRequests from "../../../peer/PeerLinkRequests.ts";
+import * as PeerLinks from "../../../peer/PeerLinks.ts";
+import * as RemoteDelegation from "../../../peer/RemoteDelegation.ts";
 import * as ThreadLaunchService from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ThreadWorktreeSwitchScheduler from "../../../orchestration-v2/ThreadWorktreeSwitchScheduler.ts";
@@ -66,6 +70,10 @@ const StubServicesLive = Layer.mergeAll(
   Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
   Layer.mock(ThreadSearch.ThreadSearch)({}),
   Layer.mock(ThreadArchiveScheduler.ThreadArchiveScheduler)({}),
+  Layer.mock(PeerForwarding.PeerForwarding)({}),
+  Layer.mock(PeerLinkRequests.PeerLinkRequests)({}),
+  Layer.mock(PeerLinks.PeerLinks)({}),
+  Layer.mock(RemoteDelegation.RemoteDelegation)({}),
   Layer.mock(ThreadWorktreeSwitchScheduler.ThreadWorktreeSwitchScheduler)({}),
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
 );

@@ -1,3 +1,5 @@
+import { parseThreadLinkHref } from "@t3tools/shared/threadLinks";
+
 import type { MessagesTimelineRow } from "./MessagesTimeline.logic";
 
 const TIMELINE_MINIMAP_ARIA_EXCERPT_MAX_LENGTH = 120;
@@ -35,8 +37,17 @@ export const EMPTY_TIMELINE_MINIMAP_STATE: TimelineMinimapState = {
 
 type MessageRow = Extract<MessagesTimelineRow, { kind: "message" }>;
 
+const MARKDOWN_AUTOLINK = /<([a-z][\w+.-]*:[^\s<>]*)>/gi;
+
 function compactMinimapPreview(text: string | null | undefined) {
-  const compact = text?.replace(/\s+/g, " ").trim() ?? "";
+  const compact =
+    text
+      // A thread autolink's only text is its URL.
+      ?.replace(MARKDOWN_AUTOLINK, (link, href: string) =>
+        parseThreadLinkHref(href) === null ? link : "a thread",
+      )
+      .replace(/\s+/g, " ")
+      .trim() ?? "";
   return compact.length > 0 ? compact.slice(0, TIMELINE_MINIMAP_PREVIEW_MAX_LENGTH) : null;
 }
 

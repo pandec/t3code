@@ -45,7 +45,7 @@ export function useThreadGroups() {
   const inFlight = useRef(
     new Map<EnvironmentId, { signature: string; controller: AbortController }>(),
   );
-  // oxlint-disable-next-line t3code/react-effect-budget -- aborts in-flight syncs on unmount
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- aborts in-flight syncs on unmount
   useEffect(() => {
     const pending = inFlight.current;
     return () => {
@@ -54,11 +54,11 @@ export function useThreadGroups() {
     };
   }, []);
   const latest = useRef(catalog);
-  // oxlint-disable-next-line t3code/react-effect-budget -- folds catalog echoes into the write baseline
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- folds catalog echoes into the write baseline
   useEffect(() => {
     latest.current = mergeThreadGroups(latest.current, catalog);
   }, [catalog]);
-  // oxlint-disable-next-line t3code/react-effect-budget -- syncs thread groups to connected environments
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- syncs thread groups to connected environments
   useEffect(() => {
     const signature = JSON.stringify(catalog);
     const connected = new Set(targets.map((environment) => environment.environmentId));

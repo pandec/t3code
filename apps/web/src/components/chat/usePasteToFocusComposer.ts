@@ -20,6 +20,7 @@ export function usePasteToFocusComposer(
   const pasteAsTextShortcutUntilRef = useRef(0);
   // Split view mounts two of these; only the active pane takes the input.
   const threadPaneId = useThreadPaneId();
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- attaches window keydown and paste capture listeners that route stray pastes into the composer
   useEffect(() => {
     const keyHandler = (event: KeyboardEvent) => {
       if (!isThreadPaneActive(threadPaneId)) return;

@@ -17,7 +17,6 @@ import {
   type MergedUsage,
   type UsageAttribution,
 } from "@t3tools/shared/usageMerge";
-import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { useState } from "react";
 
@@ -65,7 +64,7 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
     for (const [environmentId, presentation] of presentations) {
       const isConnected = presentation.connection.phase === "connected";
       const sessionResult = get(environmentSession.sessionStateAtom(environmentId));
-      const session = Option.getOrNull(AsyncResult.value(sessionResult));
+      const session = AsyncResult.getOrElse(sessionResult, () => null);
       const hasSessionError = sessionResult._tag === "Failure";
       const access = resolveUsageAccess({
         connectionPhase: presentation.connection.phase,
@@ -91,7 +90,7 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
         continue;
       }
       const result = get(serverEnvironment.usageSummary({ environmentId, input }));
-      const summary = Option.getOrNull(AsyncResult.value(result));
+      const summary = AsyncResult.getOrElse(result, () => null);
       const state = classifyEnvironmentUsage({
         phase: presentation.connection.phase,
         failed: result._tag === "Failure",

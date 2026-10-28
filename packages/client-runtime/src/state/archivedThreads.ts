@@ -66,7 +66,7 @@ export function createArchivedThreadSnapshotsAtomFamily<E>(options: {
         const result = get(options.getSnapshotAtom(environmentId));
         isLoading ||= result.waiting;
 
-        const snapshot = Option.getOrNull(AsyncResult.value(result));
+        const snapshot = AsyncResult.getOrElse(result, () => null);
         if (snapshot !== null) {
           snapshots.push({ environmentId, snapshot });
         }

@@ -27,13 +27,6 @@ export const MOBILE_CACHE_MAX_TOTAL_BYTES = 128 * MEBIBYTE;
 const PULL_REQUEST_CACHE_MAX_RECORDS = 256;
 const PULL_REQUEST_CACHE_MAX_BYTES = 32 * MEBIBYTE;
 const PULL_REQUEST_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60_000;
-const LEGACY_CACHE_DIRECTORIES = [
-  "connection-shell-snapshots",
-  "shell-snapshots",
-  "connection-thread-snapshots",
-  "connection-server-configs",
-  "connection-vcs-refs",
-] as const;
 
 export const ClientCacheKind = Schema.Literals([
   "shell",
@@ -95,18 +88,6 @@ export class MobileDatabaseError extends Schema.TaggedError<MobileDatabaseError>
 
 function databaseError(operation: typeof MobileDatabaseOperation.Type) {
   return (cause: unknown) => new MobileDatabaseError({ operation, cause });
-}
-
-interface LegacyCacheRecord {
-  readonly environmentId: string;
-  readonly kind: ClientCacheKind;
-  readonly cacheKey: string;
-  readonly schemaVersion: number;
-  readonly payload: string;
-}
-
-function objectRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
 }
 
 export function utf8ByteLength(value: string): number {
@@ -381,65 +362,6 @@ export async function loadCacheRecord(
   return row;
 }
 
-export function decodeLegacyCacheRecord(
-  directoryName: (typeof LEGACY_CACHE_DIRECTORIES)[number],
-  payload: string,
-): LegacyCacheRecord | null {
-  let parsed: Record<string, unknown> | null;
-  try {
-    parsed = objectRecord(JSON.parse(payload));
-  } catch {
-    return null;
-  }
-  if (
-    parsed === null ||
-    typeof parsed.environmentId !== "string" ||
-    typeof parsed.schemaVersion !== "number"
-  ) {
-    return null;
-  }
-
-  switch (directoryName) {
-    case "connection-shell-snapshots":
-    case "shell-snapshots":
-      return {
-        environmentId: parsed.environmentId,
-        kind: "shell",
-        cacheKey: "snapshot",
-        schemaVersion: parsed.schemaVersion,
-        payload,
-      };
-    case "connection-thread-snapshots":
-      return typeof parsed.threadId === "string"
-        ? {
-            environmentId: parsed.environmentId,
-            kind: "thread",
-            cacheKey: parsed.threadId,
-            schemaVersion: parsed.schemaVersion,
-            payload,
-          }
-        : null;
-    case "connection-server-configs":
-      return {
-        environmentId: parsed.environmentId,
-        kind: "server-config",
-        cacheKey: "config",
-        schemaVersion: parsed.schemaVersion,
-        payload,
-      };
-    case "connection-vcs-refs":
-      return typeof parsed.cwd === "string"
-        ? {
-            environmentId: parsed.environmentId,
-            kind: "vcs-refs",
-            cacheKey: parsed.cwd,
-            schemaVersion: parsed.schemaVersion,
-            payload,
-          }
-        : null;
-  }
-}
-
 type AutoVacuumConversionOutcome = "succeeded" | "failed";
 
 async function loadAutoVacuumConversionOutcome(
@@ -565,60 +487,6 @@ export async function runStartupCacheMaintenance(
     { ...finalStats, removedRows: pruneResult.removedRows, withinBudget: pruneResult.withinBudget },
     "startup",
   );
-}
-
-async function migrateLegacyFileCaches(database: SQLiteDatabase): Promise<boolean> {
-  try {
-    const { Directory, File, Paths } = await import("expo-file-system");
-    let complete = true;
-    const listFiles = (
-      directory: InstanceType<typeof Directory>,
-    ): Array<InstanceType<typeof File>> =>
-      directory.list().flatMap((entry) => (entry instanceof File ? [entry] : listFiles(entry)));
-
-    for (const directoryName of LEGACY_CACHE_DIRECTORIES) {
-      try {
-        const directory = new Directory(Paths.document, directoryName);
-        if (!directory.exists) continue;
-        for (const file of listFiles(directory)) {
-          const payload = await file.text();
-          const record = decodeLegacyCacheRecord(directoryName, payload);
-          if (record === null) continue;
-          const payloadBytes = utf8ByteLength(record.payload);
-          if (payloadBytes > MOBILE_CACHE_MAX_ROW_BYTES) {
-            recordCacheWriteSkipped(record.environmentId, record.kind, payloadBytes);
-            console.warn("[mobile-database] skipped oversized legacy cache record", {
-              environmentId: diagnosticEnvironmentKey(record.environmentId as EnvironmentId),
-              kind: record.kind,
-              payloadSize: cachePayloadSizeBucket(payloadBytes),
-            });
-            continue;
-          }
-          await database.runAsync(
-            `INSERT INTO client_cache
-              (environment_id, kind, cache_key, schema_version, payload, payload_bytes, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT (environment_id, kind, cache_key) DO NOTHING`,
-            record.environmentId,
-            record.kind,
-            record.cacheKey,
-            record.schemaVersion,
-            record.payload,
-            payloadBytes,
-            Date.now(),
-          );
-        }
-        directory.delete();
-      } catch (cause) {
-        complete = false;
-        console.warn(`[mobile-database] could not migrate legacy cache ${directoryName}`, cause);
-      }
-    }
-    return complete;
-  } catch (cause) {
-    console.warn("[mobile-database] could not load legacy cache migration", cause);
-    return false;
-  }
 }
 
 export class MobileDatabase extends Context.Service<
@@ -785,8 +653,7 @@ const makeAvailable = Effect.gen(function* () {
         `CREATE INDEX IF NOT EXISTS client_cache_lru
            ON client_cache (updated_at ASC, environment_id, kind, cache_key, payload_bytes);`,
       );
-      const migrated = schemaVersion >= 1 || (await migrateLegacyFileCaches(database));
-      if (migrated && schemaVersion < DATABASE_SCHEMA_VERSION) {
+      if (schemaVersion < DATABASE_SCHEMA_VERSION) {
         await database.execAsync(`PRAGMA user_version = ${DATABASE_SCHEMA_VERSION};`);
       }
     },

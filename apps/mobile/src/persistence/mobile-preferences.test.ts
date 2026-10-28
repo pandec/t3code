@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 import { vi } from "vite-plus/test";
@@ -17,9 +18,10 @@ vi.mock("react-native", () => ({
 
 import * as MobileDatabase from "./mobile-database";
 import {
-  make,
+  layer,
   MOBILE_PREFERENCES_OPERATION_TIMEOUT_MS,
   MobilePreferencesSaveError,
+  MobilePreferencesStore,
   sanitizePreferences,
 } from "./mobile-preferences";
 import * as MobileSecureStorage from "./mobile-secure-storage";
@@ -83,9 +85,17 @@ describe("mobile preferences persistence", () => {
         setItem: () => Effect.void,
         removeItem: () => Effect.void,
       });
-      const store = yield* make().pipe(
-        Effect.provideService(MobileDatabase.MobileDatabase, database),
-        Effect.provideService(MobileSecureStorage.MobileSecureStorage, secureStorage),
+      const store = yield* Effect.service(MobilePreferencesStore).pipe(
+        Effect.provide(
+          layer.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                Layer.succeed(MobileDatabase.MobileDatabase, database),
+                Layer.succeed(MobileSecureStorage.MobileSecureStorage, secureStorage),
+              ),
+            ),
+          ),
+        ),
       );
 
       const firstSave = yield* store

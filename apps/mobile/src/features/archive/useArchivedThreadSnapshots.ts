@@ -8,7 +8,7 @@ import {
   type RecentArchivedThreadSnapshotsState,
 } from "@t3tools/client-runtime/state/threads";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { useCallback, useMemo } from "react";
+import { useMemo } from "react";
 
 import { connectionAtomRuntime } from "../../connection/runtime";
 import { appAtomRegistry } from "../../state/atom-registry";
@@ -43,11 +43,11 @@ export function useArchivedThreadSnapshots(environmentIds: ReadonlyArray<Environ
     [environmentIds],
   );
   const result = useAtomValue(archivedSnapshotsAtom(environmentKey));
-  const refresh = useCallback(() => {
+  const refresh = () => {
     for (const environmentId of environmentIds) {
       appAtomRegistry.refresh(archivedSnapshotAtom(environmentId));
     }
-  }, [environmentIds]);
+  };
 
   return { ...result, refresh };
 }

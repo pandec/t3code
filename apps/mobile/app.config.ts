@@ -45,7 +45,7 @@ const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?
 // T3CODE_MOBILE_VERSION release override, then upstream's version. fingerprint.config.js
 // resolves the same precedence.
 const appVersion =
-  repoEnv.T3CODE_FORK_VERSION?.trim() || repoEnv.T3CODE_MOBILE_VERSION?.trim() || "2.1.0";
+  repoEnv.T3CODE_FORK_VERSION?.trim() || repoEnv.T3CODE_MOBILE_VERSION?.trim() || "2.2.0";
 // CFBundleVersion. Only set when a build pipeline supplies one: App Store Connect
 // rejects a repeat build number, but leaving it unset elsewhere keeps `expo prebuild`
 // output stable for local dev builds.
@@ -63,6 +63,12 @@ if (iosBuildNumber !== undefined && !isIosBuildNumber(iosBuildNumber)) {
     `T3CODE_IOS_BUILD_NUMBER must be one to three dot-separated integers (received "${iosBuildNumber}").`,
   );
 }
+
+// Compiled into the native project. Without a relay, Observe's native side could dispatch to
+// Expo's own ingest before observe.ts turns it off; `.invalid` never resolves (RFC 6761).
+const observeEndpointUrl = repoEnv.T3CODE_RELAY_URL?.trim()
+  ? new URL("/v1/mobile/observe", repoEnv.T3CODE_RELAY_URL.trim()).toString()
+  : "https://observe.invalid";
 
 const fromRepoRoot = (relativePath: string) => `../../${relativePath}`;
 const androidAdaptiveForeground = "./assets/android-icon-foreground.png";
@@ -563,7 +569,7 @@ const config: ExpoConfig = {
           widgetsPlugin,
         ]
       : []),
-    "./plugins/withAndroidCleartextTraffic.cjs",
+    "./plugins/withAndroidNetworkSecurityConfig.cjs",
     "./plugins/withAndroidGradleHeap.cjs",
     "./plugins/withAndroidInputBackground.cjs",
     "./plugins/withAndroidModernPopupMenu.cjs",
@@ -591,7 +597,10 @@ const config: ExpoConfig = {
       tracesDataset: repoEnv.EXPO_PUBLIC_OTLP_TRACES_DATASET ?? null,
       tracesToken: repoEnv.EXPO_PUBLIC_OTLP_TRACES_TOKEN ?? null,
     },
-    ...(easProject !== undefined ? { eas: { projectId: easProject.projectId } } : {}),
+    eas: {
+      ...(easProject !== undefined ? { projectId: easProject.projectId } : {}),
+      observe: { endpointUrl: observeEndpointUrl },
+    },
   },
   ...(easProject !== undefined ? { owner: easProject.owner } : {}),
   experiments: {

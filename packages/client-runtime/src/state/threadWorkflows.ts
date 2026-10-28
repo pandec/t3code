@@ -29,6 +29,8 @@ export interface QueuedThreadRun {
   readonly messageId: Message["id"];
   readonly context?: Message["context"];
   readonly inputOrigin?: Message["inputOrigin"];
+  /** Carries the attribution a sent message shows: automation, agent sender, or guest. */
+  readonly message?: Message;
 }
 
 export interface ThreadQueueWorkflowState {
@@ -203,6 +205,7 @@ export function deriveThreadQueueWorkflowState(projection: Projection): ThreadQu
       messageId: run.userMessageId,
       ...(message?.context ? { context: message.context } : {}),
       ...(message?.inputOrigin ? { inputOrigin: message.inputOrigin } : {}),
+      ...(message ? { message } : {}),
     };
   });
 

@@ -149,7 +149,7 @@ export function useThreadLifecycleOutboxDrain(): void {
   const hydrationRetryAttemptRef = useRef(0);
 
   const { loadState } = inputs;
-  // oxlint-disable-next-line t3code/react-effect-budget -- hydrates the persisted outbox, retrying failed loads
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- hydrates the persisted outbox, retrying failed loads
   useEffect(() => {
     if (loadState.status === "ready") {
       hydrationRetryAttemptRef.current = 0;
@@ -168,7 +168,7 @@ export function useThreadLifecycleOutboxDrain(): void {
     return () => clearTimeout(timer);
   }, [loadState]);
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- clears retry timers on unmount
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- clears retry timers on unmount
   useEffect(() => {
     const timers = retryTimersRef.current;
     return () => {
@@ -177,7 +177,7 @@ export function useThreadLifecycleOutboxDrain(): void {
     };
   }, []);
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- delivers queued intents once their environment is live
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- delivers queued intents once their environment is live
   useEffect(() => {
     if (dispatchingCommandId !== null) return;
 

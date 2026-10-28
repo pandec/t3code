@@ -20,7 +20,8 @@ import {
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import * as ProviderInstanceHealth from "./ProviderInstanceHealth.ts";
 import type { UsageObservationToken, UsageSourceKind } from "./ProviderInstanceHealth.ts";
-import { layerMemory as projectionStoreLayerMemory } from "../orchestration-v2/ProjectionStore.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { ProviderInstanceRegistry } from "./ProviderInstanceRegistry.ts";
 import * as ProviderUsageRefresh from "./ProviderUsageRefresh.ts";
 import {
@@ -30,6 +31,9 @@ import {
 } from "./ProviderUsageRefresh.ts";
 
 const driver = ProviderDriverKind.make("claudeAgent");
+const projectionStoreLayerMemory = ProjectionStore.layer.pipe(
+  Layer.provide(SqlitePersistence.layerMemory),
+);
 
 // The auth-failure strike ledger is process-wide and keyed by gateway origin;
 // without a reset the gateway tests would inherit each other's strikes.

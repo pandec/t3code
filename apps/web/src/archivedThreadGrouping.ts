@@ -14,7 +14,7 @@ import {
   deriveLogicalProjectKeyFromSettings,
   derivePhysicalProjectKey,
   type ProjectGroupingSettings,
-} from "./logicalProject";
+} from "@t3tools/client-runtime/state/project-grouping";
 import {
   buildPhysicalToLogicalProjectKeyMap,
   buildSidebarProjectSnapshots,

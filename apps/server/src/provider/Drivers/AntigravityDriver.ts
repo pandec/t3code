@@ -1,4 +1,3 @@
-import { withAgentDeviceEnvironment } from "@t3tools/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import { providerThreadEnvironment } from "@t3tools/provider-core/server/threadEnvironment";
 import {
@@ -260,16 +259,13 @@ export const AntigravityDriver: ProviderDriver<
           installation: executable,
           profile,
           cwd: input.cwd,
-          baseEnv: withAgentDeviceEnvironment(
-            input.threadId
-              ? providerThreadEnvironment(
-                  { threadId: ThreadId.make(input.threadId), cwd: input.cwd },
-                  processEnvironment,
-                  input.t3Paths,
-                )
-              : processEnvironment,
-            input,
-          ),
+          baseEnv: input.threadId
+            ? providerThreadEnvironment(
+                { threadId: ThreadId.make(input.threadId), cwd: input.cwd },
+                processEnvironment,
+                input.t3Paths,
+              )
+            : processEnvironment,
           auth,
           runtimeTempDirectory,
         }),

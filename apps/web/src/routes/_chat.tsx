@@ -127,7 +127,7 @@ function ChatRouteGlobalShortcuts() {
     event.stopPropagation();
   });
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- owns global shortcut and focused-visit subscriptions for the visible chat route
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- owns global shortcut and focused-visit subscriptions for the visible chat route
   useEffect(() => {
     const readRouteTarget = () =>
       resolveThreadRouteTarget(router.state.matches.at(-1)?.params ?? {});

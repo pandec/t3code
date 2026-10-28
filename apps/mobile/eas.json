@@ -70,7 +70,8 @@
       "env": {
         "APP_VARIANT": "production",
         "EXPO_PUBLIC_MOBILE_DIAGNOSTICS": "1",
-        "NODE_OPTIONS": "--max-old-space-size=4096"
+        "NODE_OPTIONS": "--max-old-space-size=4096",
+        "SOURCEMAP_FILE": "/tmp/t3code-ios-main.jsbundle.map"
       },
       "channel": "production",
       "environment": "production",

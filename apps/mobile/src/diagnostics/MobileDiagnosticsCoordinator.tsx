@@ -1,14 +1,14 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { ConnectionTargetKind } from "@t3tools/client-runtime/connection";
+import type { ConnectionTarget } from "@t3tools/client-runtime/connection";
 import type { EnvironmentId } from "@t3tools/contracts";
 import Constants from "expo-constants";
 import * as Network from "expo-network";
 import * as Updates from "expo-updates";
+import { AsyncResult } from "effect/reactivity";
 import { useEffect } from "react";
 import { AppState, Platform } from "react-native";
 
 import { environmentCatalog } from "../connection/catalog";
-import { useEnvironmentConnectionState } from "../state/environments";
 import { connectionDiagnosticDetails } from "./events";
 import { flushHeaderDiagnosticMetrics } from "./headerMetrics";
 import {
@@ -36,11 +36,14 @@ function recordNetworkState(state: Network.NetworkState): void {
 
 function EnvironmentConnectionDiagnostics(props: {
   readonly environmentId: EnvironmentId;
-  readonly targetKind: ConnectionTargetKind;
+  readonly targetKind: ConnectionTarget["_tag"];
 }) {
-  const connection = useEnvironmentConnectionState(props.environmentId).data;
+  const connection = AsyncResult.getOrElse(
+    useAtomValue(environmentCatalog.stateAtom(props.environmentId)),
+    () => null,
+  );
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- journals connection state changes from the environment store
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- journals connection state changes from the environment store
   useEffect(() => {
     if (!connection) return;
     recordMobileDiagnostic(
@@ -56,7 +59,7 @@ function EnabledMobileDiagnosticsCoordinator() {
   const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
   const runtimeNetworkStatus = useAtomValue(environmentCatalog.networkStatusValueAtom);
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- subscribes to AppState, network and stall timers for the diagnostics journal
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to AppState, network and stall timers for the diagnostics journal
   useEffect(() => {
     if (!mobileDiagnosticsEnabled) return;
 
@@ -133,7 +136,7 @@ function EnabledMobileDiagnosticsCoordinator() {
     };
   }, []);
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- journals runtime network status changes
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- journals runtime network status changes
   useEffect(() => {
     if (mobileDiagnosticsEnabled) {
       recordMobileDiagnostic("runtime-network", { status: runtimeNetworkStatus });

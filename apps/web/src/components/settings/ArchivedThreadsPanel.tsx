@@ -30,7 +30,7 @@ import { buildArchivedThreadGroups } from "../../archivedThreadGrouping";
 import { deriveProviderInstanceEntries } from "../../providerInstances";
 import { projectAccentTintStyle } from "../../projectAccentTint";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
-import { selectProjectGroupingSettings } from "../../logicalProject";
+import { selectProjectGroupingSettings } from "@t3tools/client-runtime/state/project-grouping";
 import { serverEnvironment } from "../../state/server";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { useAccentTintSettings, useClientSettings } from "../../hooks/useSettings";
@@ -162,7 +162,7 @@ export function ArchivedThreadsPanel() {
     hasError: archiveError !== null,
   });
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- window Mod+F focuses the search
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- window Mod+F focuses the search
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const isMod = event.metaKey || event.ctrlKey;

@@ -723,7 +723,7 @@ interface ProviderInstanceCardProps {
   readonly modelOrder: ReadonlyArray<string>;
   readonly onHiddenModelsChange: (
     next: ReadonlyArray<string>,
-    affectedModels?: ReadonlyArray<string>,
+    affectedModels: ReadonlyArray<string>,
   ) => void;
   readonly onFavoriteModelsChange: (next: ReadonlyArray<string>) => void;
   readonly onToggleFavorite: (model: string) => void;
@@ -850,7 +850,7 @@ export function ProviderInstanceCard({
   // last *written* envelope (panel-owned, shared by list and editor mounts) instead of the stale
   // prop. Clear an entry only when an echo structurally matches it, so an intermediate echo cannot
   // hide a newer in-flight write; secrets compare in the server-normalized shape.
-  // oxlint-disable-next-line t3code/react-effect-budget -- acknowledges a pending write once the server echoes it
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- acknowledges a pending write once the server echoes it
   useEffect(() => {
     const pendingInstance = pendingInstancesRef.current.get(instanceId);
     if (

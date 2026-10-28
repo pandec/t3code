@@ -445,7 +445,7 @@ function ProviderSettingsPanelContent(target: ProviderSettingsTarget) {
       ) : null}
 
       {selectedEnvironment ? (
-        <SelectedEnvironmentProviderSettings
+        <RemoteSessionGatedProviderSettings
           key={selectedEnvironment.environmentId}
           environment={selectedEnvironment}
           deviceTabs={deviceTabs}
@@ -459,27 +459,6 @@ function ProviderSettingsPanelContent(target: ProviderSettingsTarget) {
         />
       ) : null}
     </>
-  );
-}
-
-function SelectedEnvironmentProviderSettings({
-  environment,
-  deviceTabs,
-  targetInstanceId,
-  projectIds,
-}: {
-  readonly environment: EnvironmentPresentation;
-  readonly deviceTabs?: ReactNode;
-  readonly targetInstanceId?: ProviderInstanceId | undefined;
-  readonly projectIds: readonly ProjectId[];
-}) {
-  return (
-    <RemoteSessionGatedProviderSettings
-      environment={environment}
-      deviceTabs={deviceTabs}
-      targetInstanceId={targetInstanceId}
-      projectIds={projectIds}
-    />
   );
 }
 
@@ -804,7 +783,7 @@ export function EnvironmentProviderSettings({
   // A pending envelope is only acknowledged by its card; once its row is gone
   // (e.g. a reset hides a default-off slot), drop it so a later re-create of
   // the same id cannot build on it.
-  // oxlint-disable-next-line t3code/react-effect-budget -- prunes pending envelopes of removed rows
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- prunes pending envelopes of removed rows
   useEffect(() => {
     for (const id of pendingInstancesRef.current.keys()) {
       if (!rows.some((row) => row.instanceId === id)) pendingInstancesRef.current.delete(id);
@@ -1449,10 +1428,8 @@ function ProviderInstanceRow({
       modelOrder={modelOrder}
       onHiddenModelsChange={(next, affectedModels) => {
         const hidden = new Set(next);
-        const models =
-          affectedModels ?? modelListChanges(hiddenModels, next).map((change) => change.model);
         void actions.updateModelPreferences({
-          setModelsHidden: models.map((model) => ({
+          setModelsHidden: affectedModels.map((model) => ({
             provider: instanceId,
             model,
             hidden: hidden.has(model),

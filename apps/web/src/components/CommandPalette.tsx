@@ -30,7 +30,10 @@ import {
   canForkConversation,
   canForkImportedSessionWith,
 } from "@t3tools/client-runtime/state/thread-fork";
-import { resolveThreadReferenceCopyTarget } from "@t3tools/client-runtime/thread-reference";
+import {
+  resolveThreadReferenceCopyTarget,
+  threadIdCopyTarget,
+} from "@t3tools/client-runtime/thread-reference";
 import {
   canPreloadBrowsePath,
   createBrowseNavigationCoordinator,
@@ -64,6 +67,7 @@ import {
   CircleCheckIcon,
   CircleDotIcon,
   ArrowLeftRightIcon,
+  BugIcon,
   ChartNoAxesColumnIcon,
   Columns2Icon,
   CalendarIcon,
@@ -91,6 +95,7 @@ import {
   RotateCcwIcon,
   SettingsIcon,
   SparklesIcon,
+  MonitorIcon,
   SquarePenIcon,
   TextSearchIcon,
   UserPlusIcon,
@@ -124,10 +129,15 @@ import {
   resolveArchiveToggleAction,
 } from "@t3tools/client-runtime/state/thread-settled";
 import { requestCustomSnooze } from "./CustomSnoozeDialog";
-import { resolveSnoozePresets } from "./Sidebar.snooze";
+import { pickSnoozePreset, resolveSnoozePresets } from "./Sidebar.snooze";
 import { useProjectAccentColorByKey } from "../hooks/useProjectAccentColors";
 import { useAccentTintSettings, useClientSettings } from "../hooks/useSettings";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
+import { copyThreadReference } from "../lib/copyThreadReference";
+import {
+  queueWorkspaceFocusFromPalette,
+  restoreWorkspaceFocusFromPalette,
+} from "../lib/workspaceFocus";
 import {
   composerPromptLink,
   copyPromptLink,
@@ -147,16 +157,16 @@ import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useScratchProject } from "../hooks/useScratchProject";
+import { useStartTriage } from "../hooks/useStartTriage";
+import { pickTriageEnvironment } from "../lib/triageTarget";
 import { useNewProject } from "../hooks/useNewProject";
-import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import {
   useEnvironmentProviders,
   useEnvironments,
   usePrimaryEnvironmentId,
 } from "../state/environments";
 import {
-  readEnvironmentSupportsActiveReorder,
-  readEnvironmentSupportsPinReorder,
+  readEnvironmentServerConfigLoaded,
   readEnvironmentSupportsSnoozeUntilDone,
   readThreadShells,
   useProjects,
@@ -176,16 +186,18 @@ import {
   hasTrailingPathSeparator,
   inferProjectTitleFromPath,
   isExplicitRelativeProjectPath,
+  isScratchProject,
   isUnsupportedWindowsProjectPath,
   resolveProjectPathForDispatch,
-} from "../lib/projectPaths";
+} from "@t3tools/client-runtime/state/projects";
 import {
   dispatchCommandPalette,
+  getCommandPaletteReturnFocus,
   useCommandPaletteMount,
   useCommandPaletteStore,
 } from "../commandPaletteStore";
 import { PULL_REQUESTS_PANEL_REF, useRightPanelStore } from "../rightPanelStore";
-import { getLatestThreadForProject, sortThreads } from "../lib/threadSort";
+import { getLatestThreadForProject, sortThreads } from "@t3tools/client-runtime/state/thread-sort";
 import {
   cn,
   getLocalFileManagerName,
@@ -294,6 +306,7 @@ import { CommandDialog, CommandDialogPopup, CommandFooterAction } from "./ui/com
 import { Kbd, KbdGroup } from "./ui/kbd";
 import { Button } from "./ui/button";
 import { stackedThreadToast, toastManager } from "./ui/toast";
+import { suggestAppAccessForRemote } from "./sourceControlAppAccessToast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { ComposerHandleContext, useComposerHandleContext } from "../composerHandleContext";
 import type { ChatComposerHandle } from "./chat/ChatComposer";
@@ -419,7 +432,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   // OPENED. The dialog's own focus traffic (list focus, close-time restores)
   // moves the live active pane while it is up, so run callbacks read this
   // snapshot instead.
-  // oxlint-disable-next-line t3code/react-effect-budget -- snapshots the owning split pane before the dialog's focus traffic moves it.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- snapshots the owning split pane before the dialog's focus traffic moves it.
   useEffect(() => {
     if (state.open) capturePaletteOwnerPane();
   }, [state.open]);
@@ -480,6 +493,9 @@ function CommandPaletteDialog(props: {
       data-palette-mode={props.mode}
       data-testid="command-palette"
       finalFocus={() => {
+        if (restoreWorkspaceFocusFromPalette()) return false;
+        const returnFocus = getCommandPaletteReturnFocus();
+        if (returnFocus === false) return false;
         // A command may have opened another dialog (thread groups, link PR)
         // that already holds focus; pulling it back to the composer would
         // send the user's typing to the thread instead of the dialog.
@@ -489,7 +505,8 @@ function CommandPaletteDialog(props: {
         // activated it), focus must return there instead.
         if (focusActiveThreadPane()) return false;
         const composer = composerHandleRef?.current;
-        if (!composer) return true;
+        // Behind the Settings modal the composer is inert and cannot take focus.
+        if (!composer || document.querySelector("[data-app-modal]")) return returnFocus;
         composer.focusAtEnd();
         return false;
       }}
@@ -561,15 +578,13 @@ function OpenCommandPaletteDialog(props: {
     reportFailure: false,
   });
   const { scratchEnvironmentId, scratchWorkspaceRootFor, startScratchThread } = useScratchProject();
+  const startTriage = useStartTriage();
   const lookupRepository = useAtomQueryRunner(sourceControlEnvironment.repository, {
     reportFailure: false,
   });
   const loadBrowsePath = useAtomQueryRunner(filesystemEnvironment.browse, {
     reportFailure: false,
     reportDefect: false,
-  });
-  const cloneRepository = useAtomCommand(sourceControlEnvironment.cloneRepository, {
-    reportFailure: false,
   });
   const startProjectClone = useAtomCommand(sourceControlEnvironment.startProjectClone, {
     reportFailure: false,
@@ -629,9 +644,7 @@ function OpenCommandPaletteDialog(props: {
   );
   const referenceThreadRef =
     pathname === "/pull-requests"
-      ? environments.some(
-          (environment) => environment.serverConfig?.environment.capabilities.pullRequests === true,
-        )
+      ? environments.some((environment) => environment.serverConfig !== null)
         ? PULL_REQUESTS_PANEL_REF
         : null
       : currentThread
@@ -648,7 +661,8 @@ function OpenCommandPaletteDialog(props: {
     referenceThreadRef === null || (pathname === "/pull-requests" && !openPanelPullRequestUrl)
       ? null
       : resolveThreadReferenceCopyTarget({
-          threadId: referenceThreadRef.threadId,
+          threadRef: referenceThreadRef,
+          title: currentThread?.title ?? "",
           openPanelPullRequestUrl,
           pullRequests: currentThread?.pullRequests,
           linkedPullRequestUrl:
@@ -656,24 +670,7 @@ function OpenCommandPaletteDialog(props: {
         });
   const copyActiveThreadReference = async (target = activeThreadReferenceCopyTarget) => {
     if (target === null) return;
-    try {
-      const didCopy = await writeTextToClipboard(target.value, target.clipboardTarget);
-      if (!didCopy) return;
-      toastManager.add({
-        type: "success",
-        title: target.successTitle,
-        description: target.value,
-      });
-    } catch (error) {
-      console.error(error);
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: target.failureTitle,
-          description: error instanceof Error ? error.message : "An error occurred.",
-        }),
-      );
-    }
+    await copyThreadReference(target);
   };
   const threads = useThreadShells();
   const serverConfigs = useServerConfigs();
@@ -838,9 +835,22 @@ function OpenCommandPaletteDialog(props: {
   const currentProjectEnvironmentId =
     activeThread?.environmentId ?? activeDraftThread?.environmentId ?? null;
   const currentProjectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? null;
-  const scratchTargetEnvironmentId = scratchEnvironmentId(
-    currentProjectEnvironmentId ?? primaryEnvironmentId,
-  );
+  const scratchTargetEnvironmentId = scratchEnvironmentId(currentProjectEnvironmentId);
+  const supportsTriage = (environmentId: EnvironmentId | null) =>
+    environments.find((environment) => environment.environmentId === environmentId)?.serverConfig
+      ?.environment.capabilities.triage === true;
+  const triageEnvironmentId = pickTriageEnvironment({
+    // Fork: the active split pane's thread is what is on screen.
+    onScreen: currentThread?.environmentId ?? currentProjectEnvironmentId,
+    primary: primaryEnvironmentId,
+    connected: environments
+      .filter((environment) => environment.connection.phase === "connected")
+      .map((environment) => environment.environmentId),
+    supportsTriage,
+  });
+  const canTriage =
+    useAtomValue(serverEnvironment.prepareTriage.permissionAtom(triageEnvironmentId)) &&
+    supportsTriage(triageEnvironmentId);
   const currentProjectKey =
     currentProjectEnvironmentId !== null && currentProjectId !== null
       ? `${currentProjectEnvironmentId}:${currentProjectId}`
@@ -915,6 +925,7 @@ function OpenCommandPaletteDialog(props: {
     });
   };
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- invalidates the browse navigation coordinator and in-flight clone lookups when the palette session unmounts
   useEffect(
     () => () => {
       browseNavigation.invalidate();
@@ -1512,6 +1523,18 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
+  if (triageEnvironmentId !== null && canTriage) {
+    actionItems.push({
+      kind: "action",
+      value: "action:triage",
+      searchTerms: ["triage", "bug", "issue", "report", "broken", "debug", "help", "support"],
+      title: "Triage an issue",
+      description: "An agent investigates a T3 Code problem and helps file an issue",
+      icon: <BugIcon className={ITEM_ICON_CLASS} />,
+      run: () => startTriage(triageEnvironmentId),
+    });
+  }
+
   if (currentThreadRef !== null && supportsThreadFind) {
     actionItems.push({
       kind: "action",
@@ -1735,12 +1758,7 @@ function OpenCommandPaletteDialog(props: {
 
   // Fork: group-aware "Move to top", planned against the full group or pinned
   // shelf so search, filters and folded groups cannot change what "top" is.
-  const canReorderSection = (environmentId: EnvironmentId, section: "pinned" | "active") => {
-    const capabilities = serverConfigs.get(environmentId)?.environment.capabilities;
-    return section === "pinned"
-      ? capabilities?.threadPinReorder === true
-      : capabilities?.threadActiveReorder === true;
-  };
+  const canReorderSection = (environmentId: EnvironmentId) => serverConfigs.has(environmentId);
   const moveToTopPlan = planThreadMoveToTop({
     threads,
     threadRef: currentThreadRef,
@@ -1769,10 +1787,7 @@ function OpenCommandPaletteDialog(props: {
           groups: customGroupCatalog.groups,
           // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
           now: new Date().toISOString(),
-          canReorder: (environmentId, section) =>
-            section === "pinned"
-              ? readEnvironmentSupportsPinReorder(environmentId)
-              : readEnvironmentSupportsActiveReorder(environmentId),
+          canReorder: readEnvironmentServerConfigLoaded,
         });
         if (plan === null || plan.disabledReason) return;
         const moveKey = `${threadRef.environmentId}:${threadRef.threadId}`;
@@ -1993,19 +2008,17 @@ function OpenCommandPaletteDialog(props: {
         openLinkPullRequestDialog(threadRef);
       },
     });
-    if (activeThreadServerConfig?.environment.capabilities.threadPullRequests === true) {
-      actionItems.push({
-        kind: "action",
-        value: "action:open-thread-pull-requests",
-        searchTerms: ["pull requests", "linked", "stack", "prs"],
-        title: "Show linked pull requests",
-        disabled: visibleThreadPullRequests(currentThread.pullRequests).length === 0,
-        icon: <PullRequestGlyph.link className={ITEM_ICON_CLASS} />,
-        run: async () => {
-          useRightPanelStore.getState().open(threadRef, "pull-requests");
-        },
-      });
-    }
+    actionItems.push({
+      kind: "action",
+      value: "action:open-thread-pull-requests",
+      searchTerms: ["pull requests", "linked", "stack", "prs"],
+      title: "Show linked pull requests",
+      disabled: visibleThreadPullRequests(currentThread.pullRequests).length === 0,
+      icon: <PullRequestGlyph.link className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        useRightPanelStore.getState().open(threadRef, "pull-requests");
+      },
+    });
   }
 
   if (currentThread !== null && canShareActiveThreadWithGuest) {
@@ -2163,11 +2176,7 @@ function OpenCommandPaletteDialog(props: {
 
   actionItems.push(themeEditorItem);
 
-  if (
-    environments.some(
-      (environment) => environment.serverConfig?.environment.capabilities.pullRequests === true,
-    )
-  ) {
+  if (environments.some((environment) => environment.serverConfig !== null)) {
     actionItems.push({
       kind: "action",
       value: "action:pull-requests",
@@ -2206,6 +2215,21 @@ function OpenCommandPaletteDialog(props: {
       await navigate({ to: "/usage" });
     },
   });
+
+  for (const direction of [1, -1] as const) {
+    const title = direction === 1 ? "Focus Next Workspace Area" : "Focus Previous Workspace Area";
+    actionItems.push({
+      kind: "action",
+      value: `action:workspace-focus:${direction}`,
+      title,
+      searchTerms: [title, "accessibility", "navigation", "focus", "F6"],
+      icon: <MonitorIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: direction === 1 ? "workspace.focusNext" : "workspace.focusPrevious",
+      run: async () => {
+        queueWorkspaceFocusFromPalette(direction);
+      },
+    });
+  }
 
   actionItems.push({
     kind: "action",
@@ -2303,7 +2327,7 @@ function OpenCommandPaletteDialog(props: {
     consumedThreadIntent.current = intent;
     if (threadUtilityOpenTarget) executeItem(threadUtilityOpenTarget);
   });
-  // oxlint-disable-next-line t3code/react-effect-budget -- rename and snooze intents wait until the action list resolves their target.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- rename and snooze intents wait until the action list resolves their target.
   useLayoutEffect(() => {
     if (openIntent?.kind !== "rename-thread" && openIntent?.kind !== "snooze-thread") return;
     if (threadUtilityTargetPending) return;
@@ -2401,6 +2425,17 @@ function OpenCommandPaletteDialog(props: {
                     untilDone: preset.untilDone === true,
                   }),
                 );
+              // The environment's configured presets, plus the fork's "Until it's done".
+              const presets = resolveSnoozePresets(
+                now,
+                timestampFormat,
+                openUnarchivedThreadRef.environmentId,
+                {
+                  untilDone:
+                    canSnoozeUntilDone(openUnarchivedThread) &&
+                    readEnvironmentSupportsSnoozeUntilDone(openUnarchivedThreadRef.environmentId),
+                },
+              );
               return [
                 {
                   value: SNOOZE_THREAD_VIEW_VALUE,
@@ -2408,13 +2443,7 @@ function OpenCommandPaletteDialog(props: {
                   items: buildSnoozeThreadViewItems({
                     query: deferredQuery,
                     now,
-                    presets: resolveSnoozePresets(now, timestampFormat, {
-                      untilDone:
-                        canSnoozeUntilDone(openUnarchivedThread) &&
-                        readEnvironmentSupportsSnoozeUntilDone(
-                          openUnarchivedThreadRef.environmentId,
-                        ),
-                    }),
+                    presets,
                     timestampFormat,
                     icon: <AlarmClockIcon className={ITEM_ICON_CLASS} />,
                     customIcon: <CalendarIcon className={ITEM_ICON_CLASS} />,
@@ -2424,7 +2453,17 @@ function OpenCommandPaletteDialog(props: {
                       </span>
                     ),
                     snooze: async (preset) => {
-                      await snooze(preset);
+                      // A listed preset re-resolves as picked; a parsed time is already exact.
+                      const shown = presets.find((candidate) => candidate === preset);
+                      const picked = shown
+                        ? pickSnoozePreset(
+                            presets,
+                            shown.id,
+                            timestampFormat,
+                            openUnarchivedThreadRef.environmentId,
+                          )
+                        : preset;
+                      if (picked) await snooze(picked);
                     },
                     custom: async () => {
                       const choice = await requestCustomSnooze();
@@ -2783,33 +2822,6 @@ function OpenCommandPaletteDialog(props: {
       return;
     }
 
-    // Older servers lack clone tracking; wait for the blocking clone before adding the project.
-    if (browseEnvironment?.serverConfig?.environment.capabilities.projectCloneTracking !== true) {
-      setIsRemoteProjectCloning(true);
-      const cloneResult = await cloneRepository({
-        environmentId: addProjectCloneFlow.environmentId,
-        input: {
-          remoteUrl: addProjectCloneFlow.remoteUrl,
-          destinationPath,
-        },
-      });
-      setIsRemoteProjectCloning(false);
-      if (cloneResult._tag === "Failure") {
-        if (!isAtomCommandInterrupted(cloneResult)) {
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Clone failed",
-              description: errorMessage(squashAtomCommandFailure(cloneResult)),
-            }),
-          );
-        }
-        return;
-      }
-      await handleAddProject(cloneResult.value.cwd);
-      return;
-    }
-
     const projectId = newProjectId();
     setIsRemoteProjectCloning(true);
     const startResult = await startProjectClone({
@@ -2837,6 +2849,10 @@ function OpenCommandPaletteDialog(props: {
       return;
     }
     setOpen(false);
+    void suggestAppAccessForRemote(
+      addProjectCloneFlow.environmentId,
+      addProjectCloneFlow.remoteUrl,
+    );
     const projectRef = scopeProjectRef(addProjectCloneFlow.environmentId, projectId);
     await waitForProject(projectRef, 3_000).catch(() => null);
     const navigationResult = await settlePromise(() => handleNewThread(projectRef));
@@ -3198,9 +3214,7 @@ function OpenCommandPaletteDialog(props: {
       event.stopPropagation();
       if (copyThreadIdTarget === null || event.repeat) return;
       setOpen(false);
-      void copyActiveThreadReference(
-        resolveThreadReferenceCopyTarget({ threadId: copyThreadIdTarget }),
-      );
+      void copyActiveThreadReference(threadIdCopyTarget(copyThreadIdTarget));
       return;
     }
 

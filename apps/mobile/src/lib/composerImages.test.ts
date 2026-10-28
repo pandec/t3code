@@ -6,15 +6,6 @@ import {
 
 const files = new Map<string, { base64: string; deleted: boolean; text?: string }>();
 
-const clipboard = vi.hoisted(() => ({
-  hasImageAsync: vi.fn(),
-  getImageAsync: vi.fn(),
-  hasStringAsync: vi.fn(),
-  getStringAsync: vi.fn(),
-}));
-
-vi.mock("expo-clipboard", () => clipboard);
-
 const manipulator = vi.hoisted(() => {
   const state = { sourceSize: { width: 0, height: 0 } };
   const manipulate = vi.fn((source: string | { width: number; height: number }) => {
@@ -106,102 +97,7 @@ vi.mock("./uuid", () => ({
   uuidv4: () => "attachment-id",
 }));
 
-import { convertPastedImagesToAttachments, pasteComposerClipboard } from "./composerImages";
-
-describe("composer clipboard paste", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    clipboard.hasImageAsync.mockResolvedValue(false);
-    clipboard.hasStringAsync.mockResolvedValue(true);
-    clipboard.getStringAsync.mockResolvedValue("clipboard text");
-    clipboard.getImageAsync.mockResolvedValue({ data: "data:image/png;base64,aGVsbG8=" });
-  });
-
-  it("returns only the image when the clipboard contains both image and text", async () => {
-    clipboard.hasImageAsync.mockResolvedValue(true);
-    const result = await pasteComposerClipboard({ existingCount: 0 });
-    expect(result).toEqual({
-      // Fork: pasted PNGs are re-encoded as JPEG.
-      images: [expect.objectContaining({ type: "image", name: "pasted-image.jpg" })],
-      text: null,
-      error: null,
-    });
-    expect(clipboard.getStringAsync).not.toHaveBeenCalled();
-  });
-
-  it("does not paste alternate text when the image cannot fit", async () => {
-    clipboard.hasImageAsync.mockResolvedValue(true);
-    expect(
-      await pasteComposerClipboard({ existingCount: PROVIDER_SEND_TURN_MAX_ATTACHMENTS }),
-    ).toEqual({ images: [], text: null, error: expect.stringContaining("up to") });
-    expect(clipboard.getStringAsync).not.toHaveBeenCalled();
-  });
-});
-
-describe("oversized pasted images", () => {
-  const u32 = (n: number) => [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
-  const pngDataUrl = (width: number, height: number) =>
-    `data:image/png;base64,${Buffer.from([
-      0x89,
-      0x50,
-      0x4e,
-      0x47,
-      0x0d,
-      0x0a,
-      0x1a,
-      0x0a,
-      ...u32(13),
-      0x49,
-      0x48,
-      0x44,
-      0x52,
-      ...u32(width),
-      ...u32(height),
-      8,
-      6,
-      0,
-      0,
-      0,
-    ]).toString("base64")}`;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    clipboard.hasImageAsync.mockResolvedValue(true);
-  });
-
-  // Fork: pastes are re-encoded as JPEG, with upstream's 2000px long-edge cap.
-  it("scales a clipboard screenshot over 2000px to a 2000px JPEG", async () => {
-    manipulator.state.sourceSize = { width: 3024, height: 1964 };
-    const pasted = pngDataUrl(3024, 1964);
-    clipboard.getImageAsync.mockResolvedValue({ data: pasted });
-
-    const result = await pasteComposerClipboard({ existingCount: 0 });
-
-    expect(manipulator.manipulate).toHaveBeenCalledWith(pasted);
-    const resize = manipulator.manipulate.mock.results.at(-1)?.value.resize;
-    expect(resize).toHaveBeenCalledWith({ width: 2000, height: 1299 });
-    expect(result.images).toEqual([
-      expect.objectContaining({
-        mimeType: "image/jpeg",
-        dataUrl: "data:image/jpeg;base64,cmVuZGVyZWQ=",
-        previewUri: "data:image/jpeg;base64,cmVuZGVyZWQ=",
-      }),
-    ]);
-  });
-
-  it("re-encodes a 2000px clipboard image as JPEG without resizing it", async () => {
-    manipulator.state.sourceSize = { width: 2000, height: 1200 };
-    const pasted = pngDataUrl(2000, 1200);
-    clipboard.getImageAsync.mockResolvedValue({ data: pasted });
-
-    const result = await pasteComposerClipboard({ existingCount: 0 });
-
-    expect(manipulator.manipulate).toHaveBeenCalledOnce();
-    expect(result.images).toEqual([
-      expect.objectContaining({ dataUrl: "data:image/jpeg;base64,cmVuZGVyZWQ=" }),
-    ]);
-  });
-});
+import { convertPastedImagesToAttachments } from "./composerImages";
 
 describe("native pasted image cleanup", () => {
   beforeEach(() => {

@@ -17,7 +17,7 @@ import {
   type ProjectAccentSource,
 } from "@t3tools/client-runtime/state/project-accent-colors";
 
-import { derivePhysicalProjectKey } from "~/logicalProject";
+import { derivePhysicalProjectKey } from "@t3tools/client-runtime/state/project-grouping";
 import { environmentPresentations } from "~/state/presentation";
 import { enqueueProjectAccentColorWrite } from "./projectAccentColorWriteQueue";
 import { useStableCallback } from "./useStableCallback";
@@ -259,7 +259,7 @@ export function useProjectAccentColorMigration(projects: ReadonlyArray<ProjectAc
   const retryDelayRef = useRef(1_000);
   const [retryGeneration, setRetryGeneration] = useState(0);
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- cancels the retry timer on unmount
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- cancels the retry timer on unmount
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -271,7 +271,7 @@ export function useProjectAccentColorMigration(projects: ReadonlyArray<ProjectAc
     };
   }, []);
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- runs the legacy accent-color migration
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- runs the legacy accent-color migration
   useEffect(() => {
     if (inFlightRef.current) return;
     if (Object.keys(legacyAccentColors).length === 0) return;

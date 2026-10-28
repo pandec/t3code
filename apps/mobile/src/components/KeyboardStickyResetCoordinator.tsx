@@ -158,7 +158,7 @@ export function KeyboardStickyResetCoordinator() {
     [reconcileKeyboardOffset, recordKeyboardDiagnostic],
   );
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- subscribes to native keyboard, AppState and reset-request events
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to native keyboard, AppState and reset-request events
   useEffect(() => {
     if (Platform.OS !== "ios") return;
 
