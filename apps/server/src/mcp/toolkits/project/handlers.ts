@@ -225,10 +225,9 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
               error._tag === "ThreadManagementProviderInstanceDisabledError")
               ? LabsService.LabsService.pipe(
                   Effect.flatMap((labs) =>
-                    labs.abandonThread({
-                      labId: labWorkspace.labId,
-                      leaseId: labWorkspace.leaseId,
-                    }),
+                    labs
+                      .abandonThread({ labId: labWorkspace.labId, leaseId: labWorkspace.leaseId })
+                      .pipe(Effect.forkDetach),
                   ),
                 )
               : Effect.void,

@@ -125,7 +125,10 @@ export class LabsService extends Context.Service<
     readonly prepareAgentThread: (
       input: LabsAgentThreadInput,
     ) => Effect.Effect<LabsPrepareThreadResult, LabsError>;
-    /** Releases (stopping first) `leaseId` when it still holds `labId`; never fails. */
+    /**
+     * Releases `labId` (stopping it first) only while `leaseId` still holds it; never fails. It
+     * waits behind any running operation on the lab, so callers fork it.
+     */
     readonly abandonThread: (input: {
       readonly labId: string;
       readonly leaseId: string;
@@ -676,27 +679,42 @@ const make = Effect.gen(function* () {
     }
   });
 
-  /** In the background, releases a reservation whose launch never created its thread. */
   const abandonThread: LabsService["Service"]["abandonThread"] = Effect.fn(
     "LabsService.abandonThread",
   )(
     function* (input) {
-      const { environment } = yield* findLab(input.labId);
-      if (environment.lease?.id !== input.leaseId) return;
-      const result = yield* release({ labId: input.labId, stopFirst: true });
+      const result = yield* releaseLab({ labId: input.labId, stopFirst: true }, input.leaseId);
       if (result.status === "blocked") {
-        yield* Effect.logWarning("Could not release an unlaunched lab thread's lab", result);
+        yield* Effect.logWarning("Did not release an unlaunched lab thread's lab", result);
       }
     },
-    (effect) => effect.pipe(Effect.ignore, Effect.forkIn(scope), Effect.asVoid),
+    Effect.catch((cause) =>
+      Effect.logWarning("Failed to release an unlaunched lab thread's lab", { cause }),
+    ),
   );
 
-  const release: LabsService["Service"]["release"] = (input) =>
+  /** With `expectedLeaseId`, checked under the lab's lock: a newer reservation is never touched. */
+  const releaseLab = (
+    input: LabsReleaseInput,
+    expectedLeaseId?: string,
+  ): Effect.Effect<LabsReleaseResult, LabsError> =>
     mutate(
       input.labId,
       "releasing",
       Effect.gen(function* () {
         const { directory, environment } = yield* findLab(input.labId);
+        if (expectedLeaseId !== undefined && environment.lease?.id !== expectedLeaseId) {
+          return {
+            status: "blocked" as const,
+            labId: input.labId,
+            blockers: [
+              {
+                kind: "not_reserved" as const,
+                detail: "The reservation changed; nothing was released.",
+              },
+            ],
+          };
+        }
         const blockers = labReleaseBlockers(environment, input.stopFirst);
         // Every step acts on this reservation (a missing one is a blocker), never a later one.
         const lease = environment.lease;
@@ -756,6 +774,8 @@ const make = Effect.gen(function* () {
         return { status: "released" as const, labId: input.labId, handoff: released.handoff };
       }),
     );
+
+  const release: LabsService["Service"]["release"] = (input) => releaseLab(input);
 
   const history: LabsService["Service"]["history"] = Effect.fn("LabsService.history")(
     function* (input) {

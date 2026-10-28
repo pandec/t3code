@@ -461,7 +461,7 @@ describe("LabsService", () => {
       }),
   );
 
-  it.effect("abandoning an unlaunched thread stops and releases its lab", () =>
+  it.effect("abandoning an unlaunched thread releases its lab, never a newer reservation", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakeCli;
       yield* withService(
@@ -475,6 +475,19 @@ describe("LabsService", () => {
             purpose: "Fix",
           });
           yield* takeCall(fake, "up");
+
+          // Someone released and took the lab again before the abandon reached it.
+          const newer = { ...LEASE, id: "lease-2", threadId: "someone-else" };
+          yield* fake.setLab("sp-lab-1", (lab) => ({ ...lab, lease: newer }));
+          yield* Queue.clear(fake.calls);
+          yield* labs.abandonThread({ labId: prepared.labId, leaseId: prepared.leaseId });
+          const untouched = yield* Queue.clear(fake.calls);
+          assert.isFalse(untouched.some((call) => ["down", "release"].includes(call.args[0]!)));
+
+          yield* fake.setLab("sp-lab-1", (lab) => ({
+            ...lab,
+            lease: { ...LEASE, id: prepared.leaseId },
+          }));
           yield* labs.abandonThread({ labId: prepared.labId, leaseId: prepared.leaseId });
           const down = yield* takeCall(fake, "down");
           assert.deepEqual(down.args, ["down", "sp-lab-1", "--lease", prepared.leaseId]);
