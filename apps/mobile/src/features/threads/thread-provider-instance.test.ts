@@ -116,22 +116,24 @@ describe("resolveThreadProviderInstance", () => {
 });
 
 describe("createThreadRowProviderInstanceResolver", () => {
-  it("shows a custom model's icon only for threads on that model", () => {
+  it("shows a custom model's icon only for threads on that model, following icon edits", () => {
     const environmentId = EnvironmentId.make("environment-a");
-    const config = {
-      ...makeConfig([{ instanceId: "claudeAgent_proxy", driver: "claudeAgent" }]),
-      settings: {
-        providerInstances: {
-          claudeAgent_proxy: {
-            driver: "claudeAgent",
-            config: { customModelIcons: { "gpt-6-astra": "codex" } },
+    const withIcon = (icon: string) =>
+      ({
+        ...makeConfig([{ instanceId: "claudeAgent_proxy", driver: "claudeAgent" }]),
+        settings: {
+          providerInstances: {
+            claudeAgent_proxy: {
+              driver: "claudeAgent",
+              config: { customModelIcons: { "gpt-6-astra": icon } },
+            },
           },
         },
-      },
-    } as unknown as ServerConfig;
-    const environments = createThreadListEnvironmentsAtom(
-      Atom.make<ReadonlyMap<EnvironmentId, ServerConfig>>(new Map([[environmentId, config]])),
+      }) as unknown as ServerConfig;
+    const configs = Atom.make<ReadonlyMap<EnvironmentId, ServerConfig>>(
+      new Map([[environmentId, withIcon("codex")]]),
     );
+    const environments = createThreadListEnvironmentsAtom(configs);
     const registry = AtomRegistry.make();
     registry.mount(environments);
     try {
@@ -145,6 +147,12 @@ describe("createThreadRowProviderInstanceResolver", () => {
       };
       expect(resolve(astra)?.modelIcon).toBe("codex");
       expect(resolve(thread)?.modelIcon).toBeUndefined();
+
+      registry.set(configs, new Map([[environmentId, withIcon("zai")]]));
+      const edited = createThreadRowProviderInstanceResolver(
+        registry.get(environments).providersByEnvironmentId,
+      );
+      expect(edited(astra)?.modelIcon).toBe("zai");
     } finally {
       registry.dispose();
     }

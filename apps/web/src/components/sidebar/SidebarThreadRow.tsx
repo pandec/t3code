@@ -35,6 +35,7 @@ import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
   type EnvironmentMachineKind,
+  type ProviderInstanceId,
   type ScopedThreadRef,
   type SidebarThreadProviderIconVisibility,
   type SidebarProjectAccentColor,
@@ -212,6 +213,18 @@ function terminalProcessLabel(count: number): string {
   return `${count} terminal ${count === 1 ? "process" : "processes"} running`;
 }
 
+// Fork: a gateway-served custom model shows its family glyph, as in the composer.
+function useThreadModelIcon(
+  thread: SidebarThreadSummary,
+  instanceId: ProviderInstanceId,
+): string | undefined {
+  return useReportedModelIcon(
+    thread.environmentId,
+    instanceId,
+    instanceId === thread.modelSelection.instanceId ? thread.modelSelection.model : null,
+  );
+}
+
 function SidebarProviderStack(props: {
   thread: SidebarThreadSummary;
   providerEntryByInstanceId: ReadonlyMap<string, SidebarProviderEntry>;
@@ -219,14 +232,7 @@ function SidebarProviderStack(props: {
   const stack = resolveThreadProviderStack(props.thread);
   const currentInstanceId = stack[stack.length - 1]!;
   const currentEntry = props.providerEntryByInstanceId.get(currentInstanceId) ?? null;
-  // Fork: a gateway-served custom model shows its family glyph, as in the composer.
-  const modelIcon = useReportedModelIcon(
-    props.thread.environmentId,
-    currentInstanceId,
-    currentInstanceId === props.thread.modelSelection.instanceId
-      ? props.thread.modelSelection.model
-      : null,
-  );
+  const modelIcon = useThreadModelIcon(props.thread, currentInstanceId);
   if (currentEntry === null) return null;
   const showInstanceBadge = shouldShowInstanceBadge(
     currentEntry,
@@ -292,7 +298,7 @@ function SidebarThreadTooltip({
   providerEntry: SidebarProviderEntry | null;
   providerEntryByInstanceId: ReadonlyMap<string, SidebarProviderEntry>;
   showInstanceBadge: boolean;
-  modelInstanceId: string;
+  modelInstanceId: ProviderInstanceId;
   modelLabel: string;
   branchMismatch: {
     threadBranch: string;
@@ -302,6 +308,7 @@ function SidebarThreadTooltip({
   terminalProcessCount: number;
 }) {
   const driverKind = providerEntry?.driverKind ?? null;
+  const modelIcon = useThreadModelIcon(thread, modelInstanceId);
   const previousProviderNames = thread.providerInstanceHistory
     .filter((instanceId) => instanceId !== modelInstanceId)
     .map((instanceId) => providerEntryByInstanceId.get(instanceId)?.displayName ?? instanceId);
@@ -354,6 +361,7 @@ function SidebarThreadTooltip({
               displayName={
                 providerEntry?.displayName ?? thread.runtime?.providerName ?? modelInstanceId
               }
+              modelIcon={modelIcon}
               accentColor={providerEntry?.accentColor}
               acpRegistryAgentId={providerEntry?.acpRegistryAgentId}
               acpRegistryIconUrl={providerEntry?.acpRegistryIconUrl}
