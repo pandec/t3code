@@ -4448,6 +4448,17 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         );
         assert.isNull(yield* driver.fetchWorktreeBaseCommit({ cwd, refName: initialBranch }));
         assert.isNull(yield* driver.resolvePrimaryRemoteTrackingRef({ cwd, refName: "release" }));
+        yield* git(cwd, ["push", "origin", initialBranch]);
+        yield* git(cwd, [
+          "symbolic-ref",
+          "refs/remotes/origin/HEAD",
+          `refs/remotes/origin/${initialBranch}`,
+        ]);
+        assert.isNull(yield* driver.fetchWorktreeBaseCommit({ cwd, refName: "origin/HEAD" }));
+        assert.equal(
+          yield* git(cwd, ["rev-parse", "refs/remotes/origin/HEAD"]),
+          yield* git(cwd, ["rev-parse", "HEAD"]),
+        );
         yield* git(cwd, ["remote", "remove", "origin"]);
         assert.isNull(yield* driver.fetchWorktreeBaseCommit({ cwd, refName: initialBranch }));
       }),

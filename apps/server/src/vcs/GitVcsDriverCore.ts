@@ -4237,13 +4237,31 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       if (target === null) return null;
       const { remoteName, branchName } = target;
       const remoteRefName = `${remoteName}/${branchName}`;
-      // A missing remote branch leaves a stale tracking ref; prune it so nothing resolves it.
       if (!(yield* fetchRemote({ cwd: input.cwd, remoteName, refName: remoteRefName }))) {
-        yield* runGit("GitVcsDriver.fetchWorktreeBaseCommit.prune", input.cwd, [
-          "update-ref",
-          "-d",
-          `refs/remotes/${remoteRefName}`,
-        ]);
+        // A missing remote branch leaves a stale tracking ref; prune it so nothing resolves it.
+        // Aliases such as origin/HEAD name no remote branch, and deleting one would follow it.
+        const trackingRef = `refs/remotes/${remoteRefName}`;
+        const isAlias =
+          (yield* executeGit(
+            "GitVcsDriver.fetchWorktreeBaseCommit.readAlias",
+            input.cwd,
+            ["symbolic-ref", "--quiet", trackingRef],
+            { allowNonZeroExit: true },
+          )).exitCode === 0;
+        if (!isAlias) {
+          yield* runGit("GitVcsDriver.fetchWorktreeBaseCommit.prune", input.cwd, [
+            "update-ref",
+            "--no-deref",
+            "-d",
+            trackingRef,
+          ]).pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("could not prune a deleted remote branch's tracking ref", {
+                cause,
+              }),
+            ),
+          );
+        }
         return null;
       }
       const resolved = yield* executeGit(
