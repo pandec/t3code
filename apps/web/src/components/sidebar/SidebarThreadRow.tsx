@@ -84,6 +84,7 @@ import { useUiStateStore } from "../../uiStateStore";
 import { useThreadSelectionStore } from "../../threadSelectionStore";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { useNowSecond } from "../../hooks/useNowSecond";
+import { useReportedModelIcon } from "../../hooks/useReportedModelIcon";
 import { vcsEnvironment } from "../../state/vcs";
 import { useEnvironmentQuery } from "../../state/query";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
@@ -218,6 +219,14 @@ function SidebarProviderStack(props: {
   const stack = resolveThreadProviderStack(props.thread);
   const currentInstanceId = stack[stack.length - 1]!;
   const currentEntry = props.providerEntryByInstanceId.get(currentInstanceId) ?? null;
+  // Fork: a gateway-served custom model shows its family glyph, as in the composer.
+  const modelIcon = useReportedModelIcon(
+    props.thread.environmentId,
+    currentInstanceId,
+    currentInstanceId === props.thread.modelSelection.instanceId
+      ? props.thread.modelSelection.model
+      : null,
+  );
   if (currentEntry === null) return null;
   const showInstanceBadge = shouldShowInstanceBadge(
     currentEntry,
@@ -227,6 +236,7 @@ function SidebarProviderStack(props: {
     <ProviderInstanceIcon
       driverKind={currentEntry.driverKind}
       displayName={currentEntry.displayName}
+      modelIcon={modelIcon}
       accentColor={currentEntry.accentColor}
       acpRegistryAgentId={currentEntry.acpRegistryAgentId}
       acpRegistryIconUrl={currentEntry.acpRegistryIconUrl}

@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 
+import { reportedModelIcon } from "@t3tools/client-runtime/customModelIcons";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
   normalizeProviderAccentColor,
@@ -14,6 +15,8 @@ export interface ThreadRowProviderInstance {
   readonly displayName: string;
   readonly accentColor?: string | undefined;
   readonly showBadge: boolean;
+  /** Fork: the thread's custom model icon, so gateway-served models show their family glyph. */
+  readonly modelIcon?: string | undefined;
 }
 
 /** Scope by environment; default instance ids name different accounts on different servers. */
@@ -30,12 +33,17 @@ export function resolveThreadProviderInstance(
     displayName: resolveProviderInstanceDisplayName(snapshot),
     accentColor: normalizeProviderAccentColor(snapshot.accentColor),
   };
+  const modelIcon =
+    snapshot.customModelIcons && instanceId === thread.modelSelection.instanceId
+      ? reportedModelIcon(snapshot.customModelIcons, thread.modelSelection.model)
+      : undefined;
   return {
     ...entry,
     showBadge: shouldShowInstanceBadge(
       { ...entry, enabled: snapshot.enabled },
       providers.map((provider) => ({ driverKind: provider.driver, enabled: provider.enabled })),
     ),
+    ...(modelIcon ? { modelIcon } : {}),
   };
 }
 
@@ -46,7 +54,7 @@ export function createThreadRowProviderInstanceResolver(
   const cache = new Map<string, ThreadRowProviderInstance | null>();
   return (thread) => {
     const instanceId = thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
-    const cacheKey = `${thread.environmentId}|${instanceId ?? ""}`;
+    const cacheKey = `${thread.environmentId}|${instanceId ?? ""}|${thread.modelSelection.instanceId}|${thread.modelSelection.model}`;
     const cached = cache.get(cacheKey);
     if (cached !== undefined) return cached;
     const resolved = resolveThreadProviderInstance(

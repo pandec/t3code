@@ -116,6 +116,40 @@ describe("resolveThreadProviderInstance", () => {
 });
 
 describe("createThreadRowProviderInstanceResolver", () => {
+  it("shows a custom model's icon only for threads on that model", () => {
+    const environmentId = EnvironmentId.make("environment-a");
+    const config = {
+      ...makeConfig([{ instanceId: "claudeAgent_proxy", driver: "claudeAgent" }]),
+      settings: {
+        providerInstances: {
+          claudeAgent_proxy: {
+            driver: "claudeAgent",
+            config: { customModelIcons: { "gpt-6-astra": "codex" } },
+          },
+        },
+      },
+    } as unknown as ServerConfig;
+    const environments = createThreadListEnvironmentsAtom(
+      Atom.make<ReadonlyMap<EnvironmentId, ServerConfig>>(new Map([[environmentId, config]])),
+    );
+    const registry = AtomRegistry.make();
+    registry.mount(environments);
+    try {
+      const resolve = createThreadRowProviderInstanceResolver(
+        registry.get(environments).providersByEnvironmentId,
+      );
+      const thread = makeThread(environmentId, "claudeAgent_proxy");
+      const astra = {
+        ...thread,
+        modelSelection: { ...thread.modelSelection, model: "gpt-6-astra" },
+      };
+      expect(resolve(astra)?.modelIcon).toBe("codex");
+      expect(resolve(thread)?.modelIcon).toBeUndefined();
+    } finally {
+      registry.dispose();
+    }
+  });
+
   it("updates thread badges through the environment projection when a sibling is disabled and re-enabled", () => {
     const environmentId = EnvironmentId.make("environment-a");
     const personal = makeThread(environmentId, "codex");
