@@ -4,6 +4,7 @@ import { useMemo, useSyncExternalStore } from "react";
 
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../../state/olderSettledShelf";
+import { threadListFoldedAttention } from "../../state/thread-shelf-expansion";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import {
   buildThreadListV2Items,
@@ -73,6 +74,7 @@ export function useThreadListV2(input: {
     // oxlint-disable-next-line react/memo-dependencies -- the version signals an expired grace
     [threads, workingShelfEnabled, inboxVersion],
   );
+  const surfacesAttention = useMemo(() => threadListFoldedAttention.observe(threads), [threads]);
   // Up/down menu availability for every card, computed once per section per
   // rebuild (see computeThreadMoveAvailability): per-thread planner calls made
   // list construction quadratic, and this list rebuilds on every minute tick.
@@ -126,6 +128,7 @@ export function useThreadListV2(input: {
     settledShelfExpanded: input.settledShelfExpanded,
     pinnedShelfExpanded: input.pinnedShelfExpanded,
     selectedThreadKey: input.selectedThreadKey,
+    surfacesAttention,
     isListedSettled: olderSettledShelf.isListed,
     unloadedSettledCount: olderSettledShelf.unloadedCount(
       threads.filter(
@@ -163,6 +166,7 @@ export function useThreadListV2(input: {
     collapsedGroupIds: searchQuery.length > 0 ? NO_COLLAPSED_GROUPS : input.collapsedGroupIds,
     activeShelfExpanded: input.activeShelfExpanded || searchQuery.length > 0,
     selectedThreadKey: input.selectedThreadKey,
+    surfacesAttention,
     pinnedCount: layout.pinnedCount,
     pinnedShelfExpanded: input.pinnedShelfExpanded,
     pinnedShelfHeaderVisible: layout.pinnedShelfHeaderVisible,

@@ -18,6 +18,8 @@ import { appAtomRegistry } from "./atom-registry";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "./preferences";
 import {
   resolveThreadShelfExpanded,
+  threadGroupFold,
+  threadListFoldedAttention,
   threadShelfExpandedPatch,
   toggleCollapsedThreadGroup,
   type ThreadShelfId,
@@ -76,7 +78,8 @@ export function useThreadShelfExpansion(shelf: ThreadShelfId): {
   const expanded = resolveThreadShelfExpanded({ shelf, preferences });
   // A transform reads the optimistic value, so two presses before the next
   // render still toggle twice instead of writing the same value.
-  const toggle = () =>
+  const toggle = () => {
+    threadListFoldedAttention.acknowledge(shelf);
     savePreferences({
       transform: (current) =>
         threadShelfExpandedPatch(
@@ -84,6 +87,7 @@ export function useThreadShelfExpansion(shelf: ThreadShelfId): {
           !resolveThreadShelfExpanded({ shelf, preferences: current }),
         ),
     });
+  };
   return { expanded, loaded: hydrated, toggle };
 }
 
@@ -131,7 +135,9 @@ export function useCollapsedThreadGroups() {
   const { preferences } = useMobilePreferences();
   const save = useAtomSet(updateMobilePreferencesAtom);
   const ids = new Set(preferences.collapsedThreadGroups ?? []);
-  const toggle = (id: string) =>
+  const toggle = (id: string) => {
+    threadListFoldedAttention.acknowledge(threadGroupFold(id));
     save({ transform: (current) => toggleCollapsedThreadGroup(current, id) });
+  };
   return { ids, toggle };
 }

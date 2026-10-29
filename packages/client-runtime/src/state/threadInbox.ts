@@ -251,3 +251,70 @@ export function createInboxReturnTracker() {
     returnedAt: (thread: ThreadKeyInput) => returns.get(keyOf(thread)),
   };
 }
+
+/** Unopened threads' failures still count as unseen, unlike completions. */
+export function hasUnseenFailure(
+  thread: Pick<EnvironmentThreadShell, "latestRun"> & {
+    readonly lastVisitedAt?: string | null | undefined;
+  },
+): boolean {
+  if (thread.latestRun?.status !== "failed") return false;
+  if (!thread.lastVisitedAt) return true;
+  const completedAt = Date.parse(thread.latestRun.completedAt ?? "");
+  const lastVisitedAt = Date.parse(thread.lastVisitedAt);
+  if (Number.isNaN(completedAt) || Number.isNaN(lastVisitedAt)) return true;
+  return completedAt > lastVisitedAt;
+}
+
+type AttentionThreadInput = ThreadKeyInput &
+  Pick<
+    EnvironmentThreadShell,
+    | "hasPendingApprovals"
+    | "hasPendingUserInput"
+    | "pendingSubagentRequest"
+    | "pendingGuestMessageCount"
+    | "latestRun"
+    | "lastVisitedAt"
+  >;
+
+function attentionSignal(thread: AttentionThreadInput): string | null {
+  if (thread.hasPendingApprovals || thread.pendingSubagentRequest === "approval") return "approval";
+  if (thread.hasPendingUserInput || thread.pendingSubagentRequest === "user_input") return "input";
+  if ((thread.pendingGuestMessageCount ?? 0) > 0) return "request";
+  if (hasUnseenFailure(thread)) return `failed:${thread.latestRun?.runId}`;
+  return null;
+}
+
+/**
+ * A folded group hides its threads, except one that started needing the user
+ * (approval, question, guest request, unseen failure) after the fold was last
+ * toggled. Keep one at module scope; `observe` all shells when they change and
+ * `acknowledge` a fold on every toggle. Fold keys are the caller's.
+ */
+export function createFoldedAttentionTracker() {
+  const keyOf = (thread: ThreadKeyInput) => `${thread.environmentId}:${thread.id}`;
+  let sequence = 0;
+  const signals = new Map<string, { signal: string; since: number }>();
+  const acknowledged = new Map<string, number>();
+  const surfaces = (thread: ThreadKeyInput, fold: string) =>
+    (signals.get(keyOf(thread))?.since ?? 0) > (acknowledged.get(fold) ?? 0);
+  return {
+    observe(threads: readonly AttentionThreadInput[]): typeof surfaces {
+      const present = new Set<string>();
+      for (const thread of threads) {
+        const key = keyOf(thread);
+        present.add(key);
+        const signal = attentionSignal(thread);
+        if (signal === null) signals.delete(key);
+        else if (signals.get(key)?.signal !== signal) {
+          signals.set(key, { signal, since: ++sequence });
+        }
+      }
+      for (const key of signals.keys()) if (!present.has(key)) signals.delete(key);
+      return surfaces;
+    },
+    acknowledge(fold: string) {
+      acknowledged.set(fold, ++sequence);
+    },
+  };
+}

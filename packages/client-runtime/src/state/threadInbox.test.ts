@@ -2,6 +2,7 @@ import { EnvironmentId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/con
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  createFoldedAttentionTracker,
   createInboxReturnTracker,
   isThreadWorking,
   sortInboxThreadsByReturn,
@@ -259,5 +260,34 @@ describe("sortWorkingThreadsBySend", () => {
     expect(
       sortWorkingThreadsBySend([launched, sentFirst, sentLast]).map((thread) => thread.id),
     ).toEqual(["sent-last", "sent-first", "launched"]);
+  });
+});
+
+describe("createFoldedAttentionTracker", () => {
+  const failedRun = (runId: string) => ({
+    runId: RunId.make(runId),
+    status: "failed" as const,
+    requestedAt: "2026-06-01T01:00:00.000Z",
+    startedAt: "2026-06-01T01:00:00.000Z",
+    completedAt: "2026-06-01T02:00:00.000Z",
+    assistantMessageId: null,
+  });
+
+  it("surfaces a new request until its fold is toggled, then again for the next one", () => {
+    const tracker = createFoldedAttentionTracker();
+    const running = thread("a", true);
+    const approval = { ...running, hasPendingApprovals: true };
+    expect(tracker.observe([running])(running, "group:g")).toBe(false);
+    expect(tracker.observe([approval])(approval, "group:g")).toBe(true);
+
+    tracker.acknowledge("group:g");
+    expect(tracker.observe([approval])(approval, "group:g")).toBe(false);
+    // Another fold's toggle does not acknowledge it.
+    expect(tracker.observe([approval])(approval, "active")).toBe(true);
+
+    const failed = { ...thread("a", false), latestRun: failedRun("run:1"), lastVisitedAt: null };
+    expect(tracker.observe([failed])(failed, "group:g")).toBe(true);
+    const seen = { ...failed, lastVisitedAt: "2026-06-01T03:00:00.000Z" };
+    expect(tracker.observe([seen])(seen, "group:g")).toBe(false);
   });
 });
