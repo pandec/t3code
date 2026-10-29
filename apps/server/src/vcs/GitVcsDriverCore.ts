@@ -4237,8 +4237,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       if (target === null) return null;
       const { remoteName, branchName } = target;
       const remoteRefName = `${remoteName}/${branchName}`;
-      // A missing remote branch can leave a stale tracking ref; never resolve it.
+      // A missing remote branch leaves a stale tracking ref; prune it so nothing resolves it.
       if (!(yield* fetchRemote({ cwd: input.cwd, remoteName, refName: remoteRefName }))) {
+        yield* runGit("GitVcsDriver.fetchWorktreeBaseCommit.prune", input.cwd, [
+          "update-ref",
+          "-d",
+          `refs/remotes/${remoteRefName}`,
+        ]);
         return null;
       }
       const resolved = yield* executeGit(
