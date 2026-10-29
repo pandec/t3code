@@ -365,8 +365,9 @@ const make = Effect.gen(function* () {
         (yield* git.resolveWorktreeBaseRemote({ cwd, refName: baseRef })) !== null
       )
         return undefined;
-      // git worktree add accepts remote-tracking branches; let Git decide when any matching ref exists.
-      if (yield* git.hasRefNamed({ cwd, refName: baseRef })) return undefined;
+      // createWorktree starts a new branch from the primary remote's branch of that name.
+      if ((yield* git.resolvePrimaryRemoteTrackingRef({ cwd, refName: baseRef })) !== null)
+        return undefined;
       return (yield* git.hasCommit({ cwd, refName: "HEAD" })) ? project : undefined;
     }).pipe(Effect.orElseSucceed(() => undefined));
     if (unresolved !== undefined)

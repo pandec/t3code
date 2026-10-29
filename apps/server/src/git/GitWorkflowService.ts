@@ -43,10 +43,6 @@ export class GitWorkflowService extends Context.Service<
       readonly cwd: string;
       readonly refName: string;
     }) => Effect.Effect<boolean, GitCommandError>;
-    readonly hasRefNamed: (input: {
-      readonly cwd: string;
-      readonly refName: string;
-    }) => Effect.Effect<boolean, GitCommandError>;
     readonly status: (
       input: VcsStatusInput,
     ) => Effect.Effect<VcsStatusResult, GitManagerServiceError>;
@@ -101,6 +97,7 @@ export class GitWorkflowService extends Context.Service<
       { readonly commitSha: string; readonly remoteRefName: string },
       GitCommandError
     >;
+    readonly resolvePrimaryRemoteTrackingRef: GitVcsDriver.GitVcsDriver["Service"]["resolvePrimaryRemoteTrackingRef"];
     readonly resolveWorktreeBaseRemote: GitVcsDriver.GitVcsDriver["Service"]["resolveWorktreeBaseRemote"];
     readonly fetchWorktreeBaseCommit: (input: {
       readonly cwd: string;
@@ -299,26 +296,6 @@ export const make = Effect.gen(function* () {
         Effect.map((result) => result.exitCode === 0),
       );
     }),
-    hasRefNamed: Effect.fn("GitWorkflowService.hasRefNamed")(function (input) {
-      // Pattern characters would widen the ref match.
-      return /[*?[\\]/.test(input.refName)
-        ? Effect.succeed(false)
-        : ensureGitCommand("GitWorkflowService.hasRefNamed", input.cwd).pipe(
-            Effect.andThen(
-              git.execute({
-                operation: "GitWorkflowService.hasRefNamed",
-                cwd: input.cwd,
-                args: [
-                  "for-each-ref",
-                  "--count=1",
-                  "--format=%(refname)",
-                  `refs/**/${input.refName}`,
-                ],
-              }),
-            ),
-            Effect.map((result) => result.stdout.trim().length > 0),
-          );
-    }),
     status: Effect.fn("GitWorkflowService.status")(function (input) {
       return detectGitRepositoryForStatus("GitWorkflowService.status", input.cwd).pipe(
         Effect.flatMap((isGitRepository) =>
@@ -419,6 +396,13 @@ export const make = Effect.gen(function* () {
         );
       },
     ),
+    resolvePrimaryRemoteTrackingRef: Effect.fn(
+      "GitWorkflowService.resolvePrimaryRemoteTrackingRef",
+    )(function (input) {
+      return ensureGitCommand("GitWorkflowService.resolvePrimaryRemoteTrackingRef", input.cwd).pipe(
+        Effect.andThen(git.resolvePrimaryRemoteTrackingRef(input)),
+      );
+    }),
     resolveWorktreeBaseRemote: Effect.fn("GitWorkflowService.resolveWorktreeBaseRemote")(
       function (input) {
         return ensureGitCommand("GitWorkflowService.resolveWorktreeBaseRemote", input.cwd).pipe(

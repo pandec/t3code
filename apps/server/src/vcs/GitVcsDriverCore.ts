@@ -3459,6 +3459,17 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     return base ?? (yield* readConfigValue(cwd, legacyBranchBaseConfigKey(branch)));
   });
 
+  const resolvePrimaryRemoteTrackingRef: GitVcsDriver.GitVcsDriver["Service"]["resolvePrimaryRemoteTrackingRef"] =
+    Effect.fn("GitVcsDriver.resolvePrimaryRemoteTrackingRef")(function* (input) {
+      const remoteName = yield* resolvePrimaryRemoteName(input.cwd).pipe(
+        Effect.orElseSucceed(() => null),
+      );
+      return remoteName &&
+        (yield* remoteBranchExists({ cwd: input.cwd, remoteName, refName: input.refName }))
+        ? `refs/remotes/${remoteName}/${input.refName}`
+        : null;
+    });
+
   const resolveBranchBase = Effect.fn("GitVcsDriver.resolveBranchBase")(function* (
     cwd: string,
     refName: string,
@@ -3470,12 +3481,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       { allowNonZeroExit: true },
     );
     if (result.exitCode !== 0) {
-      const remoteName = yield* resolvePrimaryRemoteName(cwd).pipe(
-        Effect.orElseSucceed(() => null),
-      );
-      return remoteName && (yield* remoteBranchExists({ cwd, remoteName, refName }))
-        ? { baseRef: `refs/remotes/${remoteName}/${refName}`, branchName: refName }
-        : null;
+      const baseRef = yield* resolvePrimaryRemoteTrackingRef({ cwd, refName });
+      return baseRef ? { baseRef, branchName: refName } : null;
     }
     const ref = result.stdout.trim();
     if (ref.startsWith("refs/heads/")) {
@@ -3828,10 +3835,22 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       worktreePath = path.join(parentDir, repoName, sanitizedBranch);
     }
     if (input.newRefName) {
+      const isCommit =
+        (yield* executeGit(
+          "GitVcsDriver.createWorktree.resolveStartPoint",
+          input.cwd,
+          ["rev-parse", "--verify", "--quiet", `${input.refName}^{commit}`],
+          { allowNonZeroExit: true },
+        )).exitCode === 0;
+      // Unlike `git worktree add` without -b, `git branch` never reads a bare name as a remote branch.
+      const startPoint = isCommit
+        ? input.refName
+        : ((yield* resolvePrimaryRemoteTrackingRef({ cwd: input.cwd, refName: input.refName })) ??
+          input.refName);
       // Kept apart from the checkout so the shared-config lock only covers the tracking write.
       yield* createBranchAt(
         "GitVcsDriver.createWorktree.createBranch",
-        { cwd: input.cwd, branch: input.newRefName, startPoint: input.refName },
+        { cwd: input.cwd, branch: input.newRefName, startPoint },
         "git worktree add failed",
       );
     }
@@ -4654,6 +4673,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     remoteExists,
     remoteBranchExists,
     resolveRemoteTrackingCommit,
+    resolvePrimaryRemoteTrackingRef,
     resolveWorktreeBaseRemote,
     fetchWorktreeBaseCommit: Effect.fnUntraced(function* (input) {
       return yield* withListRefsInvalidation(input.cwd, fetchWorktreeBaseCommit(input));
