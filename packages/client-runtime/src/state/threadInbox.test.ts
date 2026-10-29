@@ -2,6 +2,7 @@ import { EnvironmentId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/con
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  createFoldedAttentionTracker,
   createInboxReturnTracker,
   isThreadWorking,
   sortInboxThreadsByReturn,
@@ -259,5 +260,53 @@ describe("sortWorkingThreadsBySend", () => {
     expect(
       sortWorkingThreadsBySend([launched, sentFirst, sentLast]).map((thread) => thread.id),
     ).toEqual(["sent-last", "sent-first", "launched"]);
+  });
+});
+
+describe("createFoldedAttentionTracker", () => {
+  const failedRun = (runId: string) => ({
+    runId: RunId.make(runId),
+    status: "failed" as const,
+    requestedAt: "2026-06-01T01:00:00.000Z",
+    startedAt: "2026-06-01T01:00:00.000Z",
+    completedAt: "2026-06-01T02:00:00.000Z",
+    assistantMessageId: null,
+  });
+
+  it("surfaces a new request until its fold is toggled, then again for the next one", () => {
+    const tracker = createFoldedAttentionTracker();
+    const running = thread("a", true);
+    const approval = { ...running, hasPendingApprovals: true };
+    expect(tracker.observe([running])(running, "group:g")).toBe(false);
+    expect(tracker.observe([approval])(approval, "group:g")).toBe(true);
+
+    tracker.acknowledge("group:g");
+    expect(tracker.observe([approval])(approval, "group:g")).toBe(false);
+    // Another fold's toggle does not acknowledge it.
+    expect(tracker.observe([approval])(approval, "active")).toBe(true);
+
+    const failed = { ...thread("a", false), latestRun: failedRun("run:1"), lastVisitedAt: null };
+    expect(tracker.observe([failed])(failed, "group:g")).toBe(true);
+    const seen = { ...failed, lastVisitedAt: "2026-06-01T03:00:00.000Z" };
+    expect(tracker.observe([seen])(seen, "group:g")).toBe(false);
+  });
+
+  it("re-raises only new requests, and keeps acknowledgements across absence", () => {
+    const tracker = createFoldedAttentionTracker();
+    const both = { ...thread("a", false), hasPendingApprovals: true, hasPendingUserInput: true };
+    tracker.observe([both]);
+    tracker.acknowledge("active");
+    // Answering the approval leaves the acknowledged question hidden.
+    const input = { ...both, hasPendingApprovals: false };
+    expect(tracker.observe([input])(input, "active")).toBe(false);
+    // Dropped from the list and restored unchanged: still acknowledged.
+    tracker.observe([]);
+    expect(tracker.observe([input])(input, "active")).toBe(false);
+    // A second guest message is a new request.
+    const guest = { ...input, pendingGuestMessageCount: 1 };
+    expect(tracker.observe([guest])(guest, "active")).toBe(true);
+    tracker.acknowledge("active");
+    const guests = { ...guest, pendingGuestMessageCount: 2 };
+    expect(tracker.observe([guests])(guests, "active")).toBe(true);
   });
 });

@@ -38,6 +38,7 @@ import {
   UNTIL_DONE_SNOOZE_LABEL,
 } from "@t3tools/client-runtime/state/thread-settled";
 import {
+  createFoldedAttentionTracker,
   createInboxReturnTracker,
   isThreadWorking,
 } from "@t3tools/client-runtime/state/thread-inbox";
@@ -381,6 +382,9 @@ const ARCHIVED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:archived-expanded";
 const ACTIVE_WORK_FILTER_KEY = "t3code:sidebar-v2:active-work-filter";
 
 const inboxReturns = createInboxReturnTracker();
+const foldedAttention = createFoldedAttentionTracker();
+const customGroupFold = (id: string | null) => (id === null ? "active" : `group:${id}`);
+const projectFolderFold = (group: SidebarProjectSnapshot) => `folder:${group.projectKey}`;
 
 type SidebarOptimisticDrop = {
   readonly key: string;
@@ -1067,14 +1071,19 @@ function useSidebarThreads(input: {
     return visible.length === settledThreads.length ? settledThreads : visible;
   })();
   const hiddenSettledCount = Math.max(0, settledCount - visibleSettledThreads.length);
+  // A folded group keeps the open thread's row. Fork: it also keeps threads
+  // that started needing the user since the fold was last toggled.
+  const surfacesAttention = foldedAttention.observe(threads);
+  const foldedRows = (list: readonly EnvironmentThreadShell[], fold: string) =>
+    list.filter(
+      (thread) => threadShellKey(thread) === routeRowThreadKey || surfacesAttention(thread, fold),
+    );
   const renderedSettledThreads = settledShelfExpanded
     ? visibleSettledThreads
     : routeThreadOnly(visibleSettledThreads, routeRowThreadKey);
-  // Same exception every other shelf makes: the open thread keeps its row,
-  // so a folded pinned block never hides the thread being read.
   const visiblePinnedThreads = pinnedShelfExpanded
     ? pinnedThreads
-    : routeThreadOnly(pinnedThreads, routeRowThreadKey);
+    : foldedRows(pinnedThreads, "pinned");
   const visibleSnoozedThreads = snoozedShelfExpanded
     ? snoozedThreads
     : routeThreadOnly(snoozedThreads, routeRowThreadKey);
@@ -1083,7 +1092,7 @@ function useSidebarThreads(input: {
     : routeThreadOnly(workingThreads, routeRowThreadKey);
   // Fork: Active split into custom group sections (Active itself is null),
   // in catalog placement order; without groups, Active is the only section.
-  // A folded section keeps the open thread's row, and search shows every match.
+  // A folded section keeps its foldedRows, and search shows every match.
   const activeGroupSections = (() => {
     const sections = new Map<string | null, EnvironmentThreadShell[]>([
       [null, []],
@@ -1093,18 +1102,16 @@ function useSidebarThreads(input: {
     // The Active filter leaves out groups it emptied.
     return threadGroupSections(groups)
       .filter((group) => !activeWorkFilter || group === null || sections.get(group.id)!.length > 0)
-      .map((group) => ({
-        id: group?.id ?? null,
-        threads: sections
-          .get(group?.id ?? null)!
-          .filter(
-            (thread) =>
-              (group === null ? activeShelfExpanded : !collapsedGroups.has(group.id)) ||
-              isSearchingThreads ||
-              scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) ===
-                routeRowThreadKey,
-          ),
-      }));
+      .map((group) => {
+        const id = group?.id ?? null;
+        const expanded = id === null ? activeShelfExpanded : !collapsedGroups.has(id);
+        const threads = sections.get(id)!;
+        return {
+          id,
+          threads:
+            expanded || isSearchingThreads ? threads : foldedRows(threads, customGroupFold(id)),
+        };
+      });
   })();
   // Fork: boring mode's folders replace Active and the custom group sections.
   const projectFolders =
@@ -1115,15 +1122,16 @@ function useSidebarThreads(input: {
             projectExpandedById,
             sidebarFolderExpansionKeys(folder.group),
           );
+          // A closed folder still shows its foldedRows, and hints at the rest.
+          const shown = collapsed
+            ? foldedRows(folder.threads, projectFolderFold(folder.group))
+            : folder.threads;
           return {
             group: folder.group,
             collapsed,
-            // A closed folder still shows the open thread, and hints at the rest.
-            threads: collapsed
-              ? routeThreadOnly(folder.threads, routeRowThreadKey)
-              : folder.threads,
+            threads: shown,
             hiddenThreads: collapsed
-              ? folder.threads.filter((thread) => threadShellKey(thread) !== routeRowThreadKey)
+              ? folder.threads.filter((thread) => !shown.includes(thread))
               : EMPTY_THREADS,
           };
         });
@@ -1229,12 +1237,14 @@ function useSidebarThreads(input: {
       ...settledThreads,
     ],
     collapsedGroups,
-    toggleCustomGroup: (id: string) =>
-      activeWorkFilter
+    toggleCustomGroup: (id: string) => {
+      foldedAttention.acknowledge(customGroupFold(id));
+      return activeWorkFilter
         ? activeWorkFolds.toggleGroup(id)
         : setCollapsedGroupIds((current) =>
             current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id],
-          ),
+          );
+    },
     expandCustomGroup: (id: string) =>
       activeWorkFilter
         ? activeWorkFolds.expandGroup(id)
@@ -1255,14 +1265,21 @@ function useSidebarThreads(input: {
     toggleSnoozedShelf: () =>
       toggleShelf("snoozed", () => setSnoozedShelfExpanded((value) => !value)),
     pinnedShelfExpanded,
-    togglePinnedShelf: () => toggleShelf("pinned", () => setPinnedShelfExpanded((value) => !value)),
+    togglePinnedShelf: () => {
+      foldedAttention.acknowledge("pinned");
+      toggleShelf("pinned", () => setPinnedShelfExpanded((value) => !value));
+    },
     workingShelfExpanded,
     toggleWorkingShelf: () =>
       toggleShelf("working", () => setWorkingShelfExpanded((value) => !value)),
     activeShelfExpanded,
-    toggleActiveShelf: () => toggleShelf("active", () => setActiveShelfExpanded((value) => !value)),
+    toggleActiveShelf: () => {
+      foldedAttention.acknowledge(customGroupFold(null));
+      toggleShelf("active", () => setActiveShelfExpanded((value) => !value));
+    },
     projectFolders,
     toggleProjectFolder: (group: SidebarProjectSnapshot) => {
+      foldedAttention.acknowledge(projectFolderFold(group));
       const keys = sidebarFolderExpansionKeys(group);
       setProjectExpanded(keys, !resolveProjectExpanded(projectExpandedById, keys));
     },

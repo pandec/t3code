@@ -35,6 +35,7 @@ import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import type { SnoozePresetSetting } from "@t3tools/contracts/settings";
 
 import type { ThreadListProvider } from "../../state/thread-list-environments";
+import { threadGroupFold } from "../../state/thread-shelf-expansion";
 import type { ThreadMoveAvailability } from "./threadOrder";
 
 import { relativeTime } from "../../lib/time";
@@ -577,6 +578,8 @@ export function buildThreadListV2ListItems(input: {
   readonly activeShelfExpanded?: boolean;
   /** `environmentId:threadId` of the open thread, which a folded group keeps. */
   readonly selectedThreadKey?: string | null;
+  /** Fork: whether a folded group also keeps this thread (see `threadListFoldedAttention`). */
+  readonly surfacesAttention?: (thread: EnvironmentThreadShell, fold: string) => boolean;
   readonly pinnedCount?: number;
   readonly pinnedShelfExpanded?: boolean;
   /** False hides the pinned shelf header (search active) while its rows
@@ -709,7 +712,16 @@ export function buildThreadListV2ListItems(input: {
       count: rows.length,
       expanded,
     });
-    result.push(...(expanded ? rows : rows.filter(isSelected)));
+    result.push(
+      ...(expanded
+        ? rows
+        : rows.filter(
+            (row) =>
+              isSelected(row) ||
+              (row.type === "v2-thread" &&
+                input.surfacesAttention?.(row.item.thread, threadGroupFold(id)) === true),
+          )),
+    );
   }
   const shelfDisabled = input.shelfPreferencesLoading === true;
   if (workingShelfHeaderIndex !== null && workingCount > 0) {
@@ -802,6 +814,7 @@ export function buildThreadListV2Items(input: {
   /** Expands the pinned block into rows. Expanded is the default. */
   readonly pinnedShelfExpanded?: boolean;
   readonly selectedThreadKey?: string | null;
+  readonly surfacesAttention?: (thread: EnvironmentThreadShell, fold: string) => boolean;
   readonly queuedThreadKeys?: ReadonlySet<string>;
   /** Whether the shelf may list a settled row yet; older settled rows load in pages. */
   readonly isListedSettled?: (thread: EnvironmentThreadShell) => boolean;
@@ -990,7 +1003,9 @@ export function buildThreadListV2Items(input: {
     !pinnedShelfCollapsible || input.pinnedShelfExpanded !== false
       ? orderedPinned
       : orderedPinned.filter(
-          (thread) => `${thread.environmentId}:${thread.id}` === selectedThreadKey,
+          (thread) =>
+            `${thread.environmentId}:${thread.id}` === selectedThreadKey ||
+            input.surfacesAttention?.(thread, "pinned") === true,
         );
 
   const items: ThreadListV2Item[] = [];

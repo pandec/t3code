@@ -50,6 +50,7 @@ import { useThreadSearch } from "../../state/queries";
 import { requestThreadMessageJump } from "../threads/threadMessageJump";
 import { useThreadListSearchMatches } from "../threads/useThreadListSearchMatches";
 import { useThreadListV2 } from "../threads/useThreadListV2";
+import { useHomeRouteVisible } from "./home-route-visibility";
 import { useThreadListNow } from "../threads/use-thread-list-now";
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
 import {
@@ -522,6 +523,8 @@ export function HomeScreen(props: HomeScreenProps) {
     collapsedGroupIds: collapsedThreadGroups.ids,
     activeShelfExpanded,
     selectedThreadKey,
+    // Hidden Home holds a frozen snapshot of the shells.
+    observesAttention: useHomeRouteVisible(),
   });
   // Called as `props.onSelectThread(...)`, the compiler would cache this handler on the whole
   // props object, which is new on every render of Home's parent.

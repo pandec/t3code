@@ -1,3 +1,5 @@
+import { createFoldedAttentionTracker } from "@t3tools/client-runtime/state/thread-inbox";
+
 import type { Preferences } from "../persistence/mobile-preferences";
 
 /**
@@ -36,6 +38,14 @@ export function resolveThreadShelfExpanded(input: {
     default:
       return false;
   }
+}
+
+/** Fork: folds reveal threads that started needing the user since their last toggle. */
+export const threadListFoldedAttention = createFoldedAttentionTracker();
+
+/** The fold key of a custom group, or of Active for null, matching `ThreadShelfId`. */
+export function threadGroupFold(groupId: string | null): string {
+  return groupId === null ? "active" : `group:${groupId}`;
 }
 
 /** The preference patch a shelf toggle writes. */
