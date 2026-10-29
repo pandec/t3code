@@ -290,4 +290,23 @@ describe("createFoldedAttentionTracker", () => {
     const seen = { ...failed, lastVisitedAt: "2026-06-01T03:00:00.000Z" };
     expect(tracker.observe([seen])(seen, "group:g")).toBe(false);
   });
+
+  it("re-raises only new requests, and keeps acknowledgements across absence", () => {
+    const tracker = createFoldedAttentionTracker();
+    const both = { ...thread("a", false), hasPendingApprovals: true, hasPendingUserInput: true };
+    tracker.observe([both]);
+    tracker.acknowledge("active");
+    // Answering the approval leaves the acknowledged question hidden.
+    const input = { ...both, hasPendingApprovals: false };
+    expect(tracker.observe([input])(input, "active")).toBe(false);
+    // Dropped from the list and restored unchanged: still acknowledged.
+    tracker.observe([]);
+    expect(tracker.observe([input])(input, "active")).toBe(false);
+    // A second guest message is a new request.
+    const guest = { ...input, pendingGuestMessageCount: 1 };
+    expect(tracker.observe([guest])(guest, "active")).toBe(true);
+    tracker.acknowledge("active");
+    const guests = { ...guest, pendingGuestMessageCount: 2 };
+    expect(tracker.observe([guests])(guests, "active")).toBe(true);
+  });
 });

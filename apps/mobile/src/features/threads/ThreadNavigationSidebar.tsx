@@ -406,6 +406,7 @@ function ThreadNavigationSidebarPane(
     collapsedGroupIds: collapsedThreadGroups.ids,
     activeShelfExpanded,
     selectedThreadKey: props.selectedThreadKey ?? null,
+    observesAttention: true,
   });
   const listItems: readonly SidebarListItem[] =
     settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0

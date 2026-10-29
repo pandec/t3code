@@ -62,6 +62,8 @@ export function useThreadListV2(input: {
   readonly collapsedGroupIds: ReadonlySet<string>;
   readonly activeShelfExpanded: boolean;
   readonly selectedThreadKey: string | null;
+  /** False while the threads are a held snapshot, which must not overwrite live attention. */
+  readonly observesAttention: boolean;
 }) {
   const { threads, workingShelfEnabled } = input;
   // A thread can stop working when the threads change, or when its exit grace expires.
@@ -74,7 +76,13 @@ export function useThreadListV2(input: {
     // oxlint-disable-next-line react/memo-dependencies -- the version signals an expired grace
     [threads, workingShelfEnabled, inboxVersion],
   );
-  const surfacesAttention = useMemo(() => threadListFoldedAttention.observe(threads), [threads]);
+  const surfacesAttention = useMemo(
+    () =>
+      input.observesAttention
+        ? threadListFoldedAttention.observe(threads)
+        : threadListFoldedAttention.surfaces,
+    [threads, input.observesAttention],
+  );
   // Up/down menu availability for every card, computed once per section per
   // rebuild (see computeThreadMoveAvailability): per-thread planner calls made
   // list construction quadratic, and this list rebuilds on every minute tick.

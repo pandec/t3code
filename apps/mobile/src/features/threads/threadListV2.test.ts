@@ -2014,6 +2014,19 @@ describe("custom thread groups", () => {
     const header = items[0];
     expect(header?.type === "v2-custom-group" && header.count).toBe(2);
     expect(header?.type === "v2-custom-group" && header.expanded).toBe(false);
+    // Fork: a thread that started needing the user since the fold's last toggle stays too.
+    const surfaced = buildThreadListV2ListItems({
+      items: layout.items,
+      pendingTasks: [],
+      customGroups: groups,
+      collapsedGroupIds: new Set(["research"]),
+      surfacesAttention: (thread, fold) => thread.id === "r1" && fold === "group:research",
+    });
+    expect(keysOf(surfaced).slice(0, 3)).toEqual([
+      "v2-custom-group:research",
+      "r1",
+      "v2-active-header",
+    ]);
   });
 
   it("folds the built-in Active group without custom groups, keeping the open thread", () => {

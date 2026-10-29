@@ -277,42 +277,67 @@ type AttentionThreadInput = ThreadKeyInput &
     | "lastVisitedAt"
   >;
 
-function attentionSignal(thread: AttentionThreadInput): string | null {
-  if (thread.hasPendingApprovals || thread.pendingSubagentRequest === "approval") return "approval";
-  if (thread.hasPendingUserInput || thread.pendingSubagentRequest === "user_input") return "input";
-  if ((thread.pendingGuestMessageCount ?? 0) > 0) return "request";
-  if (hasUnseenFailure(thread)) return `failed:${thread.latestRun?.runId}`;
-  return null;
+interface Attention {
+  readonly approval: boolean;
+  readonly input: boolean;
+  readonly guests: number;
+  readonly failedRunId: string | null;
+}
+
+function attentionOf(thread: AttentionThreadInput): Attention | null {
+  const attention: Attention = {
+    approval: thread.hasPendingApprovals || thread.pendingSubagentRequest === "approval",
+    input: thread.hasPendingUserInput || thread.pendingSubagentRequest === "user_input",
+    guests: thread.pendingGuestMessageCount ?? 0,
+    failedRunId: hasUnseenFailure(thread) ? (thread.latestRun?.runId ?? null) : null,
+  };
+  return attention.approval || attention.input || attention.guests > 0 || attention.failedRunId
+    ? attention
+    : null;
+}
+
+/** Whether `next` asks for something `previous` did not, so answering one request never re-raises the rest. */
+function asksAnew(previous: Attention | undefined, next: Attention): boolean {
+  return (
+    previous === undefined ||
+    (next.approval && !previous.approval) ||
+    (next.input && !previous.input) ||
+    next.guests > previous.guests ||
+    (next.failedRunId !== null && next.failedRunId !== previous.failedRunId)
+  );
 }
 
 /**
  * A folded group hides its threads, except one that started needing the user
  * (approval, question, guest request, unseen failure) after the fold was last
- * toggled. Keep one at module scope; `observe` all shells when they change and
+ * toggled. Keep one at module scope; `observe` live shells when they change and
  * `acknowledge` a fold on every toggle. Fold keys are the caller's.
  */
 export function createFoldedAttentionTracker() {
   const keyOf = (thread: ThreadKeyInput) => `${thread.environmentId}:${thread.id}`;
   let sequence = 0;
-  const signals = new Map<string, { signal: string; since: number }>();
+  // Threads missing from an observation keep their entry, so a list that drops
+  // and restores them (an environment toggled off and on) re-raises nothing.
+  const states = new Map<string, { attention: Attention; since: number }>();
   const acknowledged = new Map<string, number>();
   const surfaces = (thread: ThreadKeyInput, fold: string) =>
-    (signals.get(keyOf(thread))?.since ?? 0) > (acknowledged.get(fold) ?? 0);
+    (states.get(keyOf(thread))?.since ?? 0) > (acknowledged.get(fold) ?? 0);
   return {
     observe(threads: readonly AttentionThreadInput[]): typeof surfaces {
-      const present = new Set<string>();
       for (const thread of threads) {
         const key = keyOf(thread);
-        present.add(key);
-        const signal = attentionSignal(thread);
-        if (signal === null) signals.delete(key);
-        else if (signals.get(key)?.signal !== signal) {
-          signals.set(key, { signal, since: ++sequence });
+        const attention = attentionOf(thread);
+        const previous = states.get(key);
+        if (attention === null) states.delete(key);
+        else {
+          const since = asksAnew(previous?.attention, attention) ? ++sequence : previous!.since;
+          states.set(key, { attention, since });
         }
       }
-      for (const key of signals.keys()) if (!present.has(key)) signals.delete(key);
       return surfaces;
     },
+    /** Reads without observing, for a list showing a held snapshot. */
+    surfaces,
     acknowledge(fold: string) {
       acknowledged.set(fold, ++sequence);
     },
