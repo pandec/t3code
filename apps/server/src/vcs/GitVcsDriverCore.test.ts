@@ -4446,6 +4446,12 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           yield* git(cwd, ["rev-parse", "refs/remotes/origin/release"]),
           yield* git(cwd, ["rev-parse", "HEAD"]),
         );
+        // A prune that cannot delete the stale ref fails rather than leave it to be resolved.
+        yield* writeTextFile(cwd, ".git/refs/remotes/origin/release.lock", "");
+        yield* driver.fetchWorktreeBaseCommit({ cwd, refName: initialBranch }).pipe(Effect.flip);
+        yield* (yield* FileSystem.FileSystem).remove(
+          `${cwd}/.git/refs/remotes/origin/release.lock`,
+        );
         assert.isNull(yield* driver.fetchWorktreeBaseCommit({ cwd, refName: initialBranch }));
         assert.isNull(yield* driver.resolvePrimaryRemoteTrackingRef({ cwd, refName: "release" }));
         yield* git(cwd, ["push", "origin", initialBranch]);

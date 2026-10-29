@@ -4254,13 +4254,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             "--no-deref",
             "-d",
             trackingRef,
-          ]).pipe(
-            Effect.catch((cause) =>
-              Effect.logWarning("could not prune a deleted remote branch's tracking ref", {
-                cause,
-              }),
-            ),
-          );
+          ]);
         }
         return null;
       }
