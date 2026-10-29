@@ -1127,7 +1127,7 @@ it.effect.each(["stable", "upstream/release"])(
           ),
         git: {
           resolveWorktreeBaseRemote: (input) => git.resolveWorktreeBaseRemote({ ...input, cwd }),
-          hasRefNamed: () => Effect.succeed(false),
+          resolvePrimaryRemoteTrackingRef: () => Effect.succeed(null),
         },
         fetchWorktreeBaseCommit: (input) => git.fetchWorktreeBaseCommit({ ...input, cwd }),
         createWorktree: (input, options) =>
@@ -2424,7 +2424,7 @@ it.effect.each([
       git: {
         resolveWorktreeBaseRemote: () =>
           Effect.succeed(testCase.origin ? { remoteName: "origin", branchName: "main" } : null),
-        hasRefNamed: () => Effect.succeed(false),
+        resolvePrimaryRemoteTrackingRef: () => Effect.succeed(null),
       },
     });
     yield* Effect.gen(function* () {

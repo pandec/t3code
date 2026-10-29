@@ -3173,6 +3173,44 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         }),
     );
 
+    it.effect("starts a new worktree branch from a branch that exists only on the remote", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const remote = yield* makeTmpDir("git-remote-");
+        yield* git(remote, ["init", "--bare"]);
+        yield* git(cwd, ["remote", "add", "origin", remote]);
+        yield* git(cwd, ["push", "origin", "HEAD:refs/heads/remote-only"]);
+        yield* git(cwd, ["fetch", "origin"]);
+        yield* git(cwd, ["commit", "--allow-empty", "-m", "local only"]);
+        const path = yield* Path.Path;
+        const worktreePath = path.join(yield* makeTmpDir("git-worktrees-"), "from-remote");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        assert.isNull(yield* driver.resolvePrimaryRemoteTrackingRef({ cwd, refName: "missing" }));
+
+        yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: "remote-only",
+          newRefName: "feature/from-remote",
+          baseRefName: "remote-only",
+        });
+
+        assert.equal(
+          yield* git(worktreePath, ["rev-parse", "HEAD"]),
+          yield* git(cwd, ["rev-parse", "refs/remotes/origin/remote-only"]),
+        );
+        assert.equal(
+          yield* git(cwd, ["config", "branch.feature/from-remote.merge"]),
+          "refs/heads/remote-only",
+        );
+        assert.equal(
+          yield* git(cwd, ["config", "branch.feature/from-remote.t3-merge-base-ref"]),
+          "refs/remotes/origin/remote-only",
+        );
+      }),
+    );
+
     it.effect("creates parallel worktrees in one repository without racing on its config", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
@@ -4408,7 +4446,25 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           yield* git(cwd, ["rev-parse", "refs/remotes/origin/release"]),
           yield* git(cwd, ["rev-parse", "HEAD"]),
         );
+        // A prune that cannot delete the stale ref fails rather than leave it to be resolved.
+        yield* writeTextFile(cwd, ".git/refs/remotes/origin/release.lock", "");
+        yield* driver.fetchWorktreeBaseCommit({ cwd, refName: initialBranch }).pipe(Effect.flip);
+        yield* (yield* FileSystem.FileSystem).remove(
+          `${cwd}/.git/refs/remotes/origin/release.lock`,
+        );
         assert.isNull(yield* driver.fetchWorktreeBaseCommit({ cwd, refName: initialBranch }));
+        assert.isNull(yield* driver.resolvePrimaryRemoteTrackingRef({ cwd, refName: "release" }));
+        yield* git(cwd, ["push", "origin", initialBranch]);
+        yield* git(cwd, [
+          "symbolic-ref",
+          "refs/remotes/origin/HEAD",
+          `refs/remotes/origin/${initialBranch}`,
+        ]);
+        assert.isNull(yield* driver.fetchWorktreeBaseCommit({ cwd, refName: "origin/HEAD" }));
+        assert.equal(
+          yield* git(cwd, ["rev-parse", "refs/remotes/origin/HEAD"]),
+          yield* git(cwd, ["rev-parse", "HEAD"]),
+        );
         yield* git(cwd, ["remote", "remove", "origin"]);
         assert.isNull(yield* driver.fetchWorktreeBaseCommit({ cwd, refName: initialBranch }));
       }),

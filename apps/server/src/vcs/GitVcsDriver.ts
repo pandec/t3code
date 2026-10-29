@@ -385,6 +385,11 @@ export class GitVcsDriver extends Context.Service<
     readonly resolveRemoteTrackingCommit: (
       input: GitResolveRemoteTrackingCommitInput,
     ) => Effect.Effect<GitResolveRemoteTrackingCommitResult, GitCommandError>;
+    /** The primary remote's tracking ref for a branch name, when that ref exists locally. */
+    readonly resolvePrimaryRemoteTrackingRef: (input: {
+      readonly cwd: string;
+      readonly refName: string;
+    }) => Effect.Effect<string | null, GitCommandError>;
     readonly resolveWorktreeBaseRemote: (
       input: GitFetchWorktreeBaseCommitInput,
     ) => Effect.Effect<{ remoteName: string; branchName: string } | null, GitCommandError>;
