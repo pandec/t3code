@@ -6,11 +6,15 @@ import {
   type ServerProvider,
 } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
+import { readCustomModelIcons } from "@t3tools/client-runtime/customModelIcons";
 
 export type ThreadListProvider = Pick<
   ServerProvider,
   "instanceId" | "driver" | "enabled" | "displayName" | "accentColor" | "iconUrl"
->;
+> & {
+  /** Fork: the instance's custom-model icon overrides (slug → model icon id). */
+  readonly customModelIcons?: Readonly<Record<string, string>>;
+};
 
 const capabilityKeys = ["threadSnoozeUntilDone", "threadAutoSettleOptOut"] as const;
 
@@ -24,6 +28,9 @@ function selectEnvironment(config: ServerConfig) {
         displayName,
         accentColor,
         iconUrl,
+        customModelIcons: readCustomModelIcons(
+          config.settings.providerInstances?.[instanceId]?.config,
+        ),
       }),
     ),
     machineKind: resolveEnvironmentMachineKind(config),
@@ -33,6 +40,19 @@ function selectEnvironment(config: ServerConfig) {
 }
 
 type ListEnvironment = ReturnType<typeof selectEnvironment>;
+
+function sameIcons(
+  left: Readonly<Record<string, string>> | undefined,
+  right: Readonly<Record<string, string>> | undefined,
+) {
+  if (left === right) return true;
+  if (left === undefined || right === undefined) return false;
+  const keys = Object.keys(left);
+  return (
+    keys.length === Object.keys(right).length &&
+    keys.every((key) => Object.hasOwn(right, key) && left[key] === right[key])
+  );
+}
 
 function sameProviders(
   left: ReadonlyArray<ThreadListProvider>,
@@ -48,7 +68,8 @@ function sameProviders(
         provider.enabled === other.enabled &&
         provider.displayName === other.displayName &&
         provider.accentColor === other.accentColor &&
-        provider.iconUrl === other.iconUrl
+        provider.iconUrl === other.iconUrl &&
+        sameIcons(provider.customModelIcons, other.customModelIcons)
       );
     })
   );
