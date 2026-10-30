@@ -621,6 +621,33 @@ function SidebarExtrasSection() {
   return (
     <SettingsSection {...searchableSetting("extras-sidebar")}>
       <SettingsRow
+        {...searchableSetting("sidebar-active-filter-include-done")}
+        description="Include threads with an unread completed reply when Show only active threads is on. Snoozed, archived, and settled threads stay hidden."
+        resetAction={
+          settings.sidebarActiveFilterIncludeDone !==
+          DEFAULT_UNIFIED_SETTINGS.sidebarActiveFilterIncludeDone ? (
+            <SettingResetButton
+              label="include Done threads in active filter"
+              onClick={() =>
+                updateSettings({
+                  sidebarActiveFilterIncludeDone:
+                    DEFAULT_UNIFIED_SETTINGS.sidebarActiveFilterIncludeDone,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.sidebarActiveFilterIncludeDone}
+            onCheckedChange={(checked) =>
+              updateSettings({ sidebarActiveFilterIncludeDone: Boolean(checked) })
+            }
+            aria-label="Include Done threads in active filter"
+          />
+        }
+      />
+      <SettingsRow
         title="Thread provider icon"
         description="Choose whether thread rows show their provider only on hover, at all times, or never."
         resetAction={

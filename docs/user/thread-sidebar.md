@@ -3,6 +3,18 @@
 Use a new thread for a separate task. Choose **New worktree** when its code changes
 need a separate branch and working directory.
 
+## Filter active work
+
+On web and desktop, the bolt button beside the project filter turns on **Show only
+active threads**. It includes threads that are working, monitoring, waiting, need
+you, or are marked active. Newly active threads join the list, and threads stay
+after their work stops until you turn the filter off. Snoozing, archiving, or
+settling a thread removes it. Project and environment filters still apply.
+
+**Settings → Extras → Include Done threads in active filter** also includes
+threads with unread completed replies. It is off by default. Done is separate
+from settled; settled threads stay hidden.
+
 ## Start a thread
 
 On web and desktop, a new thread keeps the current project and carries your model

@@ -1245,6 +1245,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["sidebar toolbar show hide manage custom groups"],
   },
   {
+    id: "sidebar-active-filter-include-done",
+    title: "Include Done threads in active filter",
+    to: "/settings/extras",
+    searchTerms: ["sidebar bolt active completed unread finished threads"],
+  },
+  {
     id: "sidebar-hide-settle-button",
     title: "Hide Settle button",
     to: "/settings/extras",

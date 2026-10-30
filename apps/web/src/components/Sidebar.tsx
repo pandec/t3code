@@ -1,3 +1,4 @@
+import { liveShellEnvironmentIdsAtom } from "../state/shell";
 import { attachSidebarTree, SIDEBAR_TREE_PROPS } from "../lib/sidebarTree";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
@@ -220,7 +221,8 @@ import { useSplitSecondaryThreadKey } from "./thread-split/SplitPaneMarker";
 import { SidebarEnvironmentFilterMenu } from "./sidebar/SidebarEnvironmentFilter";
 import { resolveSidebarEmptyStateCause } from "./sidebar/sidebarEmptyState";
 import {
-  isSidebarActiveWorkThread,
+  matchesSidebarActiveWorkFilter,
+  useActiveWorkThreadKeys,
   useActiveWorkFolds,
   type SidebarShelfKey,
 } from "./sidebar/sidebarActiveWork";
@@ -418,8 +420,11 @@ interface SidebarThreadPartitionInput {
   readonly workingShelfEnabled: boolean;
   /** Boring mode: folders list active threads by the user's latest message. */
   readonly sortActiveBySend: boolean;
-  /** Fork: the Active filter (marked or live threads only); the open thread always stays. */
+  /** Fork: retains active work for the current filter session. */
   readonly activeWorkFilter: boolean;
+  readonly activeWorkThreadKeys: ReadonlySet<string>;
+  readonly includeDone: boolean;
+  readonly threadLastVisitedAtById: Readonly<Record<string, string>>;
   readonly routeRowThreadKey: string | null;
   // Snooze wakes, the queued-turn grace and the Working shelf's exit grace depend
   // on the clock, so the minute tick, the precise snooze-wake tick and the inbox
@@ -485,6 +490,9 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     workingShelfEnabled,
     sortActiveBySend,
     activeWorkFilter,
+    activeWorkThreadKeys,
+    includeDone,
+    threadLastVisitedAtById,
     routeRowThreadKey,
   } = input;
   const preciseNow = new Date().toISOString();
@@ -503,8 +511,13 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
       (scopedProjectKeys === null || scopedProjectKeys.has(projectKey));
     if (
       activeWorkFilter &&
-      !isSidebarActiveWorkThread(thread) &&
-      threadShellKey(thread) !== routeRowThreadKey
+      !matchesSidebarActiveWorkFilter(thread, {
+        retainedKeys: activeWorkThreadKeys,
+        includeDone,
+        routeThreadKey: routeRowThreadKey,
+        now: preciseNow,
+        localLastVisitedAt: threadLastVisitedAtById[threadShellKey(thread)],
+      })
     ) {
       continue;
     }
@@ -1028,6 +1041,15 @@ function useSidebarThreads(input: {
   const collapsedGroups = activeWorkFilter
     ? activeWorkFolds.folds.groups
     : new Set(collapsedGroupIds);
+  const includeDone = useClientSettings((s) => s.sidebarActiveFilterIncludeDone);
+  const threadLastVisitedAtById = useUiStateStore((s) => s.threadLastVisitedAtById);
+  const liveEnvironmentIds = useAtomValue(liveShellEnvironmentIdsAtom);
+  const activeWorkThreadKeys = useActiveWorkThreadKeys(
+    activeWorkFilter,
+    threads,
+    new Date(Math.max(Date.parse(nowMinute), snoozeWakeClock)).toISOString(),
+    liveEnvironmentIds,
+  );
   const partition = partitionSidebarThreads({
     threads,
     environmentScope,
@@ -1040,6 +1062,9 @@ function useSidebarThreads(input: {
     workingShelfEnabled,
     sortActiveBySend: folderGroups !== null,
     activeWorkFilter,
+    activeWorkThreadKeys,
+    includeDone,
+    threadLastVisitedAtById,
     routeRowThreadKey,
     clockKey: `${nowMinute}:${snoozeWakeClock}:${inboxReturnsVersion}`,
   });
