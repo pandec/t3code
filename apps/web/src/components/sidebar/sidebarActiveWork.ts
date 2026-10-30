@@ -83,11 +83,11 @@ export function matchesSidebarActiveWorkFilter(
     readonly localLastVisitedAt?: string | undefined;
   },
 ): boolean {
-  if (!isEligible(thread, options.now)) return false;
   const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+  if (key === options.routeThreadKey) return true;
+  if (!isEligible(thread, options.now)) return false;
   return (
     options.retainedKeys.has(key) ||
-    key === options.routeThreadKey ||
     isSidebarActiveWorkThread(thread) ||
     (options.includeDone &&
       resolveSidebarThreadStatus(thread) === "ready" &&

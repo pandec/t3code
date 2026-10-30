@@ -96,18 +96,15 @@ describe("active work filter session", () => {
     { archivedAt: now },
     { settledOverride: "settled" as const },
     { snoozedAt: now, snoozedUntil: "2026-10-31T12:00:00.000Z" },
-  ])("forgets parked threads even when marked or open: %o", (parked) => {
+  ])("forgets parked threads even when marked, unless open: %o", (parked) => {
     const retained = [key(thread)];
     const hidden = { ...thread, ...parked };
     expect(nextActiveWorkThreadKeys(retained, true, [hidden], now, liveEnvironmentIds)).toEqual([]);
+    const parkedOptions = { ...options, retainedKeys: new Set(retained), includeDone: true };
+    expect(matchesSidebarActiveWorkFilter(hidden, parkedOptions)).toBe(false);
     expect(
-      matchesSidebarActiveWorkFilter(hidden, {
-        ...options,
-        retainedKeys: new Set(retained),
-        routeThreadKey: key(thread),
-        includeDone: true,
-      }),
-    ).toBe(false);
+      matchesSidebarActiveWorkFilter(hidden, { ...parkedOptions, routeThreadKey: key(thread) }),
+    ).toBe(true);
     expect(nextActiveWorkThreadKeys([], true, [finished], now, liveEnvironmentIds)).toEqual([]);
   });
 
