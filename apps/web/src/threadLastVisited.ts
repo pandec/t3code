@@ -30,6 +30,7 @@ export function createThreadVisitHistory(): ThreadVisitHistory {
   return {
     record(target, resolve = (entry) => entry) {
       if (target === null) return;
+      if (current !== null && threadVisitKey(current) === threadVisitKey(target)) return;
       const resolvedCurrent = current === null ? null : resolve(current);
       // Sending a draft lands on its new thread: that is the same visit, so
       // it replaces the draft instead of pushing the older entry out.
