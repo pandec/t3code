@@ -265,6 +265,16 @@ describe("ClientSettings quit confirmation", () => {
 });
 
 describe("ClientSettings sidebar", () => {
+  it("keeps Done inclusion opt-in through stored settings and patches", () => {
+    expect(decodeClientSettings({}).sidebarActiveFilterIncludeDone).toBe(false);
+    expect(decodeClientSettingsPatch({})).not.toHaveProperty("sidebarActiveFilterIncludeDone");
+    const patch = { sidebarActiveFilterIncludeDone: true };
+    expect(decodeClientSettingsPatch(patch)).toEqual(patch);
+    expect(
+      decodeClientSettings(encodeClientSettings(decodeClientSettings(patch)))
+        .sidebarActiveFilterIncludeDone,
+    ).toBe(true);
+  });
   it("accepts opting into the project-row new-thread button", () => {
     expect(
       decodeClientSettingsPatch({

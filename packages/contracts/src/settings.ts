@@ -733,6 +733,9 @@ export const ClientSettingsSchema = Schema.Struct({
   sidebarV2CompactCards: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /** Fork: hides the Settle button on thread row hover; Settle stays in menus. */
   sidebarHideSettleButton: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  sidebarActiveFilterIncludeDone: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
   sidebarV2NewThreadButtonInProjectRow: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
@@ -2305,6 +2308,7 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarThreadProviderIconVisibility: Schema.optionalKey(SidebarThreadProviderIconVisibility),
   sidebarV2CompactCards: Schema.optionalKey(Schema.Boolean),
   sidebarHideSettleButton: Schema.optionalKey(Schema.Boolean),
+  sidebarActiveFilterIncludeDone: Schema.optionalKey(Schema.Boolean),
   sidebarV2NewThreadButtonInProjectRow: Schema.optionalKey(Schema.Boolean),
   sidebarThreadGroupsButton: Schema.optionalKey(Schema.Boolean),
   showPanelToggleButtons: Schema.optionalKey(Schema.Boolean),
