@@ -148,6 +148,7 @@ import {
   useThreadSelectionStore,
 } from "../threadSelectionStore";
 import {
+  canTurnThreadIntoProject,
   requestBulkThreadUnpinConfirmation,
   useAcknowledgeThreadWoke,
   useThreadActions,
@@ -1452,6 +1453,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     confirmAndUnpinThread,
     setThreadAutoSettle,
     setThreadActiveMark,
+    turnThreadIntoProject,
     reorderPinnedThread,
     reorderActiveThread,
     setThreadCustomGroup,
@@ -1522,6 +1524,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     },
   });
   const [projectScopeMenuOpen, setProjectScopeMenuOpen] = useState(false);
+  const folderRowsMultiline = useClientSettings((settings) => settings.boringSidebarMultilineRows);
   const newThreadContext = useHandleNewThread();
   const openAddProjectCommandPalette = () => openCommandPalette({ open: "add-project" });
   // The environment filter needs the presentation records and catalog readiness.
@@ -3508,6 +3511,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           isRunning: !threadRuntimeCanArchive(thread.runtime),
           archiveAction: resolveArchiveToggleAction(thread),
           canShareWithGuest: appAtomRegistry.get(canShareWithGuestAtom(threadRef.environmentId)),
+          canTurnIntoProject: canTurnThreadIntoProject(threadRef),
           supports: {
             settlement: configLoaded,
             autoSettleOptOut: supportsAutoSettleOptOut,
@@ -3652,6 +3656,26 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           case "fork":
             attemptFork(threadRef);
             return;
+          case "turn-into-project": {
+            const result = await turnThreadIntoProject(threadRef);
+            if (result._tag === "Success") {
+              toastManager.add({
+                type: "success",
+                title: "Project created",
+                description: thread.title,
+              });
+            } else if (!isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Could not turn thread into a project",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            }
+            return;
+          }
           case "auto-settle:enabled":
           case "auto-settle:disabled": {
             const result = await setThreadAutoSettle(
@@ -4347,7 +4371,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         );
                         const isCard =
                           section === "active" || section === "pinned" || section === "working";
-                        const rowVariant = folderRow ? "folder" : isCard ? "card" : "slim";
+                        const rowVariant = folderRow
+                          ? folderRowsMultiline
+                            ? "folder-multiline"
+                            : "folder"
+                          : isCard
+                            ? "card"
+                            : "slim";
                         return (
                           <SortableThreadRow
                             key={threadKey}
@@ -4678,7 +4708,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 className="mt-auto"
                                 label="Working"
                                 count={workingThreads.length}
-                                hostsUndoNotice
                                 toggle={{
                                   expanded: workingShelfExpanded,
                                   onToggle: toggleWorkingShelf,
@@ -4694,7 +4723,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 className={cn(workingThreads.length === 0 && "mt-auto")}
                                 label="Snoozed"
                                 count={snoozedThreads.length}
-                                hostsUndoNotice={workingThreads.length === 0}
                                 toggle={{
                                   expanded: snoozedShelfExpanded,
                                   onToggle: toggleSnoozedShelf,
@@ -4712,9 +4740,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 )}
                                 label="Settled"
                                 count={settledCount}
-                                hostsUndoNotice={
-                                  workingThreads.length + snoozedThreads.length === 0
-                                }
                                 dragging={from !== null}
                                 isDropTarget={dragTargetSection === "settled"}
                                 toggle={{
@@ -4911,9 +4936,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ) : null}
         </SidebarGroup>
       </SidebarContent>
-      <SidebarChromeFooter
-        showUndoNotice={isSearchingThreads || sidebarListItemsFresh.length === 0}
-      />
+      <SidebarChromeFooter />
     </>
   );
 }

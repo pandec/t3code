@@ -1843,10 +1843,10 @@ describe("deriveMessagesTimelineRows", () => {
     const settled = rows({ resume: "completed", working: false });
     expect(shape(settled)).toEqual([
       "user:launch",
-      "fold:Worked for 8.0s",
+      "fold:Worked for 8s",
       "assistant:launch-answer",
       "user:resume",
-      "fold:Worked for 8.0s",
+      "fold:Worked for 8s",
       "assistant:resume-answer",
     ]);
 
@@ -1859,17 +1859,17 @@ describe("deriveMessagesTimelineRows", () => {
     });
     expect(shape(expanded)).toEqual([
       "user:launch",
-      "fold:Worked for 8.0s",
+      "fold:Worked for 8s",
       "work-toggle",
       "assistant:launch-answer",
       "user:resume",
-      "fold:Worked for 8.0s",
+      "fold:Worked for 8s",
       "assistant:resume-answer",
     ]);
 
     expect(shape(rows({ resume: "running", working: true }))).toEqual([
       "user:launch",
-      "fold:Worked for 8.0s",
+      "fold:Worked for 8s",
       "assistant:launch-answer",
       "user:resume",
       "working",
@@ -1878,7 +1878,7 @@ describe("deriveMessagesTimelineRows", () => {
 
     expect(shape(rows({ resume: "failed", working: false }))).toEqual([
       "user:launch",
-      "fold:Worked for 8.0s",
+      "fold:Worked for 8s",
       "assistant:launch-answer",
       "user:resume",
       "work",
@@ -4004,9 +4004,15 @@ it("keeps the working header in place across worktree setup handoff", () => {
 });
 
 describe("failed turn transcript", () => {
-  it.each(["provider_error", "usage_limit"] as const)(
-    "keeps historical %s failures and preceding work visible without disclosures",
-    (failureClass) => {
+  it.each([
+    { position: "historical", failureClass: "provider_error" },
+    { position: "historical", failureClass: "usage_limit" },
+    { position: "latest", failureClass: "usage_limit" },
+  ] as const)(
+    "keeps $position $failureClass failures visible with preceding work grouped appropriately",
+    ({ position, failureClass }) => {
+      const isLatest = position === "latest";
+      const commands = isLatest ? ["pwd", "ls", "false"] : ["pwd"];
       const runId = RunId.make("failed-run");
       const threadId = ThreadId.make("failed-thread");
       const at = DateTime.makeUnsafe("2026-09-20T12:00:00Z");
@@ -4043,23 +4049,24 @@ describe("failed turn transcript", () => {
             attachments: [],
           },
         },
-        {
-          position: 1,
+        ...commands.map((input, index): OrchestrationV2ProjectedTurnItem => ({
+          position: index + 1,
           visibility: "local",
           sourceThreadId: threadId,
-          sourceItemId: TurnItemId.make("command"),
+          sourceItemId: TurnItemId.make(index === 0 ? "command" : `command-${index}`),
           item: {
             ...base,
-            id: TurnItemId.make("command"),
+            id: TurnItemId.make(index === 0 ? "command" : `command-${index}`),
+            ordinal: index + 1,
             type: "command_execution",
             status: "completed",
-            input: "pwd",
+            input,
             output: "",
             exitCode: 0,
           },
-        },
+        })),
         {
-          position: 2,
+          position: commands.length + 1,
           visibility: "local",
           sourceThreadId: threadId,
           sourceItemId: TurnItemId.make("failure"),
@@ -4081,20 +4088,24 @@ describe("failed turn transcript", () => {
         timelineEntries: deriveTimelineEntriesFromVisibleTurnItems({
           visibleTurnItems: items,
           optimisticMessages: [],
-        }).map((entry) => ({
-          ...entry,
-          attempt: {
-            id: RunAttemptId.make("superseded-attempt"),
-            runId,
-            attemptOrdinal: 1,
-            rootNodeId: NodeId.make("superseded-root"),
-            status: "superseded" as const,
-            completedAt: null,
-          },
-        })),
+        }).map((entry) =>
+          isLatest
+            ? entry
+            : {
+                ...entry,
+                attempt: {
+                  id: RunAttemptId.make("superseded-attempt"),
+                  runId,
+                  attemptOrdinal: 1,
+                  rootNodeId: NodeId.make("superseded-root"),
+                  status: "superseded" as const,
+                  completedAt: null,
+                },
+              },
+        ),
         latestRun: {
-          runId: RunId.make("newer-run"),
-          status: "completed",
+          runId: isLatest ? runId : RunId.make("newer-run"),
+          status: isLatest ? "failed" : "completed",
           startedAt: DateTime.formatIso(at),
           completedAt: DateTime.formatIso(at),
         },
@@ -4102,16 +4113,19 @@ describe("failed turn transcript", () => {
         turnDiffSummaries: [],
         supportsConversationRollback: false,
       });
-      expect(
-        rows.some(
-          (row) =>
-            row.kind === "turn-fold" || row.kind === "attempt-fold" || row.kind === "work-toggle",
-        ),
-      ).toBe(false);
+      expect(rows.some((row) => row.kind === "turn-fold" || row.kind === "attempt-fold")).toBe(
+        false,
+      );
       const work = rows.flatMap((row) => (row.kind === "work" ? row.groupedEntries : []));
-      expect(work.map((entry) => entry.id)).toEqual(["command", "failure"]);
+      expect(rows.find((row) => row.kind === "work-toggle")).toEqual(
+        isLatest ? expect.objectContaining({ hiddenCount: 3, expanded: false }) : undefined,
+      );
+      expect(work.map((entry) => entry.id)).toEqual(
+        isLatest ? ["failure"] : ["command", "failure"],
+      );
       expect(work.at(-1)?.detail).toBe("The provider stopped this turn.\nRetry later.");
       expect(work.at(-1)?.createdAt).toBe("2026-09-20T12:00:00.000Z");
+      if (isLatest) return;
       const entriesWithoutTools = deriveTimelineEntriesFromVisibleTurnItems({
         visibleTurnItems: items.filter((row) => row.item.type !== "command_execution"),
         optimisticMessages: [],

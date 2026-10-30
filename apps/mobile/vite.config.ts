@@ -6,6 +6,7 @@ import "vite-plus/test/config";
 import { sharedTestDefaults } from "../../scripts/lib/vitest-shared.ts";
 
 const reactTests = [
+  "src/features/threads/git/GitBranchesSheet.occupancy.test.tsx",
   "src/features/files/useFileTreeEntries.test.tsx",
   "src/features/projects/AddProjectScreen.test.ts",
   "src/lib/useMediaVideoPlayback.test.tsx",

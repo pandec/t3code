@@ -149,7 +149,7 @@ describe("DesktopShellEnvironment", () => {
       };
       const commands: ChildProcess.Command[] = [];
 
-      yield* runShellEnvironment({
+      const prepared = yield* runShellEnvironment({
         env,
         platform: "darwin",
         handler: (command) => {
@@ -173,6 +173,7 @@ describe("DesktopShellEnvironment", () => {
       assert.equal(env.ELEVENLABS_API_KEY, "shell-elevenlabs-key");
       assert.equal(env.ELEVENLABS_TTS_MODEL, "eleven-flash-test");
       assert.equal(env.ELEVENLABS_TTS_VOICE_ID, "voice-test");
+      assert.isTrue(prepared);
     }),
   );
 
@@ -299,7 +300,7 @@ describe("DesktopShellEnvironment", () => {
       };
       const commands: string[] = [];
 
-      yield* runShellEnvironment({
+      const prepared = yield* runShellEnvironment({
         env,
         platform: "darwin",
         handler: (command) => {
@@ -311,6 +312,19 @@ describe("DesktopShellEnvironment", () => {
 
       assert.deepEqual(commands, ["/opt/homebrew/bin/nu", "/bin/zsh", "/bin/launchctl"]);
       assert.equal(env.PATH, "/opt/homebrew/bin:/usr/bin");
+      assert.isFalse(prepared);
+    }),
+  );
+
+  it.effect("leaves macOS preparation incomplete when no login shell returns a PATH", () =>
+    Effect.gen(function* () {
+      const prepared = yield* runShellEnvironment({
+        env: { SHELL: "/bin/zsh", PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
+        platform: "darwin",
+        handler: () => "",
+      });
+
+      assert.isFalse(prepared);
     }),
   );
 

@@ -937,6 +937,9 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           binaryPath: options.settings.binaryPath,
           directory: cwd,
           serverUrl: options.settings.serverUrl,
+          ...(options.settings.serverPassword
+            ? { serverPassword: options.settings.serverPassword }
+            : {}),
           // Fork (DECISIONS 5.9): commands OpenCode runs know their thread and T3 install.
           environment: providerThreadEnvironment(
             { threadId: input.threadId, cwd },
@@ -947,14 +950,17 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
         const client = runtime.createOpenCodeSdkClient({
           baseUrl: connection.url,
           directory: cwd,
-          ...(connection.external && options.settings.serverPassword
-            ? { serverPassword: options.settings.serverPassword }
+          ...(connection.serverPassword !== undefined
+            ? { serverPassword: connection.serverPassword }
             : {}),
         });
 
         const mcpSession = yield* mcpSessions.read(input.threadId);
         const hasT3Mcp = mcpSession !== undefined && !connection.external;
-        const orchestrationSystemPrompt = t3OrchestrationSystemPrompt(hasT3Mcp);
+        const orchestrationSystemPrompt = t3OrchestrationSystemPrompt(
+          hasT3Mcp,
+          mcpSession?.capabilities?.has("device") === true,
+        );
         if (hasT3Mcp) {
           yield* OpenCodeRuntime.runOpenCodeSdk("mcp.add", () =>
             client.mcp.add({
@@ -2646,6 +2652,8 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                       (state): state is OpenCodeThreadState => state !== undefined,
                     );
               const message = openCodeErrorMessage(event);
+              const error = event.properties.error;
+              const usageLimit = error?.name === "APIError" && error.data.statusCode === 429;
               if (
                 !isMessageAbortedError(event) &&
                 (event.properties.sessionID === undefined ||
@@ -2662,8 +2670,8 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                     {
                       failure: makeProviderFailure({
                         message,
-                        code: event.properties.error?.name ?? null,
-                        class: "provider_error",
+                        code: error?.name ?? null,
+                        class: usageLimit ? "usage_limit" : "provider_error",
                       }),
                       threadDisposition:
                         event.properties.sessionID === undefined ? "broken" : "reusable",

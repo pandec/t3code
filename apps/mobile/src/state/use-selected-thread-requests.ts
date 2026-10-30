@@ -36,7 +36,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-requests";
 
 import { environmentThreadDetails, threadEnvironment } from "../state/threads";
-import { buildPendingUserInputAnswers } from "../lib/threadActivity";
+import { buildPendingUserInputAnswers } from "@t3tools/client-runtime/state/pending-user-input";
 import { appAtomRegistry } from "./atom-registry";
 import {
   readLatestPendingUserInputAnswers,

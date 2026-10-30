@@ -156,6 +156,7 @@ describe("repairForkMigrationHistory", () => {
         [70, "PeerLinks"],
         [71, "PeerLinkFence"],
         [72, "WaitingLinkRequestIndex"],
+        [73, "ActiveTurnItemIndexes"],
       ]);
       const ledger = yield* readLedger;
       assert.deepStrictEqual(
@@ -205,6 +206,7 @@ describe("repairForkMigrationHistory", () => {
         [70, "PeerLinks"],
         [71, "PeerLinkFence"],
         [72, "WaitingLinkRequestIndex"],
+        [73, "ActiveTurnItemIndexes"],
       ]);
       assert.deepStrictEqual(
         (yield* readLedger).map((row) => [row.migration_id, row.name] as const),
@@ -224,7 +226,7 @@ describe("repairForkMigrationHistory", () => {
         (yield* runMigrations()).map(([id]) => id),
         [
           50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71,
-          72,
+          72, 73,
         ],
       );
       assert.deepStrictEqual(

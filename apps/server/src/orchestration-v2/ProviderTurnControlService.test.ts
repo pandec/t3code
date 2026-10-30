@@ -213,6 +213,8 @@ it.effect(
           getOpenRemoteDelegatedTasks: Effect.die("unused getOpenRemoteDelegatedTasks"),
           getShellSnapshot: () => Effect.die("unused getShellSnapshot"),
           listActiveSubagentThreadIds: () => Effect.die("unused listActiveSubagentThreadIds"),
+          countThreads: () => Effect.die("unused countThreads"),
+          listActiveShellIndex: () => Effect.die("unused listActiveShellIndex"),
           listOlderSettledThreads: () => Effect.die("unused listOlderSettledThreads"),
           readShellSnapshot: () => Effect.die("unused readShellSnapshot"),
           getThreadShell: () => Effect.die("unused getThreadShell"),
@@ -282,6 +284,8 @@ it.effect(
           closeInstance: () => Effect.void,
           release: () => Effect.void,
           detach: () => Effect.void,
+          otherWorkingThreads: () => Effect.succeed([]),
+          releaseUnlessBusy: () => Effect.succeed(true),
         }),
       );
       const layerControl = ProviderTurnControlService.layer.pipe(

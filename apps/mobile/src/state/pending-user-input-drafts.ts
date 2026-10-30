@@ -8,8 +8,9 @@ import {
   buildPendingUserInputAnswers,
   setPendingUserInputCustomAnswer,
   togglePendingUserInputOptionSelection,
+  type PendingUserInputAnswer,
   type PendingUserInputDraftAnswer,
-} from "../lib/threadActivity";
+} from "@t3tools/client-runtime/state/pending-user-input";
 import { appAtomRegistry } from "./atom-registry";
 
 /** Typed answers to pending agent questions, keyed by `userInputDraftKey`, then question id. */
@@ -73,7 +74,7 @@ export function readLatestPendingUserInputAnswers(
   requestKey: string,
   questions: ReadonlyArray<ThreadUserInputQuestion>,
   renderedDrafts: Readonly<Record<string, PendingUserInputDraftAnswer>>,
-): Record<string, string | ReadonlyArray<string>> | null {
+): Record<string, PendingUserInputAnswer> | null {
   const typed = seedUserInputDraftAnswers(
     questions,
     appAtomRegistry.get(userInputDraftsByRequestKeyAtom)[requestKey] ?? {},

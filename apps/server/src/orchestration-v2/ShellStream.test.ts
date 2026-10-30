@@ -262,10 +262,11 @@ describe("omitOlderSettledShells", () => {
     expect(result.olderSettled.counts).toEqual([]);
   });
 
-  it("keeps older rows that are snoozed, live, or above a kept subagent, and still counts them", () => {
+  it("keeps older rows that are snoozed, active-marked, live, or above a kept subagent, and still counts them", () => {
     const threads = [
       ...newest,
       row("snoozed", 30, { snoozedUntil: DateTime.makeUnsafe(101 * DAY) }),
+      row("marked", 30, { activeMarkedAt: DateTime.makeUnsafe(90 * DAY) }),
       row("woke", 30, { snoozedUntil: DateTime.makeUnsafe(99 * DAY) }),
       row("running", 30, { activityRunStatus: "running" }),
       row("parent", 30),
@@ -284,11 +285,12 @@ describe("omitOlderSettledShells", () => {
     const result = omit(threads);
     expect(result.threads.map((thread) => thread.id).slice(25)).toEqual([
       "snoozed",
+      "marked",
       "running",
       "parent",
       "child",
     ]);
-    expect(result.olderSettled.counts).toEqual([{ projectId: "project-a", count: 4 }]);
+    expect(result.olderSettled.counts).toEqual([{ projectId: "project-a", count: 5 }]);
   });
 });
 

@@ -9,18 +9,18 @@ import * as Schema from "effect/Schema";
 import { CLAUDE_SYNTHETIC_MODEL } from "../provider/Drivers/claudeUsage.ts";
 import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptReader.ts";
 
-// v3-v9 were each used by both the fork and upstream with incompatible layouts; v10 carries all of
+// v3-v10 were each used by both the fork and upstream with incompatible layouts; v11 carries all of
 // the fork's changes. Fork entries always carry malformed counts (`x`, `tx`) and upstream's never
-// do, which tells the shared versions apart. `decodeScanCache` migrates every v4-v9 cache.
-const USAGE_SCAN_CACHE_VERSION = 10 as const;
+// do, which tells the shared versions apart. `decodeScanCache` migrates every v4-v10 cache.
+const USAGE_SCAN_CACHE_VERSION = 11 as const;
 const OLDEST_MIGRATED_VERSION = 4;
 
 /**
  * Each cache version writes its own file, so an older server sharing the state dir cannot replace a
  * newer cache and drop saved usage. Without its own file, this server migrates older builds' files:
- * fork v4/v5 and upstream v4 share the unversioned name, upstream v5 has its own, v6-v9 share theirs.
+ * fork v4/v5 and upstream v4 share the unversioned name, upstream v5 has its own, v6-v10 share theirs.
  */
-export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v10.json";
+export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v11.json";
 export const LEGACY_SCAN_CACHE_FILE_NAMES = [
   "usage-scan-cache.json",
   "usage-scan-cache-v5.json",
@@ -28,6 +28,7 @@ export const LEGACY_SCAN_CACHE_FILE_NAMES = [
   "usage-scan-cache-v7.json",
   "usage-scan-cache-v8.json",
   "usage-scan-cache-v9.json",
+  "usage-scan-cache-v10.json",
 ] as const;
 
 /** Serialised as the index into this list. Index 0 and 1 match the legacy `fast` flag. */
@@ -202,12 +203,14 @@ function isCount(value: unknown): value is number {
  */
 type EntryLayout =
   | "current"
+  | "forkV10"
   | "forkV9"
   | "forkV8"
   | "forkV7"
   | "forkV6"
   | "forkV5"
   | "forkV4"
+  | "upstreamV10"
   | "upstreamV9"
   | "upstreamV8"
   | "upstreamV7"
@@ -218,6 +221,7 @@ type EntryLayout =
 function entryLayout(version: number, entry: Partial<SerializedFile>): EntryLayout | null {
   if (version === USAGE_SCAN_CACHE_VERSION) return "current";
   const fork = entry.x !== undefined || entry.tx !== undefined;
+  if (version === 10) return fork ? "forkV10" : "upstreamV10";
   if (version === 9) return fork ? "forkV9" : "upstreamV9";
   if (version === 8) return fork ? "forkV8" : "upstreamV8";
   if (version === 7) return fork ? "forkV7" : "upstreamV7";
@@ -230,12 +234,14 @@ function entryLayout(version: number, entry: Partial<SerializedFile>): EntryLayo
 /** Shortest row each layout writes; the columns after it are absent. */
 const ROW_LENGTH: Record<EntryLayout, number> = {
   current: 12,
+  forkV10: 12,
   forkV9: 12,
   forkV8: 12,
   forkV7: 12,
   forkV6: 12,
   forkV5: 12,
   forkV4: 10,
+  upstreamV10: 11,
   upstreamV9: 11,
   upstreamV8: 11,
   upstreamV7: 11,
@@ -247,10 +253,12 @@ const ROW_LENGTH: Record<EntryLayout, number> = {
 /** Layouts whose speed column may hold ultrafast, not just the legacy `fast` flag. */
 const ULTRAFAST_LAYOUTS: ReadonlySet<EntryLayout> = new Set([
   "current",
+  "forkV10",
   "forkV9",
   "forkV8",
   "forkV7",
   "forkV6",
+  "upstreamV10",
   "upstreamV9",
   "upstreamV8",
   "upstreamV7",
@@ -261,6 +269,7 @@ const ULTRAFAST_LAYOUTS: ReadonlySet<EntryLayout> = new Set([
 /** Layouts whose rows always carry `rateModel`; upstream's may append it. */
 const RATE_MODEL_LAYOUTS: ReadonlySet<EntryLayout> = new Set([
   "current",
+  "forkV10",
   "forkV9",
   "forkV8",
   "forkV7",
@@ -271,8 +280,7 @@ const RATE_MODEL_LAYOUTS: ReadonlySet<EntryLayout> = new Set([
 /**
  * Rebuilds the cache, migrating older layouts. Migrated entries keep their records (the transcript
  * may be gone) but carry `requiresReparse` while it exists: upstream layouts, fork v4, pre-v9 fork
- * Codex (v9 only with malformed lines) and pre-v7 fork Claude entries. Malformed input yields an
- * empty cache; `formats` validates stateful reducer state; formatless scan-reader entries are kept.
+ * Codex (v9 only with malformed lines) and older fork Claude entries (no advisor records).
  */
 export function decodeScanCache(
   document: unknown,
@@ -323,17 +331,20 @@ export function decodeScanCache(
         rateModelIndex,
       ] = row as SerializedRecord;
       // Fork v7+ layouts append provisional and one-hour columns; upstream
-      // v7–v9 put their tier turn where the fork's provisional flag sits.
-      const forkColumns =
-        layout === "current" || layout === "forkV9" || layout === "forkV8" || layout === "forkV7";
+      // v7–v10 put their tier turn where the fork's provisional flag sits.
+      const forkTurnColumn =
+        layout === "current" || layout === "forkV10" || layout === "forkV9" || layout === "forkV8";
+      const forkColumns = forkTurnColumn || layout === "forkV7";
       const provisional = forkColumns ? row[12] : undefined;
       const oneHourCacheCreationTokens = forkColumns ? row[13] : undefined;
-      const unresolvedServiceTierTurnId =
-        layout === "current" || layout === "forkV9" || layout === "forkV8"
-          ? row[14]
-          : layout === "upstreamV9" || layout === "upstreamV8" || layout === "upstreamV7"
-            ? row[12]
-            : undefined;
+      const unresolvedServiceTierTurnId = forkTurnColumn
+        ? row[14]
+        : layout === "upstreamV10" ||
+            layout === "upstreamV9" ||
+            layout === "upstreamV8" ||
+            layout === "upstreamV7"
+          ? row[12]
+          : undefined;
 
       // Fork v4 predates fast mode. A legacy `fast` flag (0 or 1) is the
       // speed index it maps to; only later tier-aware layouts record ultrafast.
@@ -437,13 +448,11 @@ export function decodeScanCache(
       // its clean entries resume.
       (entry.p === "codex" &&
         layout !== "current" &&
+        layout !== "forkV10" &&
         !(layout === "forkV9" && entry.x === 0 && entry.tx === 0)) ||
-      // Claude entries before fork v7 kept each message's first record.
-      (entry.p === "claude" &&
-        layout !== "current" &&
-        layout !== "forkV9" &&
-        layout !== "forkV8" &&
-        layout !== "forkV7");
+      // Claude entries before fork v11 lack advisor records (and before v7 kept
+      // each message's first record).
+      (entry.p === "claude" && layout !== "current");
     // A migrated position is never resumed: a full parse replaces the entry.
     const migrated = layout !== "current" && requiresReparse;
     // A corrupt state disqualifies the entry: resuming with it would attach
