@@ -933,6 +933,8 @@ const SidebarV2ArchivedRow = memo(function SidebarV2ArchivedRow(props: {
 // Separate hooks cache maps independently of later Sidebar hooks and preserve dnd-kit inputs
 // and row callbacks. Fork: the environment/project filters, custom groups and the foldable
 // Pinned/Active shelves live here too.
+const NO_LOCAL_VISITS: Readonly<Record<string, string>> = {};
+
 function useSidebarThreads(input: {
   readonly threads: readonly EnvironmentThreadShell[];
   readonly environmentScope: ReadonlySet<string> | null;
@@ -1042,7 +1044,9 @@ function useSidebarThreads(input: {
     ? activeWorkFolds.folds.groups
     : new Set(collapsedGroupIds);
   const includeDone = useClientSettings((s) => s.sidebarActiveFilterIncludeDone);
-  const threadLastVisitedAtById = useUiStateStore((s) => s.threadLastVisitedAtById);
+  const threadLastVisitedAtById = useUiStateStore((s) =>
+    activeWorkFilter && includeDone ? s.threadLastVisitedAtById : NO_LOCAL_VISITS,
+  );
   const liveEnvironmentIds = useAtomValue(liveShellEnvironmentIdsAtom);
   const activeWorkThreadKeys = useActiveWorkThreadKeys(
     activeWorkFilter,
