@@ -3,6 +3,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { useState } from "react";
 import { expect, it, vi } from "vite-plus/test";
 
+import "~/index.css";
 import { render } from "../../../test/render";
 import { sidebarMarkerId } from "../Sidebar.logic";
 import { SidebarSectionPlaceholder } from "./SidebarListMarkers";
@@ -27,9 +28,9 @@ function SidebarList() {
         items={["thread", sidebarMarkerId("settled-placeholder")]}
         strategy={verticalListSortingStrategy}
       >
-        <ul aria-label="Threads" style={{ height: 200, overflowY: "auto" }}>
+        <ul aria-label="Threads" className="h-[200px] overflow-y-auto">
           <DraggableThread />
-          <li aria-hidden style={{ height: 1000 }} />
+          <li aria-hidden className="h-[1000px]" />
           <SidebarSectionPlaceholder
             marker="settled-placeholder"
             label="Settled"
@@ -50,6 +51,7 @@ it("keeps the scroll position when picking up a thread reveals the off-screen Se
   const list = screen.getByRole("list", { name: "Threads" }).element();
   const thread = screen.getByRole("button", { name: "Thread near the top" }).element();
   const rect = thread.getBoundingClientRect();
+  expect(list.scrollHeight).toBeGreaterThan(list.clientHeight);
   expect(list.scrollTop).toBe(0);
 
   thread.dispatchEvent(
