@@ -52,12 +52,18 @@ describe("createThreadVisitHistory", () => {
 
   it("follows a sent draft to its thread without losing the older entry", () => {
     const history = createThreadVisitHistory();
-    // D was sent and became thread B.
-    const resolve = (target: ThreadRouteTarget) => (target === D ? B : target);
+    let promoted = false;
+    const resolve = (target: ThreadRouteTarget) =>
+      target.kind === "draft" && promoted ? B : target;
     history.record(A, resolve);
     history.record(D, resolve);
+    promoted = true;
+    // Store notifications arrive while the route still points to the draft.
+    history.record(draft("draft-1"), resolve);
     history.record(B, resolve);
     expect(history.resolveTarget(B, resolve)).toEqual(A);
+    history.record(A, resolve);
+    expect(history.resolveTarget(A, resolve)).toEqual(B);
   });
 
   it("skips entries that can no longer open", () => {
