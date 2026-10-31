@@ -469,9 +469,9 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
       (error): error is PinnedRuntimeInstallError =>
         error._tag === "PinnedRuntimeInstallError" &&
         error.step.startsWith("downloading the t3 release checksums") &&
-        (String(error.cause).includes("404") ||
-          (error.cause instanceof PlatformError.PlatformError &&
-            error.cause.reason._tag === "NotFound")),
+        (error.cause instanceof PlatformError.PlatformError
+          ? error.cause.reason._tag === "NotFound"
+          : String(error.cause).includes("404")),
       () =>
         Effect.fail(
           new CliUpdateError({

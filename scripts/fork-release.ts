@@ -91,7 +91,7 @@ function nextVersion(): string {
   const { version } = JSON.parse(
     NodeFS.readFileSync(NodePath.join(repoRoot, "apps/server/package.json"), "utf8"),
   ) as { version: string };
-  const base = version.split("-")[0];
+  const base = version.split(/[-+]/, 1)[0];
   const now = new Date();
   const date = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
   const used = NodeFS.existsSync(releaseRoot)
@@ -171,6 +171,11 @@ const target = hostTarget(
 if (target.platform === "linux" && NodeChildProcess.spawnSync("patchelf", ["--version"]).error) {
   throw new Error("patchelf is missing; install it with `sudo apt install patchelf`.");
 }
+const onDev = NodeChildProcess.spawnSync("git", ["merge-base", "--is-ancestor", "dev", "HEAD"], {
+  cwd: repoRoot,
+});
+if (onDev.status !== 0)
+  throw new Error("Fork releases build only from dev or a branch based on it.");
 const version = nextVersion();
 const releaseDir = NodePath.join(releaseRoot, `v${version}`);
 console.log(`Building t3@${version} into ${releaseDir}`);
