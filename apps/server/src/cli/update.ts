@@ -4,6 +4,7 @@ import {
   CLI_RELEASE_CHANNELS,
   cliReleaseIndexPageUrl,
   cliReleaseChannelOf,
+  isForkReleaseVersion,
   newestCliReleaseVersion,
   type CliReleaseChannel,
 } from "@t3tools/shared/cliRelease";
@@ -14,6 +15,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import { Argument, Command, Flag, GlobalFlag, Prompt } from "effect/cli";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
@@ -309,6 +311,20 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
       reason: `'${input.requestedVersion}' is not an exact t3 version.`,
     });
   }
+  const status = yield* service.status;
+  // Service names are per user, so another home's unit belongs to a different install.
+  const servesThisHome =
+    status.installedBaseDir !== undefined &&
+    path.resolve(status.installedBaseDir) === path.resolve(input.baseDir);
+  const serviceInstalled = status.supported && status.installed && servesThisHome;
+  const forkVersion = [currentVersion, serviceInstalled ? status.installedVersion : undefined].find(
+    (version) => version !== undefined && isForkReleaseVersion(version),
+  );
+  if (input.requestedVersion === undefined && forkVersion !== undefined) {
+    return yield* new CliUpdateError({
+      reason: `t3@${forkVersion} is a fork build. Run \`vp run release:fork\` from the fork checkout, or pass an exact version.`,
+    });
+  }
   const progress = createUpdateProgress();
   progress.status("Checking for updates...");
   const targetVersion = yield* (
@@ -343,12 +359,6 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     }
   }
 
-  const status = yield* service.status;
-  // Service names are per user, so another home's unit belongs to a different install.
-  const servesThisHome =
-    status.installedBaseDir !== undefined &&
-    path.resolve(status.installedBaseDir) === path.resolve(input.baseDir);
-  const serviceInstalled = status.supported && status.installed && servesThisHome;
   const foreground = yield* findForegroundServer({
     serverRuntimeStatePath: input.serverRuntimeStatePath,
     serviceInstalled,
@@ -459,7 +469,9 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
       (error): error is PinnedRuntimeInstallError =>
         error._tag === "PinnedRuntimeInstallError" &&
         error.step.startsWith("downloading the t3 release checksums") &&
-        String(error.cause).includes("404"),
+        (error.cause instanceof PlatformError.PlatformError
+          ? error.cause.reason._tag === "NotFound"
+          : String(error.cause).includes("404")),
       () =>
         Effect.fail(
           new CliUpdateError({

@@ -102,6 +102,32 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
     }),
   );
 
+  it.effect("installs from a local file: release folder without the network", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-local-" });
+      const releaseRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-local-release-" });
+      const releaseDir = path.join(releaseRoot, `v${version}`);
+      yield* fs.makeDirectory(releaseDir);
+      yield* fs.writeFileString(path.join(releaseDir, "SHA256SUMS"), yield* validChecksums);
+      yield* fs.writeFile(path.join(releaseDir, archiveName), archiveBytes);
+      const paths = yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version,
+        fs,
+        path,
+        platform: "linux",
+        arch: "x64",
+        httpClient: HttpClient.make(() => Effect.die("unexpected network request")),
+        releaseBaseUrl: (yield* path.toFileUrl(releaseRoot)).href,
+        runner: extractingRunner(fs, path),
+        validate: () => Effect.void,
+      });
+      assert.equal(yield* fs.readFileString(paths.sentinelPath), `${version}\n`);
+    }),
+  );
+
   it.effect("cleans up an interrupted download without reporting verification or extraction", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

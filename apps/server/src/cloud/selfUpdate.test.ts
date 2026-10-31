@@ -336,6 +336,7 @@ it("a host crosses tracks only to a release that knows its whole database", () =
   // A Stable tag can carry a migration the latest Nightly lacks.
   expect(cross("0.1.4", nightly, 72, 73)).toContain("does not support yet");
   expect(cross("0.1.3", "0.1.4", undefined)).toBeNull();
+  expect(cross("0.1.4-pandec.20261031.1", "0.1.5", 72)).toContain("fork build");
   // A database that exists but cannot be read proves nothing.
   expect(
     ServerSelfUpdate.trackSwitchBlockReason({

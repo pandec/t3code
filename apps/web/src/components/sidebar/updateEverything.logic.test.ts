@@ -52,6 +52,7 @@ describe("collectServerUpdateTargets", () => {
         machine("this-app", "0.0.40", "desktop-managed", { hostedByThisApp: true }),
         machine("service", "0.0.40", "boot-service"),
         machine("nightly-service", "0.0.49-nightly.20261001.3", "boot-service"),
+        machine("fork-service", "0.0.40-pandec.20261001.1", "boot-service"),
         machine("other-desktop", "0.0.49-nightly.20261001.3", "desktop-managed"),
         machine("offline", "0.0.40", "boot-service", { connected: false }),
         machine("never-connected", "0.0.40", "boot-service", { serverConfig: null }),
@@ -77,6 +78,7 @@ describe("collectServerUpdateTargets", () => {
     ]);
     expect(skipped.map((entry) => [entry.label, entry.reason])).toEqual([
       ["nightly-service", "on the nightly channel"],
+      ["fork-service", "runs a fork build"],
       ["offline", "not connected"],
       ["never-connected", "not connected"],
       ["no-scope", "no permission"],
