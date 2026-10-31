@@ -1,7 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
 
 import type { MuseSubscriptionUsage } from "./protocol.ts";
-import { isMuseUsageLimitFailure, museUsageLimitResetAt } from "./usageLimits.ts";
+import {
+  isMuseUsageLimitFailure,
+  museUsageLimitResetAt,
+  museUsageOutputToLimits,
+} from "./usageLimits.ts";
 
 const usage = {
   observedAtMs: 1791447762610,
@@ -52,5 +56,56 @@ describe("Muse usage limit failures", () => {
     expect(museUsageLimitResetAt(sessionOut, usage.window.resetsAtMs)).toBeNull();
     const afterNamedReset = Date.parse("2026-10-14T00:00:00Z");
     expect(museUsageLimitResetAt(undefined, afterNamedReset, { message: realRefusal })).toBeNull();
+  });
+});
+
+describe("museUsageOutputToLimits", () => {
+  const checkedAt = "2026-10-31T04:45:00.000Z";
+
+  it("reads `muse usage --json` windows, clamping Meta's over-quota percentages", () => {
+    const output = JSON.stringify({
+      schemaVersion: 1,
+      allowance: {
+        tier: "Muse Code Power Usage",
+        window: { usedPercent: 112, resetsAtMs: 1793439239000 },
+        weekly: { usedPercent: 4, resetsAtMs: 1793577600000 },
+        asOfMs: 1793421633517,
+        source: "mint",
+      },
+      reason: null,
+      hint: null,
+    });
+    expect(museUsageOutputToLimits(output, checkedAt)).toEqual({
+      checkedAt: "2026-10-31T04:40:33.517Z",
+      windows: [
+        {
+          id: "muse-window",
+          kind: "session",
+          label: "Session",
+          usedPercent: 100,
+          resetsAt: "2026-10-31T09:33:59.000Z",
+        },
+        {
+          id: "muse-weekly",
+          kind: "weekly",
+          label: "Weekly",
+          usedPercent: 4,
+          resetsAt: "2026-11-02T00:00:00.000Z",
+        },
+      ],
+    });
+  });
+
+  it("separates accounts without an allowance from failed reads", () => {
+    const noAllowance = (reason: string) =>
+      museUsageOutputToLimits(JSON.stringify({ allowance: null, reason }), checkedAt).unavailable
+        ?.reason;
+    expect(noAllowance("api_key")).toBe("unsupported");
+    expect(noAllowance("no_allowance")).toBe("unsupported");
+    expect(noAllowance("server_sent_no_usage")).toBe("probeFailed");
+    expect(noAllowance("constructor")).toBe("probeFailed");
+    expect(
+      museUsageOutputToLimits("muse: usage refresh rate-limited", checkedAt).unavailable?.reason,
+    ).toBe("probeFailed");
   });
 });

@@ -512,6 +512,8 @@ export function providerUsageLabelForDriver(driver: string | null | undefined): 
       return "Claude";
     case "codex":
       return "Codex";
+    case "muse":
+      return "Muse";
     default:
       // Only providers with machine-readable quota get a meter; a fabricated
       // percentage would be worse than no meter.
