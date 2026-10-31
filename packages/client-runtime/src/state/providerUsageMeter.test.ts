@@ -344,6 +344,12 @@ describe("resolveProviderUsageMeter", () => {
     expect(meter("claudeAgent_proxy", providers)).toContain("meta@example.com");
     expect(meter("codex")).toEqual(["codex", "Muse CPA"]);
     expect(meter("muse")).toEqual(["Muse CPA"]);
+    const staleMuse = providers.concat(
+      provider("muse", "muse", {
+        usageLimits: { ...museLimits, checkedAt: "2026-07-23T00:00:00.000Z" },
+      }),
+    );
+    expect(meter("claudeAgent_proxy", staleMuse)).toContain("meta@example.com");
   });
 
   it("shows a placeholder row for a gateway instance whose pool was not read yet", () => {

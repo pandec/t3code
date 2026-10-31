@@ -153,13 +153,11 @@ export function resolveProviderUsageMeter(input: {
       : input.providers
           .filter(
             (provider) =>
-              provider.enabled &&
-              provider.driver === "muse" &&
-              !isGateway(provider.instanceId) &&
-              provider.usageLimits !== undefined &&
-              provider.usageLimits.unavailable?.reason !== "unsupported",
+              provider.enabled && provider.driver === "muse" && !isGateway(provider.instanceId),
           )
-          .map(directAccount);
+          .map(directAccount)
+          // Only readable quota stands in for the Meta rows.
+          .filter((account) => account.usage !== null);
 
   if (isGateway(activeInstanceId)) {
     const snapshot = snapshotByInstance.get(activeInstanceId);
@@ -192,6 +190,7 @@ export function resolveProviderUsageMeter(input: {
             usage: null,
             observedAt: snapshot?.observedAt ?? null,
           },
+          ...museAccounts,
         ],
         label: driverLabel,
         gateway: true,
