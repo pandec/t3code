@@ -124,6 +124,40 @@ export function resolveProviderUsageMeter(input: {
   }
   const isGateway = (instanceId: ProviderInstanceId) =>
     pools.has(instanceId) || input.isGatewayInstance?.(instanceId) === true;
+  const directAccount = (provider: ServerProvider): ProviderUsageMeterAccount => {
+    const usage = deriveProviderUsageSnapshotFromUsageLimits(provider.usageLimits, {
+      provider: provider.driver,
+      providerInstanceId: provider.instanceId,
+      now,
+      ...thresholdOptions,
+    });
+    const checkedAtMs = provider.usageLimits ? Date.parse(provider.usageLimits.checkedAt) : NaN;
+    return {
+      instanceId: provider.instanceId,
+      displayName: provider.displayName ?? provider.instanceId,
+      email: provider.auth.email,
+      isCurrent: provider.instanceId === activeInstanceId,
+      usage,
+      observedAt: Number.isFinite(checkedAtMs) ? checkedAtMs : null,
+      error:
+        usage === null && provider.usageLimits?.unavailable?.reason === "probeFailed"
+          ? (provider.usageLimits.unavailable.message ?? "Couldn't read usage")
+          : null,
+    };
+  };
+  // Fork: Muse quota rides along on every other thread's meter. It replaces a
+  // gateway's Meta rows, which the gateway cannot read.
+  const museAccounts =
+    driver === "muse"
+      ? []
+      : input.providers
+          .filter(
+            (provider) =>
+              provider.enabled && provider.driver === "muse" && !isGateway(provider.instanceId),
+          )
+          .map(directAccount)
+          // Only readable quota stands in for the Meta rows.
+          .filter((account) => account.usage !== null);
 
   if (isGateway(activeInstanceId)) {
     const snapshot = snapshotByInstance.get(activeInstanceId);
@@ -156,6 +190,7 @@ export function resolveProviderUsageMeter(input: {
             usage: null,
             observedAt: snapshot?.observedAt ?? null,
           },
+          ...museAccounts,
         ],
         label: driverLabel,
         gateway: true,
@@ -170,7 +205,9 @@ export function resolveProviderUsageMeter(input: {
     const boundAuthIndex = bindingSupported
       ? resolveProviderUsageBoundAuthIndex(input.threadAccount, input.threadId, input.activeModel)
       : null;
-    const displayAccounts = listProviderUsageAccountsForDisplay(pool.accounts);
+    const displayAccounts = listProviderUsageAccountsForDisplay(pool.accounts).filter(
+      (account) => museAccounts.length === 0 || account.provider !== "meta",
+    );
     // A binding to an account no row shows (disabled since the session bound)
     // would leave "next" pointing at an account that is not in play.
     const boundRowVisible =
@@ -183,19 +220,22 @@ export function resolveProviderUsageMeter(input: {
         accounts: pool.accounts,
         snapshot: activeUsage,
       }),
-      accounts: displayAccounts.map((account) => ({
-        instanceId: activeInstanceId,
-        accountKey: `${activeInstanceId}:${account.id}`,
-        ...presentProviderUsageAccount(account),
-        isCurrent: bindingSupported
-          ? boundRowVisible && account.authIndex === boundAuthIndex
-          : account.id === featuredId,
-        ...(bindingSupported
-          ? { isNext: (boundAuthIndex === null || boundRowVisible) && account.id === featuredId }
-          : {}),
-        usage: account.usage,
-        observedAt: snapshot?.observedAt ?? null,
-      })),
+      accounts: [
+        ...displayAccounts.map((account) => ({
+          instanceId: activeInstanceId,
+          accountKey: `${activeInstanceId}:${account.id}`,
+          ...presentProviderUsageAccount(account),
+          isCurrent: bindingSupported
+            ? boundRowVisible && account.authIndex === boundAuthIndex
+            : account.id === featuredId,
+          ...(bindingSupported
+            ? { isNext: (boundAuthIndex === null || boundRowVisible) && account.id === featuredId }
+            : {}),
+          usage: account.usage,
+          observedAt: snapshot?.observedAt ?? null,
+        })),
+        ...museAccounts,
+      ],
       // The rows are upstream accounts of mixed providers, so the header
       // names the gateway instance rather than a driver.
       label: activeProvider.displayName ?? activeInstanceId,
@@ -214,27 +254,7 @@ export function resolveProviderUsageMeter(input: {
     .sort((left, right) =>
       left.instanceId === activeInstanceId ? -1 : right.instanceId === activeInstanceId ? 1 : 0,
     );
-  const accounts = directProviders.map((provider): ProviderUsageMeterAccount => {
-    const usage = deriveProviderUsageSnapshotFromUsageLimits(provider.usageLimits, {
-      provider: provider.driver,
-      providerInstanceId: provider.instanceId,
-      now,
-      ...thresholdOptions,
-    });
-    const checkedAtMs = provider.usageLimits ? Date.parse(provider.usageLimits.checkedAt) : NaN;
-    return {
-      instanceId: provider.instanceId,
-      displayName: provider.displayName ?? provider.instanceId,
-      email: provider.auth.email,
-      isCurrent: provider.instanceId === activeInstanceId,
-      usage,
-      observedAt: Number.isFinite(checkedAtMs) ? checkedAtMs : null,
-      error:
-        usage === null && provider.usageLimits?.unavailable?.reason === "probeFailed"
-          ? (provider.usageLimits.unavailable.message ?? "Couldn't read usage")
-          : null,
-    };
-  });
+  const accounts = directProviders.map(directAccount);
   const activeUsage =
     accounts.find((account) => account.instanceId === activeInstanceId)?.usage ?? null;
   return {
@@ -251,7 +271,7 @@ export function resolveProviderUsageMeter(input: {
       accounts: null,
       snapshot: activeUsage,
     }),
-    accounts,
+    accounts: [...accounts, ...museAccounts],
     label: driverLabel,
     gateway: false,
     directInstanceIds: accounts.map((account) => account.instanceId),

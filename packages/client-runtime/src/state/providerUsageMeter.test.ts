@@ -162,45 +162,43 @@ describe("deriveProviderUsageSnapshotFromUsageLimits", () => {
 
 describe("resolveProviderUsageMeter", () => {
   const gatewayInstanceId = ProviderInstanceId.make("claudeAgent_proxy");
+  const poolAccounts = [
+    {
+      id: "tier2.json",
+      authIndex: "idx-2",
+      label: "second@example.com",
+      provider: "claude",
+      priority: 75,
+      state: "available",
+      usage: {
+        source: "claude.usage-api",
+        rateLimits: { limits: [{ kind: "session", percent: 12, resets_at: RESETS_AT }] },
+      },
+    },
+    {
+      id: "tier1.json",
+      authIndex: "idx-1",
+      label: "first@example.com",
+      provider: "claude",
+      priority: 100,
+      state: "available",
+      usage: {
+        source: "claude.usage-api",
+        rateLimits: { limits: [{ kind: "session", percent: 50, resets_at: RESETS_AT }] },
+      },
+    },
+    {
+      id: "off.json",
+      label: "off@example.com",
+      provider: "claude",
+      priority: 10,
+      state: "disabled",
+      usage: null,
+    },
+  ];
   const gatewaySnapshot: ProviderInstanceUsageSnapshot = {
     instanceId: gatewayInstanceId,
-    payload: {
-      source: "cliproxyapi.management",
-      accounts: [
-        {
-          id: "tier2.json",
-          authIndex: "idx-2",
-          label: "second@example.com",
-          provider: "claude",
-          priority: 75,
-          state: "available",
-          usage: {
-            source: "claude.usage-api",
-            rateLimits: { limits: [{ kind: "session", percent: 12, resets_at: RESETS_AT }] },
-          },
-        },
-        {
-          id: "tier1.json",
-          authIndex: "idx-1",
-          label: "first@example.com",
-          provider: "claude",
-          priority: 100,
-          state: "available",
-          usage: {
-            source: "claude.usage-api",
-            rateLimits: { limits: [{ kind: "session", percent: 50, resets_at: RESETS_AT }] },
-          },
-        },
-        {
-          id: "off.json",
-          label: "off@example.com",
-          provider: "claude",
-          priority: 10,
-          state: "disabled",
-          usage: null,
-        },
-      ],
-    },
+    payload: { source: "cliproxyapi.management", accounts: poolAccounts },
     observedAt: NOW - 30_000,
   };
   const providers = [
@@ -305,6 +303,53 @@ describe("resolveProviderUsageMeter", () => {
       ["first@example.com", false, true],
       ["second@example.com", true, false],
     ]);
+  });
+
+  it("adds Muse quota to other threads' meters in place of the gateway's unreadable Meta rows", () => {
+    const museLimits = limits([
+      { id: "muse-weekly", kind: "weekly", label: "Weekly", usedPercent: 30, resetsAt: RESETS_AT },
+    ]);
+    const withMuse = [
+      ...providers,
+      provider("muse", "muse", { displayName: "Muse CPA", usageLimits: museLimits }),
+    ];
+    const metaAccount = {
+      id: "meta.json",
+      label: "meta@example.com",
+      provider: "meta",
+      priority: null,
+      state: "available",
+      usage: null,
+    };
+    const poolWithMeta: ProviderInstanceUsageSnapshot = {
+      ...gatewaySnapshot,
+      payload: { source: "cliproxyapi.management", accounts: [...poolAccounts, metaAccount] },
+    };
+    const meter = (activeInstanceId: string, providerList = withMuse) =>
+      resolveProviderUsageMeter({
+        providers: providerList,
+        snapshots: [poolWithMeta],
+        activeInstanceId: ProviderInstanceId.make(activeInstanceId),
+        activeModel: "claude-opus-4-8",
+        threadId: "thread-1",
+        threadAccount: null,
+        now: NOW,
+      }).accounts.map((account) => account.email ?? account.displayName);
+
+    expect(meter("claudeAgent_proxy")).toEqual([
+      "first@example.com",
+      "second@example.com",
+      "Muse CPA",
+    ]);
+    expect(meter("claudeAgent_proxy", providers)).toContain("meta@example.com");
+    expect(meter("codex")).toEqual(["codex", "Muse CPA"]);
+    expect(meter("muse")).toEqual(["Muse CPA"]);
+    const staleMuse = providers.concat(
+      provider("muse", "muse", {
+        usageLimits: { ...museLimits, checkedAt: "2026-07-23T00:00:00.000Z" },
+      }),
+    );
+    expect(meter("claudeAgent_proxy", staleMuse)).toContain("meta@example.com");
   });
 
   it("shows a placeholder row for a gateway instance whose pool was not read yet", () => {
