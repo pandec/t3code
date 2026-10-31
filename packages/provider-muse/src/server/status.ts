@@ -9,6 +9,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 
 import { createMuseSdkHost, makeMuseEnvironment } from "./sdk.ts";
 import { parseMuseVersion } from "./maintenance.ts";
+import { museUsageOutputToLimits } from "./usageLimits.ts";
 import { discoverMuseModels, museModelCapabilities } from "./modelCatalog.ts";
 import {
   buildServerProvider,
@@ -69,8 +70,10 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
       slashCommands: [COMPACT_SLASH_COMMAND],
       probe,
     });
-  const versionResult = yield* Effect.gen(function* () {
-    const spawnCommand = yield* resolveSpawnCommand(settings.binaryPath, ["--version"], {
+  const runMuse = Effect.fn("checkMuseProviderStatus.runMuse")(function* (
+    args: ReadonlyArray<string>,
+  ) {
+    const spawnCommand = yield* resolveSpawnCommand(settings.binaryPath, [...args], {
       env: museEnvironment,
     });
     return yield* spawnAndCollect(
@@ -81,7 +84,11 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
         ...(cwd ? { cwd } : {}),
       }),
     );
-  }).pipe(Effect.timeoutOption(DEFAULT_TIMEOUT_MS), Effect.result);
+  });
+  const versionResult = yield* runMuse(["--version"]).pipe(
+    Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+    Effect.result,
+  );
 
   if (Result.isFailure(versionResult)) {
     const missing = isCommandMissingCause(versionResult.failure);
@@ -116,10 +123,23 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
     });
   }
 
-  const catalog = yield* discoverMuseModels(settings, museEnvironment, cwd, createHost).pipe(
-    Effect.scoped,
-    Effect.timeoutOption(12_000),
-    Effect.result,
+  // `muse usage` reads the subscription allowance without a model turn.
+  const [catalog, usageLimits] = yield* Effect.all(
+    [
+      discoverMuseModels(settings, museEnvironment, cwd, createHost).pipe(
+        Effect.scoped,
+        Effect.timeoutOption(12_000),
+        Effect.result,
+      ),
+      runMuse(["usage", "--json"]).pipe(
+        Effect.timeout(15_000),
+        Effect.map((output) =>
+          museUsageOutputToLimits(output.code === 0 ? output.stdout : "", checkedAt),
+        ),
+        Effect.orElseSucceed(() => museUsageOutputToLimits("", checkedAt)),
+      ),
+    ],
+    { concurrency: "unbounded" },
   );
   if (Result.isFailure(catalog) || Option.isNone(catalog.success)) {
     return snapshot({
@@ -133,7 +153,7 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
   }
   const models = catalog.success.value;
   // MSP has no auth signal and serves cached models while logged out; failures surface on first turn.
-  return snapshot(
+  const ready = snapshot(
     {
       installed: true,
       version,
@@ -148,4 +168,5 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
     },
     models,
   );
+  return { ...ready, usageLimits };
 });

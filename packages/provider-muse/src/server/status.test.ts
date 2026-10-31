@@ -79,7 +79,9 @@ it.layer(NodeServices.layer)("Muse status", (it) => {
   it.effect("discovers the Meta catalog without treating it as authentication proof", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const binaryPath = yield* fakeCli();
+        const binaryPath = yield* fakeCli(
+          'process.stdout.write(process.argv.includes("usage") ? JSON.stringify({ allowance: { weekly: { usedPercent: 7 } } }) : "muse 1.0.3-R2198.1\\n");',
+        );
         const host = makeHost(metaCatalog);
         const snapshot = yield* checkMuseProviderStatus(
           settings({ enabled: true, binaryPath, customModels: ["muse-custom"] }),
@@ -92,6 +94,9 @@ it.layer(NodeServices.layer)("Muse status", (it) => {
         expect(snapshot.slashCommands).toEqual([COMPACT_SLASH_COMMAND]);
         expect(snapshot.auth).toEqual({ status: "unknown" });
         expect(snapshot.version).toBe("1.0.3-R2198.1");
+        expect(snapshot.usageLimits?.windows).toEqual([
+          { id: "muse-weekly", kind: "weekly", label: "Weekly", usedPercent: 7 },
+        ]);
         expect(snapshot.models.map((model) => model.slug)).toEqual([
           "muse-wonder-1.0",
           "muse-custom",
