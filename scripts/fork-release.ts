@@ -34,26 +34,39 @@ const releaseDirPattern = new RegExp(
   `^v\\d+\\.\\d+\\.\\d+-${FORK_RELEASE_PRERELEASE_ID}\\.\\d{8}\\.(\\d+)$`,
 );
 
-// Default handlers kill Node mid-spawnSync and skip the manifest restore; failing the step lets it run.
+// Default handlers kill Node and skip the manifest restore; forward to the step and fail it instead.
 let interrupted: NodeJS.Signals | undefined;
+let activeChild: NodeChildProcess.ChildProcess | undefined;
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
   process.on(signal, () => {
     interrupted = signal;
+    activeChild?.kill(signal);
   });
 }
 
-function run(command: string, args: ReadonlyArray<string>, env: NodeJS.ProcessEnv = {}) {
+async function run(command: string, args: ReadonlyArray<string>, env: NodeJS.ProcessEnv = {}) {
   if (interrupted !== undefined) throw new Error(`Interrupted by ${interrupted}.`);
   console.log(`\n$ ${[command, ...args].join(" ")}`);
-  const result = NodeChildProcess.spawnSync(command, args, {
+  const child = NodeChildProcess.spawn(command, args, {
     cwd: repoRoot,
     stdio: "inherit",
     env: { ...process.env, ...env },
   });
-  if (result.status !== 0 || interrupted !== undefined) {
-    throw new Error(
-      `${command} ${args.join(" ")} failed (${result.error?.message ?? interrupted ?? result.signal ?? `exit ${String(result.status)}`}).`,
+  activeChild = child;
+  try {
+    const [code, signal] = await new Promise<[number | null, NodeJS.Signals | null]>(
+      (resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", (exitCode, exitSignal) => resolve([exitCode, exitSignal]));
+      },
     );
+    if (code !== 0 || interrupted !== undefined) {
+      throw new Error(
+        `${command} ${args.join(" ")} failed (${interrupted ?? signal ?? `exit ${String(code)}`}).`,
+      );
+    }
+  } finally {
+    activeChild = undefined;
   }
 }
 
@@ -89,7 +102,7 @@ function nextVersion(): string {
   return `${base}-${FORK_RELEASE_PRERELEASE_ID}.${date}.${String(Math.max(0, ...used) + 1)}`;
 }
 
-function buildArchive(target: HostTarget, version: string, releaseDir: string) {
+async function buildArchive(target: HostTarget, version: string, releaseDir: string) {
   const { platform, arch } = target;
   const resourceMonitorDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-fork-monitor-"));
   // Archive versions come from these manifests; restore them so the checkout stays clean.
@@ -98,15 +111,15 @@ function buildArchive(target: HostTarget, version: string, releaseDir: string) {
     return [filePath, NodeFS.readFileSync(filePath)] as const;
   });
   try {
-    run("node", ["scripts/update-release-package-versions.ts", version]);
-    run("vp", ["run", "--filter", "t3", "build"]);
-    run("vp", ["run", "build:resource-monitor"]);
+    await run("node", ["scripts/update-release-package-versions.ts", version]);
+    await run("vp", ["run", "--filter", "t3", "build"]);
+    await run("vp", ["run", "build:resource-monitor"]);
     NodeFS.copyFileSync(
       NodePath.join(repoRoot, "native/resource-monitor/target/release/t3-resource-monitor"),
       NodePath.join(resourceMonitorDir, "t3-resource-monitor"),
     );
-    run("node", ["apps/server/scripts/cli.ts", "build-exe"]);
-    run("node", [
+    await run("node", ["apps/server/scripts/cli.ts", "build-exe"]);
+    await run("node", [
       "scripts/build-cli-archive.ts",
       "--platform",
       platform,
@@ -125,7 +138,7 @@ function buildArchive(target: HostTarget, version: string, releaseDir: string) {
   }
   const fileName = cliArchiveFileName(version, target.platformKey);
   const archivePath = NodePath.join(releaseDir, fileName);
-  run("node", [
+  await run("node", [
     "scripts/smoke-cli-archive.ts",
     "--archive",
     archivePath,
@@ -162,14 +175,14 @@ const version = nextVersion();
 const releaseDir = NodePath.join(releaseRoot, `v${version}`);
 console.log(`Building t3@${version} into ${releaseDir}`);
 try {
-  buildArchive(target, version, releaseDir);
+  await buildArchive(target, version, releaseDir);
 } catch (error) {
   NodeFS.rmSync(releaseDir, { recursive: true, force: true });
   throw error;
 }
 // The new executable is already on this version, so `update` only moves the background service.
 // --allow-downgrade covers the first switch, since `x.y.z-pandec.*` sorts below upstream `x.y.z`.
-run("apps/server/dist-exe/t3", ["update", version, "--yes", "--allow-downgrade"], {
+await run("apps/server/dist-exe/t3", ["update", version, "--yes", "--allow-downgrade"], {
   [CLI_RELEASE_BASE_URL_ENV]: NodeURL.pathToFileURL(releaseRoot).href,
 });
 pruneReleases();

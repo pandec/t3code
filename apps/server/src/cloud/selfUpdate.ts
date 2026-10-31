@@ -20,7 +20,11 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/http";
 
-import { CLI_RELEASE_BASE_URL_ENV, crossesReleaseTrack } from "@t3tools/shared/cliRelease";
+import {
+  CLI_RELEASE_BASE_URL_ENV,
+  crossesReleaseTrack,
+  isForkReleaseVersion,
+} from "@t3tools/shared/cliRelease";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
@@ -104,6 +108,10 @@ export function trackSwitchBlockReason(input: {
   /** Read only for a crossing; undefined when the database cannot be read. */
   readonly databaseMigration: () => number | undefined;
 }): string | null {
+  // The service has no fork release URL, so an upstream target would replace the fork server.
+  if (isForkReleaseVersion(input.serverVersion) && !isForkReleaseVersion(input.targetVersion)) {
+    return `t3@${input.serverVersion} is a fork build; update it with \`vp run release:fork\` on that machine.`;
+  }
   if (!crossesReleaseTrack(input.serverVersion, input.targetVersion)) return null;
   const databaseMigration = input.databaseMigration();
   if (input.targetDatabaseMigration === undefined || databaseMigration === undefined) {

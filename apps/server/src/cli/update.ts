@@ -311,6 +311,20 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
       reason: `'${input.requestedVersion}' is not an exact t3 version.`,
     });
   }
+  const status = yield* service.status;
+  // Service names are per user, so another home's unit belongs to a different install.
+  const servesThisHome =
+    status.installedBaseDir !== undefined &&
+    path.resolve(status.installedBaseDir) === path.resolve(input.baseDir);
+  const serviceInstalled = status.supported && status.installed && servesThisHome;
+  const forkVersion = [currentVersion, serviceInstalled ? status.installedVersion : undefined].find(
+    (version) => version !== undefined && isForkReleaseVersion(version),
+  );
+  if (input.requestedVersion === undefined && forkVersion !== undefined) {
+    return yield* new CliUpdateError({
+      reason: `t3@${forkVersion} is a fork build. Run \`vp run release:fork\` from the fork checkout, or pass an exact version.`,
+    });
+  }
   const progress = createUpdateProgress();
   progress.status("Checking for updates...");
   const targetVersion = yield* (
@@ -345,20 +359,6 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     }
   }
 
-  const status = yield* service.status;
-  const forkVersion = [currentVersion, status.installedVersion].find(
-    (version) => version !== undefined && isForkReleaseVersion(version),
-  );
-  if (input.requestedVersion === undefined && forkVersion !== undefined) {
-    return yield* new CliUpdateError({
-      reason: `t3@${forkVersion} is a fork build. Run \`vp run release:fork\` from the fork checkout, or pass an exact version.`,
-    });
-  }
-  // Service names are per user, so another home's unit belongs to a different install.
-  const servesThisHome =
-    status.installedBaseDir !== undefined &&
-    path.resolve(status.installedBaseDir) === path.resolve(input.baseDir);
-  const serviceInstalled = status.supported && status.installed && servesThisHome;
   const foreground = yield* findForegroundServer({
     serverRuntimeStatePath: input.serverRuntimeStatePath,
     serviceInstalled,
