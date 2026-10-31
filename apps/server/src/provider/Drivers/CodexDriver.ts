@@ -149,6 +149,7 @@ export const CodexDriver: ProviderDriver<
     const serverConfig = yield* ServerConfig.ServerConfig;
     const httpClient = yield* HttpClient.HttpClient;
     const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
+    const installation = yield* CodexInstallation.CodexInstallation;
     const modelCatalog = yield* ModelCatalog.ModelCatalog;
     const currentCatalog = modelCatalog.current(DRIVER_KIND);
     // Same base environment as the v2 adapter, so the continuation identity
@@ -210,6 +211,7 @@ export const CodexDriver: ProviderDriver<
         onUsageLimits: (update) => snapshot.applyUsageLimits(update),
         // Fork (DECISIONS 5.9): thread identity in the commands Codex runs.
         t3Paths: { baseDir: serverConfig.baseDir, stateDir: serverConfig.stateDir },
+        compatibility: installation.compatibility,
       },
     ).pipe(
       Effect.mapError(

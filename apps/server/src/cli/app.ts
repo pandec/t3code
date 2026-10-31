@@ -1,4 +1,6 @@
 // @effect-diagnostics globalTimers:off -- The Node socket client owns its response deadline and clears it on every completion path.
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect stat follows symlinks; IPC ownership validation requires lstat.
+import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 
@@ -9,7 +11,10 @@ import {
   type DesktopAppActivationPlatform,
   type DesktopAppActivationRequest,
 } from "@t3tools/contracts";
-import { resolveDesktopAppControlAddress } from "@t3tools/shared/desktopAppControl";
+import {
+  resolveDesktopAppControlAddress,
+  type DesktopAppControlAddress,
+} from "@t3tools/shared/desktopAppControl";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
@@ -77,14 +82,26 @@ function isDesktopPlatform(platform: NodeJS.Platform): platform is DesktopAppAct
   return platform === "darwin" || platform === "linux" || platform === "win32";
 }
 
-function sendDesktopAppActivationRequest(input: {
-  readonly address: string;
-  readonly fallbackAddresses?: ReadonlyArray<string>;
+async function sendDesktopAppActivationRequest(input: {
+  readonly address: DesktopAppControlAddress;
+  readonly fallbackAddresses?: ReadonlyArray<DesktopAppControlAddress>;
+  readonly userId: number | undefined;
   readonly request: DesktopAppActivationRequest;
   readonly timeoutMs?: number;
 }): Promise<DesktopAppActivationResponse> {
+  if (input.address.directory !== null) {
+    const stat = await NodeFSP.lstat(input.address.directory);
+    if (
+      !stat.isDirectory() ||
+      input.userId === undefined ||
+      stat.uid !== input.userId ||
+      (stat.mode & 0o077) !== 0
+    ) {
+      throw new Error("The desktop app socket directory is not private or owned by this user.");
+    }
+  }
   return new Promise((resolve, reject) => {
-    const socket = NodeNet.createConnection(input.address);
+    const socket = NodeNet.createConnection(input.address.address);
     socket.setEncoding("utf8");
     let buffer = "";
     let settled = false;
@@ -163,6 +180,7 @@ function sendDesktopAppActivationRequest(input: {
             ...(remainingFallbackAddresses.length === 0
               ? {}
               : { fallbackAddresses: remainingFallbackAddresses }),
+            userId: input.userId,
             request: input.request,
             ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
           }),
@@ -210,14 +228,14 @@ const runAppCommand = Effect.fn("cli.app")(function* (flags: {
       tempDir: NodeOS.tmpdir(),
       userId,
       joinPath: path.join,
-    }).address;
+    });
   const stateSubdirectories = Option.isSome(flags.baseDir)
     ? (["userdata"] as const)
     : (["dev-packaged", "userdata", "dev"] as const);
   const [firstStateSubdirectory, ...fallbackStateSubdirectories] = stateSubdirectories;
   const address = resolveAddress(firstStateSubdirectory);
   const fallbackAddresses = fallbackStateSubdirectories.map(resolveAddress);
-  const candidateAddresses = [address, ...fallbackAddresses];
+  const candidateAddresses = [address, ...fallbackAddresses].map((candidate) => candidate.address);
   const crypto = yield* Crypto.Crypto;
   const requestId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
   const request: DesktopAppActivationRequest = {
@@ -231,6 +249,7 @@ const runAppCommand = Effect.fn("cli.app")(function* (flags: {
     try: () =>
       sendDesktopAppActivationRequest({
         address,
+        userId,
         ...(fallbackAddresses.length === 0 ? {} : { fallbackAddresses }),
         request,
       }),

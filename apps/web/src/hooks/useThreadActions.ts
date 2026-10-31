@@ -128,14 +128,6 @@ const forkingThreadKeys = new Set<string>();
  * (menu plus shortcut) runs once. */
 const archivingThreadKeys = new Set<string>();
 
-/** Deleting a thread expires every pending Undo that would try to revive it. */
-function invalidateThreadUndos(target: ScopedThreadRef) {
-  const key = scopedThreadKey(target);
-  for (const kind of ["archive", "snooze", "settle", "pin"]) {
-    ThreadUndo.invalidate(kind, key);
-  }
-}
-
 export class ThreadSettlementUnsupportedError extends Schema.TaggedError<ThreadSettlementUnsupportedError>()(
   "ThreadSettlementUnsupportedError",
   {
@@ -341,6 +333,13 @@ export function useAcknowledgeThreadWoke() {
   };
 }
 
+// These Undos restore a thread's place in the list, which archiving or deleting it ends.
+const LIST_PLACEMENT_UNDO_KINDS = ["settle", "snooze", "pin"];
+
+function expireThreadUndos(target: ScopedThreadRef, kinds: readonly string[]) {
+  for (const kind of kinds) ThreadUndo.invalidate(kind, scopedThreadKey(target));
+}
+
 /** A No project thread that already has its own folder, on a server that can promote it. */
 export function canTurnThreadIntoProject(threadRef: ScopedThreadRef): boolean {
   const thread = readThreadShell(threadRef);
@@ -529,6 +528,7 @@ export function useThreadActions() {
       );
     }
 
+    const requestingRouteHref = router.state.location.href;
     const currentRouteThreadRef = getCurrentRouteThreadRef();
     const wasOpen =
       currentRouteThreadRef?.threadId === threadRef.threadId &&
@@ -547,6 +547,7 @@ export function useThreadActions() {
     // Archived rows leave every list surface carrying the pause control,
     // so the thread's audio pauses (but stays loaded and resumable).
     pauseListeningForThread(threadRef.environmentId, threadRef.threadId);
+    expireThreadUndos(threadRef, LIST_PLACEMENT_UNDO_KINDS);
     const wokeAt = threadWokeAt(thread, { now: new Date().toISOString() });
     if (wokeAt !== null) {
       markThreadVisited(scopedThreadKey(threadRef), wokeAt);
@@ -572,7 +573,12 @@ export function useThreadActions() {
       router.navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(ref) }),
     );
 
-    if (wasOpen && !foldedSplit && routeKeyAfterArchive === threadKey) {
+    if (
+      wasOpen &&
+      !foldedSplit &&
+      routeKeyAfterArchive === threadKey &&
+      router.state.location.href === requestingRouteHref
+    ) {
       const previous = resolveVisitTargetAfterPark(threadRef);
       if (previous?.kind === "server") landedOn = scopedThreadKey(previous.threadRef);
       const navigationResult = await settlePromise((): Promise<unknown> =>
@@ -607,7 +613,7 @@ export function useThreadActions() {
         input: { threadId: target.threadId },
       });
       if (result._tag === "Success") {
-        invalidateThreadUndos(target);
+        expireThreadUndos(target, [...LIST_PLACEMENT_UNDO_KINDS, "archive"]);
         refreshArchivedThreadsForEnvironment(target.environmentId);
         // Audio owned by a deleted thread must not keep playing with no
         // control anywhere.
@@ -727,7 +733,7 @@ export function useThreadActions() {
     if (deleteResult._tag === "Failure") {
       return deleteResult;
     }
-    invalidateThreadUndos(threadRef);
+    expireThreadUndos(threadRef, [...LIST_PLACEMENT_UNDO_KINDS, "archive"]);
     refreshArchivedThreadsForEnvironment(threadRef.environmentId);
     // Audio owned by a deleted thread must not keep playing with no
     // control anywhere.

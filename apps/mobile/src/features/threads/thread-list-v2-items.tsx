@@ -843,6 +843,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       ? { ...workingLabel, label: "Goal" }
       : workingLabel) ?? (isUnread ? DONE_STATUS_LABEL : undefined);
   const recede = shouldRecedeThreadRow({ status, selected });
+  const isRegeneratingTitle = thread.titleRegeneration != null;
   const timeLabel = props.timeLabel;
   // Fork: a scheduled (deferred) archive stays visible at a glance in both
   // row variants until it runs or is cancelled from the row menu. The row's
@@ -851,6 +852,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const rowAccessibilityLabel = [
     thread.title,
     props.hasQueuedMessages && "messages queued to send",
+    isRegeneratingTitle && "regenerating title",
     archivePending && "archives when done",
     activeMarkedRow && "marked active",
   ]
@@ -1106,7 +1108,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       { id: "rename", title: "Rename", image: "square.and.pencil" },
       ...buildThreadTitleRegenerationMenuItems({
         supported: props.titleRegenerationSupported,
-        isRegenerating: thread.titleRegeneration != null,
+        isRegenerating: isRegeneratingTitle,
       }),
       ...(canTurnIntoProject
         ? [
@@ -1119,12 +1121,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           ]
         : []),
     ],
-    [
-      canTurnIntoProject,
-      props.titleRegenerationSupported,
-      thread.runtime,
-      thread.titleRegeneration,
-    ],
+    [canTurnIntoProject, props.titleRegenerationSupported, thread.runtime, isRegeneratingTitle],
   );
   const snoozableCardMenuActions = useMemo<MenuAction[]>(
     () => [
@@ -1412,6 +1409,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             selected
               ? selectedThreadRowColors.foregroundClassName
               : rowAppearance.foregroundClassName,
+            isRegeneratingTitle && "opacity-55",
           )}
           numberOfLines={2}
         >
@@ -1758,6 +1756,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                 selected
                   ? selectedThreadRowColors.foregroundClassName
                   : rowAppearance.mutedForegroundClassName,
+                isRegeneratingTitle && "opacity-55",
               )}
               numberOfLines={1}
             >

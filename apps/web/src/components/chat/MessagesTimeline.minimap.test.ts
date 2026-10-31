@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@t3tools/shared/composerContextReferences";
 import type { MessagesTimelineRow } from "./MessagesTimeline.logic";
 import {
   computeTimelineMinimapState,
@@ -85,6 +86,18 @@ describe("deriveTimelineMinimapItems", () => {
       { id: "assistant-1", positionIndex: 0, positionCount: 3 },
       { id: "assistant-3", positionIndex: 2, positionCount: 3 },
     ]);
+  });
+
+  it.each(["", "Ultrathink:\n"])("omits the attachment-only bootstrap prompt (%j)", (prefix) => {
+    const rows = [
+      messageRow({
+        id: "image-only",
+        role: "user",
+        text: prefix + ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
+      }),
+    ];
+
+    expect(deriveTimelineMinimapItems(rows, "user-turn")[0]?.primaryText).toBeNull();
   });
 });
 

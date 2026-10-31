@@ -1,3 +1,4 @@
+import { isAttachmentOnlyBootstrapPrompt } from "@t3tools/shared/composerContextReferences";
 import { parseThreadLinkHref } from "@t3tools/shared/threadLinks";
 
 import type { MessagesTimelineRow } from "./MessagesTimeline.logic";
@@ -40,6 +41,7 @@ type MessageRow = Extract<MessagesTimelineRow, { kind: "message" }>;
 const MARKDOWN_AUTOLINK = /<([a-z][\w+.-]*:[^\s<>]*)>/gi;
 
 function compactMinimapPreview(text: string | null | undefined) {
+  if (text && isAttachmentOnlyBootstrapPrompt(text)) return null;
   const compact =
     text
       // A thread autolink's only text is its URL.

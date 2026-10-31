@@ -247,6 +247,7 @@ import {
   resolveSidebarProjectScope,
   resolveSidebarProjectScopePhysicalKeys,
   resolveSidebarThreadSection,
+  resolveSidebarReorderableThreadKeys,
   searchSidebarThreads,
   shouldCreateNewThreadInCurrentProject,
   shouldNavigateAfterThreadPark,
@@ -416,6 +417,7 @@ interface SidebarThreadPartitionInput {
   /** Tasks linked environments run for a listed thread; they show under it. */
   readonly delegatedUnderParent: ReadonlySet<string>;
   readonly serverConfigs: ReadonlyMap<EnvironmentId, EnvironmentServerConfig>;
+  readonly connectedEnvironmentIds: readonly EnvironmentId[];
   readonly optimisticDrop: SidebarOptimisticDrop | null;
   readonly workingShelfEnabled: boolean;
   /** Boring mode: folders list active threads by the user's latest message. */
@@ -536,15 +538,14 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
       : active;
   const snoozed: EnvironmentThreadShell[] = [];
   const settled: EnvironmentThreadShell[] = [];
-  const draggable = new Set<string>();
-  const activeReorderable = new Set<string>();
+  const { draggableThreadKeys, activeReorderableThreadKeys } = resolveSidebarReorderableThreadKeys({
+    threads: visible,
+    serverConfigs,
+    connectedEnvironmentIds: input.connectedEnvironmentIds,
+  });
   for (const thread of visible) {
     const configLoaded = serverConfigs.has(thread.environmentId);
     const threadKey = threadShellKey(thread);
-    if (configLoaded) {
-      activeReorderable.add(threadKey);
-      draggable.add(threadKey);
-    }
     if (optimisticDrop?.key === threadKey) {
       const dropped = applySidebarThreadDrop(
         thread,
@@ -587,7 +588,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
       ).push(thread);
     }
   }
-  // A loaded config gates dragging only; the sort must not depend on it, so web and mobile agree.
+  // Availability gates dragging only; sorting must stay consistent across clients.
   const sortedPinned = sortPinnedThreadsForSidebar(pinned);
   const sortedActive = sortActiveBySend
     ? sortWorkingThreadsBySend(active)
@@ -603,8 +604,8 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
             preferredIds: optimisticDrop.order,
             getId: threadShellKey,
           }),
-    draggableThreadKeys: draggable,
-    activeReorderableThreadKeys: activeReorderable,
+    draggableThreadKeys,
+    activeReorderableThreadKeys,
     activeThreads:
       optimisticDrop?.section !== "active" || optimisticDrop.order === null
         ? sortedActive
@@ -943,6 +944,7 @@ function useSidebarThreads(input: {
   readonly hiddenProjectKeys: ReadonlySet<string>;
   readonly delegatedUnderParent: ReadonlySet<string>;
   readonly serverConfigs: ReadonlyMap<EnvironmentId, EnvironmentServerConfig>;
+  readonly connectedEnvironmentIds: readonly EnvironmentId[];
   readonly optimisticDrop: SidebarOptimisticDrop | null;
   readonly workingShelfEnabled: boolean;
   readonly activeWorkFilter: boolean;
@@ -964,6 +966,7 @@ function useSidebarThreads(input: {
     hiddenProjectKeys,
     delegatedUnderParent,
     serverConfigs,
+    connectedEnvironmentIds,
     optimisticDrop,
     workingShelfEnabled,
     activeWorkFilter,
@@ -1062,6 +1065,7 @@ function useSidebarThreads(input: {
     hiddenProjectKeys,
     delegatedUnderParent,
     serverConfigs,
+    connectedEnvironmentIds,
     optimisticDrop,
     workingShelfEnabled,
     sortActiveBySend: folderGroups !== null,
@@ -1990,9 +1994,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       ? selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef).terminalOpen
       : false,
   );
-  const searchEnvironmentIds = useConnectedEnvironmentIds();
+  const connectedEnvironmentIds = useConnectedEnvironmentIds();
   const threadSearch = useThreadSearch(
-    searchEnvironmentIds,
+    connectedEnvironmentIds,
     threadSearchQuery,
     scopedProjectKeys === null || projectIdsByEnvironment === undefined
       ? {}
@@ -2051,6 +2055,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     hiddenProjectKeys: hiddenPhysicalProjectKeys,
     delegatedUnderParent,
     serverConfigs,
+    connectedEnvironmentIds,
     optimisticDrop,
     workingShelfEnabled,
     activeWorkFilter,

@@ -608,6 +608,7 @@ export function resolveComposerProviderSelection(input: {
       : requestedInstanceId;
   return {
     selectedProviderEntry,
+    requestedInstanceId,
     requestedDriverKind,
     lockedContinuationGroupKey,
     unavailableProviderInstanceId,
@@ -840,6 +841,7 @@ export function cloneComposerImageForRetry(
 export function deriveComposerSendState(options: {
   prompt: string;
   imageCount: number;
+  existingAttachmentCount?: number;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
   elementContextCount?: number;
 }): {
@@ -860,6 +862,7 @@ export function deriveComposerSendState(options: {
     hasSendableContent:
       trimmedPrompt.length > 0 ||
       options.imageCount > 0 ||
+      (options.existingAttachmentCount ?? 0) > 0 ||
       sendableTerminalContexts.length > 0 ||
       elementContextCount > 0,
   };

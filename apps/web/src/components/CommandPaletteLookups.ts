@@ -40,19 +40,10 @@ export function useEnvironmentLookups() {
 
 export function useProjectLookups() {
   const projects = useProjects();
-  // Keyed by scoped `environmentId:projectId`: bare project ids can collide
-  // across environments (state gets cloned between machines) and would
-  // overwrite each other's cwd/title/favicon.
-  const projectCwdByKey = new Map<string, string>(
-    projects.map((project) => [`${project.environmentId}:${project.id}`, project.workspaceRoot]),
-  );
   const projectByKey = new Map(
     projects.map((project) => [`${project.environmentId}:${project.id}`, project]),
   );
-  const projectTitleByKey = new Map<string, string>(
-    projects.map((project) => [`${project.environmentId}:${project.id}`, project.title]),
-  );
-  return { projectCwdByKey, projectByKey, projectTitleByKey };
+  return { projectByKey };
 }
 
 export const selectCommandPaletteClientSettings = (settings: ClientSettings) => ({

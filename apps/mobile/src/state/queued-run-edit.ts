@@ -9,6 +9,7 @@ import type {
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
+import { stripAttachmentOnlyBootstrapPrompt } from "@t3tools/shared/composerContextReferences";
 import {
   makeQueuedRunEditStore,
   type QueuedRunsAtom,
@@ -223,10 +224,15 @@ export function beginQueuedRunEdit(
   // The composer moves off the thread draft, so a paste or pick still running for it is dropped.
   abortComposerDraftOperations(threadKey);
   const draftKey = queuedEditDraftKey(threadKey, edit.runId);
+  const originalText = stripAttachmentOnlyBootstrapPrompt(edit.originalText);
   clearComposerDraft(draftKey);
-  setComposerDraftText(draftKey, edit.originalText, edit.inputOrigin);
+  setComposerDraftText(draftKey, originalText, edit.inputOrigin);
   setComposerDraftContext(draftKey, edit.context);
-  queuedRunEdits.begin(threadKey, edit, { runs, onRunLeftQueue: exitQueuedRunEdit });
+  queuedRunEdits.begin(
+    threadKey,
+    { ...edit, originalText },
+    { runs, onRunLeftQueue: exitQueuedRunEdit },
+  );
 }
 
 export function removeQueuedRunEditAttachment(threadKey: string, attachmentId: string): void {

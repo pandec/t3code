@@ -67,7 +67,7 @@ import { RecentArchivedThreadSection } from "../threads/RecentArchivedThreadSect
 import { useArchivedThreadListActions } from "./useThreadListActions";
 import { mergePendingArchivedThreads } from "../../state/thread-lifecycle-outbox-model";
 import { usePendingThreadOrder } from "../../state/thread-order";
-import { threadListEnvironmentsAtom } from "../../state/server";
+import { threadListEnvironmentsAtom } from "../../state/presentation";
 import { useProjectAccentColors } from "../../state/use-project-accent-colors";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useQueuedThreadKeys } from "../../state/use-thread-outbox";

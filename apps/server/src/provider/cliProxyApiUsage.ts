@@ -212,8 +212,10 @@ export function resolveCliProxyApiUsageProbeTarget(
       return null;
     }
   };
-  const environmentValue = (name: string): string | undefined =>
-    envelope.environment?.find((variable) => variable.name === name)?.value;
+  const environmentValue = (name: string): string | undefined => {
+    const value = envelope.environment?.find((variable) => variable.name === name)?.value;
+    return typeof value === "string" ? value : undefined;
+  };
   const anthropicClient = {
     url: origin(environmentValue("ANTHROPIC_BASE_URL")),
     key: environmentValue("ANTHROPIC_AUTH_TOKEN"),

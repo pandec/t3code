@@ -44,7 +44,7 @@ import { useThreadGroups } from "../../state/use-thread-groups";
 import { ThreadCustomGroupHeader } from "./ThreadCustomGroupHeader";
 import { useThreadListNow } from "./use-thread-list-now";
 import { usePendingThreadOrder } from "../../state/thread-order";
-import { threadListEnvironmentsAtom } from "../../state/server";
+import { threadListEnvironmentsAtom } from "../../state/presentation";
 import { usePendingNewTasks, type PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useQueuedThreadKeys } from "../../state/use-thread-outbox";
 import { useWorkspaceState } from "../../state/workspace";
@@ -89,6 +89,7 @@ import {
 import { useProjectAccentColors } from "../../state/use-project-accent-colors";
 import { useThreadRowProviderInstanceResolver } from "./thread-provider-instance";
 import type { ThreadPrPresentation } from "../../state/thread-pr-presentation";
+import { ThreadPrDemandProvider } from "../../state/thread-pr-demand";
 import {
   isThreadListV2ListItem,
   threadListV2ListItemsAreEqual,
@@ -132,10 +133,15 @@ interface ThreadNavigationSidebarProps {
 }
 
 export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
-  if (Platform.OS !== "ios") {
-    return <ThreadNavigationSidebarPane {...props} nativeChrome={false} />;
-  }
-  return <NativeSidebarContainer {...props} />;
+  return (
+    <ThreadPrDemandProvider visible={props.visible}>
+      {Platform.OS !== "ios" ? (
+        <ThreadNavigationSidebarPane {...props} nativeChrome={false} />
+      ) : (
+        <NativeSidebarContainer {...props} />
+      )}
+    </ThreadPrDemandProvider>
+  );
 }
 
 function NativeSidebarContainer(props: ThreadNavigationSidebarProps) {

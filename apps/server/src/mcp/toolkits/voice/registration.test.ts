@@ -42,6 +42,7 @@ import * as PreviewManager from "../../../preview/Manager.ts";
 import * as SourceControlRepositoryService from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as AgentVoiceReply from "../../../voice/AgentVoiceReply.ts";
+import * as ProjectCloneTracker from "../../../project/ProjectCloneTracker.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
 import type { McpCapability } from "../../McpInvocationContext.ts";
 import * as McpSessionRegistry from "../../McpSessionRegistry.ts";
@@ -67,6 +68,7 @@ const StubServicesLive = Layer.mergeAll(
   Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
   Layer.mock(SecretRequests.SecretRequests)({}),
   Layer.mock(ProjectService.ProjectService)({}),
+  Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({}),
   ServerSettings.layerTest({}),
   Layer.mock(TelegramService.TelegramService)({}),
   Layer.mock(LabsService.LabsService)({}),
