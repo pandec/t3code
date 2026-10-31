@@ -60,7 +60,7 @@ describe("Muse usage limit failures", () => {
 });
 
 describe("museUsageOutputToLimits", () => {
-  const checkedAt = "2026-10-31T04:40:33.517Z";
+  const checkedAt = "2026-10-31T04:45:00.000Z";
 
   it("reads `muse usage --json` windows, clamping Meta's over-quota percentages", () => {
     const output = JSON.stringify({
@@ -76,7 +76,7 @@ describe("museUsageOutputToLimits", () => {
       hint: null,
     });
     expect(museUsageOutputToLimits(output, checkedAt)).toEqual({
-      checkedAt,
+      checkedAt: "2026-10-31T04:40:33.517Z",
       windows: [
         {
           id: "muse-window",
@@ -103,6 +103,7 @@ describe("museUsageOutputToLimits", () => {
     expect(noAllowance("api_key")).toBe("unsupported");
     expect(noAllowance("no_allowance")).toBe("unsupported");
     expect(noAllowance("server_sent_no_usage")).toBe("probeFailed");
+    expect(noAllowance("constructor")).toBe("probeFailed");
     expect(
       museUsageOutputToLimits("muse: usage refresh rate-limited", checkedAt).unavailable?.reason,
     ).toBe("probeFailed");

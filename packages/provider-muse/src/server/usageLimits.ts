@@ -20,16 +20,23 @@ const MuseUsageOutput = Schema.Struct({
     Schema.Struct({
       window: Schema.optional(Schema.NullOr(MuseUsageWindow)),
       weekly: Schema.optional(Schema.NullOr(MuseUsageWindow)),
+      asOfMs: Schema.optional(Schema.Finite),
     }),
   ),
   reason: Schema.optional(Schema.NullOr(Schema.String)),
 });
 const decodeMuseUsageOutput = Schema.decodeUnknownOption(Schema.fromJsonString(MuseUsageOutput));
 
-const UNSUPPORTED_ALLOWANCE_REASONS: Record<string, string> = {
-  api_key: "Muse Code is signed in with an API key, which has no subscription allowance.",
-  no_allowance: "This Muse Code account has no subscription allowance.",
-};
+function isoFromMs(ms: number | undefined): string | undefined {
+  return ms !== undefined && ms > 0 && ms <= LATEST_DATE_MS
+    ? DateTime.formatIso(DateTime.makeUnsafe(ms))
+    : undefined;
+}
+
+const UNSUPPORTED_ALLOWANCE_REASONS = new Map([
+  ["api_key", "Muse Code is signed in with an API key, which has no subscription allowance."],
+  ["no_allowance", "This Muse Code account has no subscription allowance."],
+]);
 
 /** Translate `muse usage --json` output; any unreadable answer is a failed probe. */
 export function museUsageOutputToLimits(
@@ -45,7 +52,7 @@ export function museUsageOutputToLimits(
   if (Option.isNone(decoded)) return probeFailed;
   const { allowance, reason } = decoded.value;
   if (allowance === null) {
-    const message = reason ? UNSUPPORTED_ALLOWANCE_REASONS[reason] : undefined;
+    const message = reason ? UNSUPPORTED_ALLOWANCE_REASONS.get(reason) : undefined;
     return message === undefined
       ? probeFailed
       : makeUnavailableUsageLimits({ checkedAt, reason: "unsupported", message });
@@ -55,16 +62,14 @@ export function museUsageOutputToLimits(
     base: Pick<ServerProviderUsageWindow, "id" | "kind" | "label">,
   ): ServerProviderUsageWindow[] => {
     if (!window) return [];
-    const resetsAtMs = window.resetsAtMs;
+    const resetsAt = isoFromMs(window.resetsAtMs);
     const durationMins = window.windowDurationMins;
     return [
       {
         ...base,
         // Meta reports over-quota usage verbatim, above 100.
         usedPercent: clampPercent(window.usedPercent),
-        ...(resetsAtMs !== undefined && resetsAtMs > 0 && resetsAtMs <= LATEST_DATE_MS
-          ? { resetsAt: DateTime.formatIso(DateTime.makeUnsafe(resetsAtMs)) }
-          : {}),
+        ...(resetsAt !== undefined ? { resetsAt } : {}),
         ...(durationMins !== undefined && durationMins > 0
           ? { windowDurationMins: Math.round(durationMins) }
           : {}),
@@ -75,7 +80,11 @@ export function museUsageOutputToLimits(
     ...toWindow(allowance.window, { id: "muse-window", kind: "session", label: "Session" }),
     ...toWindow(allowance.weekly, { id: "muse-weekly", kind: "weekly", label: "Weekly" }),
   ];
-  return windows.length > 0 ? makeUsageLimits({ checkedAt, windows }) : probeFailed;
+  // A rate-limited refresh can answer with an older observation; date the bars by it.
+  const asOf = isoFromMs(allowance.asOfMs);
+  const observedAt =
+    asOf !== undefined && Date.parse(asOf) < Date.parse(checkedAt) ? asOf : checkedAt;
+  return windows.length > 0 ? makeUsageLimits({ checkedAt: observedAt, windows }) : probeFailed;
 }
 
 /** Credential proxies may omit error.quota from 429 refusals; inspect text too. */
