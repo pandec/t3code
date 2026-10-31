@@ -85,7 +85,9 @@ arrow/Space selector to opt into remote desktops, the local desktop, and (on mac
 checkout is inspected concurrently and dirty, uninspectable, or non-`dev` states are reported before mutation;
 dirty or uninspectable targets fail the run. Clean non-`dev` targets require a second unchecked batch approval
 to switch branches. When some targets are eligible and others are excluded, interactive runs ask (default No)
-before continuing with the eligible remainder, while non-TTY use skips non-`dev` targets. Local targets share
+before continuing with the eligible remainder, while non-TTY use skips non-`dev` targets. On Linux hosts with `t3code.service` installed, the remote desktop stage also runs
+`vp run release:fork` (`scripts/fork-release.ts`), because that service runs its own pinned runtime
+rather than the AppImage. Local targets share
 checkout/dependency preparation; remote targets, the local desktop install, and the local iOS build all run
 concurrently. Explicit `--host`, `--include-local-desktop`, and `--include-local-ios` flags define the
 complete non-interactive plan. Real subprocess output stays in compact progress rows and retained failure

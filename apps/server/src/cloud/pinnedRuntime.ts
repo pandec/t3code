@@ -166,6 +166,29 @@ const fetchReleaseAsset = Effect.fn("cloud.pinned_runtime.fetch_release_asset")(
   );
 });
 
+/** `file:` base URLs serve builds from a local folder, such as the fork's `scripts/fork-release.ts`. */
+const readReleaseAsset = (
+  input: PinnedRuntimeInstallInput,
+  url: string,
+  step: string,
+  onProgress?: (progress: PinnedRuntimeProgress) => void,
+) =>
+  url.startsWith("file:")
+    ? Effect.suspend(() => input.path.fromFileUrl(new URL(url))).pipe(
+        Effect.flatMap((filePath) => input.fs.readFile(filePath)),
+        Effect.mapError((cause) => new PinnedRuntimeInstallError({ step, cause })),
+        Effect.tap((bytes) =>
+          Effect.sync(() =>
+            onProgress?.({
+              stage: "download",
+              received: bytes.byteLength,
+              total: bytes.byteLength,
+            }),
+          ),
+        ),
+      )
+    : fetchReleaseAsset(input.httpClient, url, step, onProgress);
+
 const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(function* (
   input: PinnedRuntimeInstallInput,
   stagingDir: string,
@@ -177,15 +200,14 @@ const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(fun
       step: `selecting a t3 release archive for ${input.platform}-${input.arch}`,
     });
   }
-  const httpClient = input.httpClient;
   const baseUrl = cliReleaseDownloadBaseUrl(input.version, input.releaseBaseUrl);
   const fileName = cliArchiveFileName(input.version, platformKey);
 
   input.onProgress?.({ stage: "download", received: 0, total: undefined });
   const checksums = parseChecksums(
     new TextDecoder().decode(
-      yield* fetchReleaseAsset(
-        httpClient,
+      yield* readReleaseAsset(
+        input,
         `${baseUrl}/${CLI_RELEASE_CHECKSUMS_FILE}`,
         "downloading the t3 release checksums",
       ),
@@ -197,8 +219,8 @@ const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(fun
       step: `finding ${fileName} in the t3 release checksums`,
     });
   }
-  const archive = yield* fetchReleaseAsset(
-    httpClient,
+  const archive = yield* readReleaseAsset(
+    input,
     `${baseUrl}/${fileName}`,
     "downloading the t3 release archive",
     input.onProgress,

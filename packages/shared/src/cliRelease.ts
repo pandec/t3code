@@ -68,9 +68,15 @@ export const CLI_RELEASE_CHANNELS: ReadonlyArray<CliReleaseChannel> = [
   "preview",
 ];
 
+/** Prerelease id of this private fork's local server builds (`scripts/fork-release.ts`). */
+export const FORK_RELEASE_PRERELEASE_ID = "pandec";
+
 export function cliReleaseChannelOf(version: string): CliReleaseChannel {
-  const channel = /^[^-+]+-(nightly|preview)\.\d{8}\.\d+$/.exec(version)?.[1];
-  return channel === "nightly" || channel === "preview" ? channel : "stable";
+  const channel = new RegExp(
+    `^[^-+]+-(nightly|preview|${FORK_RELEASE_PRERELEASE_ID})\\.\\d{8}\\.\\d+$`,
+  ).exec(version)?.[1];
+  // Fork builds ride the preview track so upstream releases are never offered over them.
+  return channel === undefined ? "stable" : channel === "nightly" ? "nightly" : "preview";
 }
 
 /** Whether updating between these versions crosses Stable and Nightly. Preview builds cross nothing.

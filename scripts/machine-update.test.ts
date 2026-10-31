@@ -304,6 +304,7 @@ it("constructs and classifies the remote desktop command", () => {
     "pnpm install --frozen-lockfile --config.confirmModulesPurge=false || exit 43",
   );
   assert.include(script, "pnpm run install:desktop:dev || exit 44");
+  assert.include(script, "pnpm run release:fork || exit 44");
   assert.isUndefined(classifyRemoteExit(0));
   assert.equal(classifyRemoteExit(42), "pull");
   assert.equal(classifyRemoteExit(46), "preflight");
