@@ -34,16 +34,25 @@ const releaseDirPattern = new RegExp(
   `^v\\d+\\.\\d+\\.\\d+-${FORK_RELEASE_PRERELEASE_ID}\\.\\d{8}\\.(\\d+)$`,
 );
 
+// Default handlers kill Node mid-spawnSync and skip the manifest restore; failing the step lets it run.
+let interrupted: NodeJS.Signals | undefined;
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+  process.on(signal, () => {
+    interrupted = signal;
+  });
+}
+
 function run(command: string, args: ReadonlyArray<string>, env: NodeJS.ProcessEnv = {}) {
+  if (interrupted !== undefined) throw new Error(`Interrupted by ${interrupted}.`);
   console.log(`\n$ ${[command, ...args].join(" ")}`);
   const result = NodeChildProcess.spawnSync(command, args, {
     cwd: repoRoot,
     stdio: "inherit",
     env: { ...process.env, ...env },
   });
-  if (result.status !== 0) {
+  if (result.status !== 0 || interrupted !== undefined) {
     throw new Error(
-      `${command} ${args.join(" ")} failed (${result.error?.message ?? `exit ${String(result.status)}`}).`,
+      `${command} ${args.join(" ")} failed (${result.error?.message ?? interrupted ?? result.signal ?? `exit ${String(result.status)}`}).`,
     );
   }
 }

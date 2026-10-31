@@ -4,6 +4,7 @@ import {
   cliArchiveTarCommand,
   cliReleaseChannelOf,
   crossesReleaseTrack,
+  isForkReleaseVersion,
   newestCliReleaseVersion,
   parseChecksums,
 } from "./cliRelease.ts";
@@ -50,5 +51,7 @@ describe("cliRelease", () => {
     expect(cliReleaseChannelOf("0.1.5-pandec.20261031.2")).toBe("preview");
     expect(crossesReleaseTrack("0.1.5", "0.1.5-pandec.20261031.2")).toBe(false);
     expect(cliReleaseChannelOf("0.1.5-pandec.1")).toBe("stable");
+    expect(isForkReleaseVersion("0.1.5-pandec.20261031.2")).toBe(true);
+    expect(isForkReleaseVersion("0.1.5-preview.20261031.2")).toBe(false);
   });
 });

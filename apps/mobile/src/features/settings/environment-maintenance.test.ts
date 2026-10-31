@@ -86,6 +86,7 @@ describe("environment release checks", () => {
       "1.0.0-preview.20260924.3",
     );
     expect(await findEnvironmentUpdate("1.0.0-preview.20260925.1", signal)).toBeNull();
+    expect(await findEnvironmentUpdate("1.0.0-pandec.20260923.1", signal)).toBeNull();
   });
 
   it("finds a published preview beyond the ten-entry feed and first API page", async () => {

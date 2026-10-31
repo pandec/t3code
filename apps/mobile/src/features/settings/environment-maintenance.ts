@@ -9,6 +9,7 @@ import {
   CLI_RELEASES_PAGE_URL,
   cliReleaseChannelOf,
   cliReleaseIndexPageUrl,
+  isForkReleaseVersion,
   newestCliReleaseVersion,
 } from "@t3tools/shared/cliRelease";
 import { compareSemverVersions } from "@t3tools/shared/semver";
@@ -60,6 +61,7 @@ async function fetchReleases(url: string, accept: string, signal: AbortSignal) {
 }
 
 export async function findEnvironmentUpdate(currentVersion: string, signal: AbortSignal) {
+  if (isForkReleaseVersion(currentVersion)) return null;
   const channel = cliReleaseChannelOf(currentVersion);
   // Public release pages avoid the anonymous API quota shared by devices on the same network.
   const response = await fetchReleases(

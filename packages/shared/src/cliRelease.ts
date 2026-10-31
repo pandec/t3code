@@ -71,6 +71,11 @@ export const CLI_RELEASE_CHANNELS: ReadonlyArray<CliReleaseChannel> = [
 /** Prerelease id of this private fork's local server builds (`scripts/fork-release.ts`). */
 export const FORK_RELEASE_PRERELEASE_ID = "pandec";
 
+/** Fork builds come only from `release:fork`, so nothing should resolve an upstream release over them. */
+export function isForkReleaseVersion(version: string): boolean {
+  return new RegExp(`^[^-+]+-${FORK_RELEASE_PRERELEASE_ID}\\.\\d{8}\\.\\d+$`).test(version);
+}
+
 export function cliReleaseChannelOf(version: string): CliReleaseChannel {
   const channel = new RegExp(
     `^[^-+]+-(nightly|preview|${FORK_RELEASE_PRERELEASE_ID})\\.\\d{8}\\.\\d+$`,

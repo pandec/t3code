@@ -174,9 +174,16 @@ const readReleaseAsset = (
   onProgress?: (progress: PinnedRuntimeProgress) => void,
 ) =>
   url.startsWith("file:")
-    ? Effect.suspend(() => input.path.fromFileUrl(new URL(url))).pipe(
-        Effect.flatMap((filePath) => input.fs.readFile(filePath)),
-        Effect.mapError((cause) => new PinnedRuntimeInstallError({ step, cause })),
+    ? Effect.try({
+        try: () => new URL(url),
+        catch: (cause) => new PinnedRuntimeInstallError({ step, cause }),
+      }).pipe(
+        Effect.flatMap((fileUrl) =>
+          input.path.fromFileUrl(fileUrl).pipe(
+            Effect.flatMap((filePath) => input.fs.readFile(filePath)),
+            Effect.mapError((cause) => new PinnedRuntimeInstallError({ step, cause })),
+          ),
+        ),
         Effect.tap((bytes) =>
           Effect.sync(() =>
             onProgress?.({
