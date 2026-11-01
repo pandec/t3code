@@ -554,3 +554,59 @@ describe("archive runner script", () => {
       }).pipe(Effect.provide(NodeServices.layer)),
   );
 });
+
+describe("remote launch script", () => {
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "waits for t3code.service instead of launching a competing server",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-launch-service-" });
+        const home = `${root}/home`;
+        const bin = `${root}/bin`;
+        const script = `${root}/launch.sh`;
+        yield* fs.makeDirectory(`${home}/.local/bin`, { recursive: true });
+        yield* fs.makeDirectory(bin);
+        const writeExecutable = (file: string, contents: string) =>
+          fs.writeFileString(file, contents).pipe(Effect.andThen(fs.chmod(file, 0o755)));
+        yield* writeExecutable(
+          `${bin}/systemctl`,
+          [
+            "#!/bin/sh",
+            'case "$2" in',
+            '  cat) [ -f "$HOME/unit" ] || exit 1; printf "[Service]\\nEnvironment=T3CODE_HOME=%s/.t3\\n" "$HOME" ;;',
+            '  start) : >"$HOME/service-started" ;;',
+            "esac",
+          ].join("\n"),
+        );
+        yield* writeExecutable(
+          `${home}/.local/bin/t3`,
+          [
+            "#!/bin/sh",
+            'case "$1:${2:-}" in',
+            '  __ssh-helper:runtime-port) [ -f "$HOME/service-started" ] && echo "4242 3773" ;;',
+            "  __ssh-helper:pick-port) echo 3999 ;;",
+            '  serve:*) : >"$HOME/spawned" ;;',
+            "esac",
+          ].join("\n"),
+        );
+        yield* fs.writeFileString(
+          script,
+          SshTunnel.buildRemoteLaunchScript({ ...ARCHIVE, preferInstalledLauncher: true }),
+        );
+        const launch = runScript(home, [script, "state"], { path: `${bin}:/usr/bin:/bin` });
+
+        const withoutService = yield* launch;
+        assert.equal(withoutService.exitCode, 0, withoutService.stderr);
+        assert.include(withoutService.stdout, '{"remotePort":3999,"serverKind":"managed"}');
+
+        yield* fs.remove(`${home}/spawned`);
+        yield* fs.writeFileString(`${home}/unit`, "");
+        const withService = yield* launch;
+        assert.equal(withService.exitCode, 0, withService.stderr);
+        assert.include(withService.stdout, '{"remotePort":3773,"serverKind":"external"}');
+        assert.isTrue(yield* fs.exists(`${home}/service-started`));
+        assert.isFalse(yield* fs.exists(`${home}/spawned`));
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+});

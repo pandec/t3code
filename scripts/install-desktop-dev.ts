@@ -406,14 +406,11 @@ const createMacLifecycle = Effect.fn("installDesktopDev.createMacLifecycle")(fun
   } satisfies DesktopInstallLifecycle;
 });
 
+// The service keeps running: it runs its own pinned runtime, not the AppImage, and an SSH client
+// that finds no server while it is down starts a competing one that then owns the T3 home.
 const stopLinuxApp = Effect.fn("installDesktopDev.stopLinuxApp")(function* (
   spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
 ) {
-  if (
-    yield* commandSucceeds(spawner, "systemctl", ["--user", "is-active", "--quiet", LINUX_SERVICE])
-  ) {
-    yield* runCommand(spawner, "systemctl", ["--user", "stop", LINUX_SERVICE]);
-  }
   if (!(yield* commandSucceeds(spawner, "pgrep", ["-x", LINUX_APP_PROCESS]))) return;
   yield* terminateProcess(spawner, LINUX_APP_PROCESS, LINUX_APP_PROCESS);
 });

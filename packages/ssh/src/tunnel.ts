@@ -707,6 +707,34 @@ else
   REMOTE_PORT=""
   REMOTE_MANAGED=""
 fi
+# Private fork: when t3code.service serves this home, start it and wait rather
+# than launch a second server, which would own the home and idle the service.
+service_serves_home() {
+  command -v systemctl >/dev/null 2>&1 &&
+    systemctl --user cat t3code.service 2>/dev/null | grep -qxF "Environment=T3CODE_HOME=$DEFAULT_SERVER_HOME"
+}
+if [ -z "$REMOTE_PORT" ] && service_serves_home; then
+  systemctl --user start t3code.service >/dev/null 2>&1 || true
+  SERVICE_WAITED=0
+  while :; do
+    DEFAULT_RUNTIME_INFO="$(resolve_default_runtime_port 2>/dev/null || true)"
+    if [ -n "$DEFAULT_RUNTIME_INFO" ]; then
+      REMOTE_PORT="\${DEFAULT_RUNTIME_INFO#* }"
+      wait_ready "@@T3_REUSE_READY_TIMEOUT_MS@@" && break
+    fi
+    if [ "$SERVICE_WAITED" -ge @@T3_SERVICE_WAIT_SECONDS@@ ]; then
+      printf 'The t3code.service server on the remote host did not become ready. Check it with: t3 service status\\n' >&2
+      exit 1
+    fi
+    sleep 1
+    SERVICE_WAITED=$((SERVICE_WAITED + 1))
+  done
+  REMOTE_PID=""
+  REMOTE_MANAGED="external"
+  rm -f "$PID_FILE"
+  printf '%s\\n' "$REMOTE_PORT" >"$PORT_FILE"
+  printf 'external\\n' >"$MANAGED_FILE"
+fi
 if [ -z "$REMOTE_PORT" ]; then
   REMOTE_PORT="$(pick_port)" || true
   if [ -z "$REMOTE_PORT" ]; then
@@ -842,7 +870,7 @@ export function buildRemoteNodeEnvScript(input?: RemoteT3RunnerOptions): string 
   );
 }
 
-function buildRemoteLaunchScript(input?: RemoteT3RunnerOptions): string {
+export function buildRemoteLaunchScript(input?: RemoteT3RunnerOptions): string {
   return applyScriptPlaceholders(REMOTE_LAUNCH_SCRIPT, {
     T3_ARCHIVE_MODE: isNodeScriptRunner(input) ? "0" : "1",
     T3_NODE_ENV_SCRIPT: buildRemoteNodeEnvScript(input),
@@ -854,6 +882,7 @@ function buildRemoteLaunchScript(input?: RemoteT3RunnerOptions): string {
     T3_READY_TIMEOUT_MS: String(REMOTE_READY_TIMEOUT_MS),
     T3_REUSE_READY_TIMEOUT_MS: String(REMOTE_REUSE_READY_TIMEOUT_MS),
     T3_READY_PROBE_TIMEOUT_MS: String(SSH_READY_PROBE_TIMEOUT_MS),
+    T3_SERVICE_WAIT_SECONDS: String(REMOTE_READY_TIMEOUT_MS / 1000),
   });
 }
 

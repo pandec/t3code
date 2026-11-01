@@ -3,7 +3,7 @@
  * Private fork: build this host's t3 server archive from the checkout into a local release folder
  * and switch the background service to it. Versions are `<version>-pandec.<YYYYMMDD>.<n>`.
  */
-// @effect-diagnostics nodeBuiltinImport:off globalConsole:off globalDate:off
+// @effect-diagnostics nodeBuiltinImport:off globalConsole:off globalDate:off globalTimers:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
@@ -25,11 +25,11 @@ import * as Effect from "effect/Effect";
 import { releasePackageFiles } from "./update-release-package-versions.ts";
 
 const KEEP_RELEASES = 3;
+// Covers the launcher's database backup and the new server's migrations.
+const SERVICE_SWITCH_TIMEOUT_MS = 120_000;
 const repoRoot = NodePath.resolve(import.meta.dirname, "..");
-const releaseRoot = NodePath.join(
-  process.env["T3CODE_HOME"] || NodePath.join(NodeOS.homedir(), ".t3"),
-  "fork-releases",
-);
+const t3Home = process.env["T3CODE_HOME"] || NodePath.join(NodeOS.homedir(), ".t3");
+const releaseRoot = NodePath.join(t3Home, "fork-releases");
 const releaseDirPattern = new RegExp(
   `^v\\d+\\.\\d+\\.\\d+-${FORK_RELEASE_PRERELEASE_ID}\\.\\d{8}\\.(\\d+)$`,
 );
@@ -154,6 +154,66 @@ async function buildArchive(target: HostTarget, version: string, releaseDir: str
   );
 }
 
+interface ServerRuntime {
+  readonly pid?: number;
+  readonly serverVersion?: string;
+  readonly serviceManaged?: boolean;
+}
+
+interface ServiceUpdate {
+  readonly targetVersion?: string;
+  readonly status?: string;
+  readonly reason?: string;
+}
+
+function readJson<T>(file: string): T | undefined {
+  try {
+    return JSON.parse(NodeFS.readFileSync(file, "utf8")) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+function isAlive(pid: number | undefined): boolean {
+  if (pid === undefined) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// `t3 update` reports the restart, not whether the new server came up: another server that owns
+// the T3 home leaves the service idle.
+async function verifyServiceServes(version: string) {
+  const runtimeFile = NodePath.join(t3Home, "userdata/server-runtime.json");
+  const stateFile = NodePath.join(t3Home, "runtime/service-state.json");
+  const deadline = Date.now() + SERVICE_SWITCH_TIMEOUT_MS;
+  for (;;) {
+    const runtime = readJson<ServerRuntime>(runtimeFile);
+    const alive = isAlive(runtime?.pid);
+    if (alive && runtime?.serviceManaged === true && runtime.serverVersion === version) {
+      console.log(`Background service serves t3@${version}.`);
+      return;
+    }
+    const update = readJson<{ readonly update?: ServiceUpdate }>(stateFile)?.update;
+    const failed =
+      update?.targetVersion === version &&
+      (update.status === "failed" || update.status === "rolled-back");
+    if (failed || Date.now() > deadline || interrupted !== undefined) {
+      const owner =
+        alive && runtime?.serviceManaged !== true
+          ? ` PID ${String(runtime?.pid)} (t3@${runtime?.serverVersion ?? "unknown"}) owns ${t3Home} outside the service; stop it, then run \`systemctl --user restart t3code.service\`.`
+          : "";
+      throw new Error(
+        `The background service is not serving t3@${version}${failed ? ` (update ${String(update.status)}: ${update.reason ?? "no reason"})` : ""}.${owner}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+}
+
 function pruneReleases() {
   const releases = NodeFS.readdirSync(releaseRoot)
     .filter((name) => releaseDirPattern.test(name))
@@ -190,4 +250,10 @@ try {
 await run("apps/server/dist-exe/t3", ["update", version, "--yes", "--allow-downgrade"], {
   [CLI_RELEASE_BASE_URL_ENV]: NodeURL.pathToFileURL(releaseRoot).href,
 });
+if (
+  target.platform === "linux" &&
+  NodeChildProcess.spawnSync("systemctl", ["--user", "cat", "t3code.service"]).status === 0
+) {
+  await verifyServiceServes(version);
+}
 pruneReleases();
