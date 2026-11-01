@@ -260,6 +260,9 @@ sudo pacman -S rust base-devel libsecret pkgconf imagemagick
 
 The C toolchain, pkg-config, and libsecret headers are also needed for Linux desktop development.
 
+`t3-install-desktop` relaunches the app through the systemd user manager, which needs systemd 250 or
+newer (Ubuntu 24.04 or later).
+
 ### macOS DMG prerequisites
 
 Install the Xcode Command Line Tools with `xcode-select --install` and install Rust.
