@@ -444,6 +444,7 @@ export function useThreadActions() {
   const confirmThreadArchive = useClientSettings((settings) => settings.confirmThreadArchive);
   const confirmThreadDelete = useClientSettings((settings) => settings.confirmThreadDelete);
   const confirmThreadUnpin = useClientSettings((settings) => settings.confirmThreadUnpin);
+  const returnToPreviousThread = useClientSettings((settings) => settings.returnToPreviousThread);
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
   const clearProjectDraftThreadById = useComposerDraftStore(
     (store) => store.clearProjectDraftThreadById,
@@ -564,7 +565,8 @@ export function useThreadActions() {
 
     // In a split, the other pane's thread stays on screen. Otherwise a reader still
     // on the archived thread moves to the previously visited thread (Ctrl+Tab) or a
-    // new draft. Agent and scheduled archives never move the reader (ParkedThreadWatcher).
+    // new draft, unless that setting is off. Agent and scheduled archives never move
+    // the reader (ParkedThreadWatcher).
     const threadKey = scopedThreadKey(threadRef);
     const routeRefAfterArchive = getCurrentRouteThreadRef();
     const routeKeyAfterArchive =
@@ -575,6 +577,7 @@ export function useThreadActions() {
 
     if (
       wasOpen &&
+      returnToPreviousThread &&
       !foldedSplit &&
       routeKeyAfterArchive === threadKey &&
       router.state.location.href === requestingRouteHref
@@ -1234,14 +1237,16 @@ export function useThreadActions() {
       failureTitle: "Failed to wake thread",
     });
     // A reader still on the snoozed thread moves back to the thread they
-    // visited before it (the Ctrl+Tab target); in a split, the other pane
-    // takes over instead. A navigation made during the await wins over ours.
+    // visited before it (the Ctrl+Tab target) unless that setting is off; in a
+    // split, the other pane takes over instead. A navigation made during the
+    // await wins over ours.
     const routeKey = routeKeyNow();
     const navigateToThread = (ref: ScopedThreadRef) =>
       router.navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(ref) });
     if (
       !foldSplitForParkedThread(threadKey, routeKey, navigateToThread) &&
       wasOpen &&
+      returnToPreviousThread &&
       shouldNavigateAfterThreadPark({
         threadKey,
         currentThreadKey: routeKey,

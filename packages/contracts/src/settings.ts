@@ -752,6 +752,9 @@ export const ClientSettingsSchema = Schema.Struct({
   /** thread.snoozeUntilDone snoozes a working thread until it's done and opens
    * the snooze picker otherwise; false always opens the picker. */
   snoozeShortcutUntilDone: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /** Snoozing or archiving the open thread moves to the previously visited
+   * thread; false leaves the reader on it. */
+  returnToPreviousThread: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   /**
    * How long the server holds a steer as an editable queued message before it
    * reaches the agent. 0 sends immediately. Mobile keeps its own per-device value.
@@ -2269,6 +2272,7 @@ export const ClientSettingsPatch = Schema.Struct({
   showPanelToggleButtons: Schema.optionalKey(Schema.Boolean),
   chatWideTables: Schema.optionalKey(Schema.Boolean),
   snoozeShortcutUntilDone: Schema.optionalKey(Schema.Boolean),
+  returnToPreviousThread: Schema.optionalKey(Schema.Boolean),
   steerGraceWindowMs: Schema.optionalKey(SteerGraceWindowMs),
   timestampFormat: Schema.optionalKey(TimestampFormat),
   snapShotEnabled: Schema.optionalKey(Schema.Boolean),

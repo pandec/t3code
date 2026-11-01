@@ -1298,6 +1298,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["keybinding snooze picker working thread wake when finished"],
   },
   {
+    id: "return-to-previous-thread",
+    title: "Return to previous thread",
+    to: "/settings/extras",
+    searchTerms: ["snooze archive navigate jump back last visited thread stay"],
+  },
+  {
     id: "extras-composer",
     title: "Composer",
     to: "/settings/extras",

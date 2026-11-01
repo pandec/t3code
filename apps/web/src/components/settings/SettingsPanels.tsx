@@ -510,6 +510,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.snoozeShortcutUntilDone !== DEFAULT_UNIFIED_SETTINGS.snoozeShortcutUntilDone
       ? ["Snooze until done shortcut"]
       : []),
+    ...(settings.returnToPreviousThread !== DEFAULT_UNIFIED_SETTINGS.returnToPreviousThread
+      ? ["Return to previous thread"]
+      : []),
     ...(settings.autoResumeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads
       ? ["Resume after usage limits"]
       : []),
@@ -716,6 +719,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       showPanelToggleButtons: DEFAULT_UNIFIED_SETTINGS.showPanelToggleButtons,
       chatWideTables: DEFAULT_UNIFIED_SETTINGS.chatWideTables,
       snoozeShortcutUntilDone: DEFAULT_UNIFIED_SETTINGS.snoozeShortcutUntilDone,
+      returnToPreviousThread: DEFAULT_UNIFIED_SETTINGS.returnToPreviousThread,
       autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
       snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
       snoozePresets: DEFAULT_UNIFIED_SETTINGS.snoozePresets,

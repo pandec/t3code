@@ -925,6 +925,31 @@ function ThreadsExtrasSection() {
           />
         }
       />
+      <SettingsRow
+        {...searchableSetting("return-to-previous-thread")}
+        description="Snoozing or archiving the thread you are viewing opens the thread you visited before it. Turn off to stay on the thread."
+        resetAction={
+          settings.returnToPreviousThread !== DEFAULT_UNIFIED_SETTINGS.returnToPreviousThread ? (
+            <SettingResetButton
+              label="return to previous thread"
+              onClick={() =>
+                updateSettings({
+                  returnToPreviousThread: DEFAULT_UNIFIED_SETTINGS.returnToPreviousThread,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.returnToPreviousThread}
+            onCheckedChange={(checked) =>
+              updateSettings({ returnToPreviousThread: Boolean(checked) })
+            }
+            aria-label="Return to previous thread"
+          />
+        }
+      />
     </SettingsSection>
   );
 }
