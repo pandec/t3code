@@ -434,9 +434,16 @@ function linuxDesktopEntry(appPath: string): string {
 
 // The fleet updater runs this over SSH, which has no display; the user manager holds the desktop
 // session's, so the app launches through it and outlives the SSH session. With lingering the
-// manager keeps those variables after logout, so logind must also report a graphical session.
-export function hasGraphicalSession(managerEnvironment: string, logindDisplay: string): boolean {
-  return /^(?:WAYLAND_DISPLAY|DISPLAY)=./mu.test(managerEnvironment) && logindDisplay.trim() !== "";
+// manager keeps those variables after logout, so logind must also report a graphical session;
+// with none, it elects any other session, such as this SSH login, as the display.
+export function hasGraphicalSession(
+  managerEnvironment: string,
+  displaySessionType: string,
+): boolean {
+  return (
+    /^(?:WAYLAND_DISPLAY|DISPLAY)=./mu.test(managerEnvironment) &&
+    /^(?:x11|wayland)$/u.test(displaySessionType.trim())
+  );
 }
 
 function linuxAppPath(path: Path.Path, homeDirectory: string): string {
@@ -514,26 +521,15 @@ const createLinuxLifecycle = Effect.fn("installDesktopDev.createLinuxLifecycle")
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const isRunning = commandSucceeds(spawner, "pgrep", ["-x", LINUX_APP_PROCESS]);
-  // No launchEnvironment() here: systemd-run asks the user manager to start the
-  // app, so the manager's environment applies and ours is never forwarded.
+  // No launchEnvironment(): the user manager's environment applies. Stopping first lets the
+  // retry replace a launch still starting or a unit a leftover helper keeps alive.
   const launch = Effect.gen(function* () {
-    // The retry finds a slow first launch still starting; wait on it rather than collide with it.
-    if (
-      yield* commandSucceeds(spawner, "systemctl", [
-        "--user",
-        "is-active",
-        "--quiet",
-        LINUX_APP_UNIT,
-      ])
-    ) {
-      return;
-    }
-    // ExitType=cgroup keeps the unit, and the instance the app relaunches itself into, alive past
-    // the original process.
+    yield* commandSucceeds(spawner, "systemctl", ["--user", "stop", LINUX_APP_UNIT]);
     yield* runCommand(spawner, "systemd-run", [
       "--user",
       "--collect",
       "--quiet",
+      // Keeps the instance the app relaunches itself into alive past the original process.
       "--property=ExitType=cgroup",
       `--unit=${LINUX_APP_UNIT}`,
       linuxAppPath(path, homeDirectory),
@@ -545,13 +541,22 @@ const createLinuxLifecycle = Effect.fn("installDesktopDev.createLinuxLifecycle")
       "--user",
       "show-environment",
     ]).pipe(Effect.orElseSucceed(() => ""));
-    const logindDisplay = yield* captureCommand(spawner, "loginctl", [
+    const displaySession = (yield* captureCommand(spawner, "loginctl", [
       "show-user",
       String(NodeOS.userInfo().uid),
       "--property=Display",
       "--value",
-    ]).pipe(Effect.orElseSucceed(() => ""));
-    if (!hasGraphicalSession(environment, logindDisplay)) {
+    ]).pipe(Effect.orElseSucceed(() => ""))).trim();
+    const displaySessionType =
+      displaySession === ""
+        ? ""
+        : yield* captureCommand(spawner, "loginctl", [
+            "show-session",
+            displaySession,
+            "--property=Type",
+            "--value",
+          ]).pipe(Effect.orElseSucceed(() => ""));
+    if (!hasGraphicalSession(environment, displaySessionType)) {
       yield* Effect.log("No graphical session; open T3 Code (Dev) from the app menu.");
       return;
     }

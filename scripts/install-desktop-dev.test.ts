@@ -274,9 +274,10 @@ it("parses macOS DMG mount paths containing spaces", () => {
 });
 
 it("launches the Linux app only into a live graphical session", () => {
-  assert.isTrue(hasGraphicalSession("HOME=/home/u\nWAYLAND_DISPLAY=wayland-0\n", "2\n"));
-  assert.isTrue(hasGraphicalSession("DISPLAY=:0\nPATH=/usr/bin\n", "2\n"));
-  assert.isFalse(hasGraphicalSession("HOME=/home/u\nDISPLAY=\nXDG_DISPLAY_HINT=:0\n", "2\n"));
-  // Lingering keeps the variables after logout.
-  assert.isFalse(hasGraphicalSession("WAYLAND_DISPLAY=wayland-0\nDISPLAY=:0\n", "\n"));
+  assert.isTrue(hasGraphicalSession("HOME=/home/u\nWAYLAND_DISPLAY=wayland-0\n", "wayland\n"));
+  assert.isTrue(hasGraphicalSession("DISPLAY=:0\nPATH=/usr/bin\n", "x11\n"));
+  assert.isFalse(hasGraphicalSession("HOME=/home/u\nDISPLAY=\nXDG_DISPLAY_HINT=:0\n", "wayland\n"));
+  // Lingering keeps the variables after logout, and logind then elects the SSH or tty session.
+  assert.isFalse(hasGraphicalSession("WAYLAND_DISPLAY=wayland-0\nDISPLAY=:0\n", "tty\n"));
+  assert.isFalse(hasGraphicalSession("WAYLAND_DISPLAY=wayland-0\nDISPLAY=:0\n", ""));
 });
