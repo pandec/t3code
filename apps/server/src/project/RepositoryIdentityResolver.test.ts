@@ -38,42 +38,51 @@ const layerRepositoryIdentityResolverTest = (options: {
   ).pipe(Layer.provide(ProcessRunner.layer));
 
 it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
-  it.effect("bypasses the cached Git root when fresh resolution is requested", () => {
-    let rootPath = "/repo";
-    const layerResolver = Layer.effect(
-      RepositoryIdentityResolver.RepositoryIdentityResolver,
-      RepositoryIdentityResolver.make(),
-    ).pipe(
-      Layer.provide(
-        Layer.succeed(ProcessRunner.ProcessRunner, {
-          run: (input) =>
-            Effect.sync(() => ({
-              stdout: input.args.includes("rev-parse")
-                ? `${rootPath}\n`
-                : "origin\tgit@github.com:T3Tools/t3code.git (fetch)\n",
-              stderr: "",
-              code: ChildProcessSpawner.ExitCode(0),
-              timedOut: false,
-              stdoutTruncated: false,
-              stderrTruncated: false,
-              stdoutInvalidUtf8: false,
-              stderrInvalidUtf8: false,
-            })),
-        }),
-      ),
-    );
+  it.effect("bypasses the cached Git root when fresh resolution is requested", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const repoRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-repository-identity-fresh-test-",
+      });
+      const nestedWorkspace = path.join(repoRoot, "packages", "web");
+      yield* fileSystem.makeDirectory(nestedWorkspace, { recursive: true });
+      let rootPath = repoRoot;
+      const layerResolver = Layer.effect(
+        RepositoryIdentityResolver.RepositoryIdentityResolver,
+        RepositoryIdentityResolver.make(),
+      ).pipe(
+        Layer.provide(
+          Layer.succeed(ProcessRunner.ProcessRunner, {
+            run: (input) =>
+              Effect.sync(() => ({
+                stdout: input.args.includes("rev-parse")
+                  ? `${rootPath}\n`
+                  : "origin\tgit@github.com:T3Tools/t3code.git (fetch)\n",
+                stderr: "",
+                code: ChildProcessSpawner.ExitCode(0),
+                timedOut: false,
+                stdoutTruncated: false,
+                stderrTruncated: false,
+                stdoutInvalidUtf8: false,
+                stderrInvalidUtf8: false,
+              })),
+          }),
+        ),
+      );
 
-    return Effect.gen(function* () {
-      const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
-      const first = yield* resolver.resolve("/repo/packages/web");
-      expect(first?.rootPath).toBe("/repo");
-      rootPath = "/repo/packages/web";
+      yield* Effect.gen(function* () {
+        const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+        const first = yield* resolver.resolve(nestedWorkspace);
+        expect(first?.rootPath).toBe(repoRoot);
+        rootPath = nestedWorkspace;
 
-      const fresh = yield* resolver.resolve("/repo/packages/web", { fresh: true });
-      expect(fresh?.rootPath).toBe("/repo/packages/web");
-      expect(yield* resolver.resolve("/repo/packages/web")).toEqual(first);
-    }).pipe(Effect.provide(layerResolver));
-  });
+        const fresh = yield* resolver.resolve(nestedWorkspace, { fresh: true });
+        expect(fresh?.rootPath).toBe(nestedWorkspace);
+        expect(yield* resolver.resolve(nestedWorkspace)).toEqual(first);
+      }).pipe(Effect.provide(layerResolver));
+    }),
+  );
 
   it.effect("normalizes equivalent GitHub remotes into a stable repository identity", () =>
     Effect.gen(function* () {
@@ -209,25 +218,43 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
       }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
   );
 
-  it.effect("returns null for non-git folders and repos without remotes", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const nonGitDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-repository-identity-non-git-",
-      });
-      const gitDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-repository-identity-no-remote-",
-      });
+  it.effect(
+    "returns null for non-git, missing and no-remote folders, probing only what can exist",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const nonGitDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-repository-identity-non-git-",
+        });
+        const gitDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-repository-identity-no-remote-",
+        });
 
-      yield* git(gitDir, ["init"]);
+        yield* git(gitDir, ["init"]);
 
-      const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
-      const nonGitIdentity = yield* resolver.resolve(nonGitDir);
-      const noRemoteIdentity = yield* resolver.resolve(gitDir);
+        const runner = yield* ProcessRunner.ProcessRunner;
+        const runs: Array<ReadonlyArray<string>> = [];
+        const resolver = yield* RepositoryIdentityResolver.make().pipe(
+          Effect.provideService(ProcessRunner.ProcessRunner, {
+            run: (input) =>
+              Effect.suspend(() => {
+                runs.push(input.args);
+                return runner.run(input);
+              }),
+          }),
+        );
+        const bareProbes = () =>
+          runs.filter((args) => args.some((arg) => arg.startsWith("--git-dir=")));
 
-      expect(nonGitIdentity).toBeNull();
-      expect(noRemoteIdentity).toBeNull();
-    }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
+        expect(yield* resolver.resolve(path.join(nonGitDir, "deleted"))).toBeNull();
+        expect(runs).toEqual([]);
+
+        expect(yield* resolver.resolve(nonGitDir)).toBeNull();
+        expect(bareProbes()).toEqual([]);
+
+        expect(yield* resolver.resolve(gitDir)).toBeNull();
+      }).pipe(Effect.provide(ProcessRunner.layer)),
   );
 
   it.effect("ignores local-path remotes such as GitButler's gb-local", () =>

@@ -1,3 +1,4 @@
+import { isListedThreadLineage } from "@t3tools/contracts";
 import type {
   EnvironmentId as EnvironmentIdType,
   OrchestrationV2ShellSnapshot,
@@ -146,11 +147,9 @@ export const threadPrewarmTriggersLayer: Layer.Layer<ThreadPrewarmTriggers> = La
 function isPrewarmableShell(
   thread: Pick<OrchestrationV2ThreadShell, "archivedAt" | "deletedAt" | "lineage">,
 ): boolean {
-  // Subagent threads are not navigable from the thread list.
+  // Subagents and side chats are not navigable from the thread list.
   return (
-    thread.archivedAt === null &&
-    thread.deletedAt === null &&
-    thread.lineage.relationshipToParent !== "subagent"
+    thread.archivedAt === null && thread.deletedAt === null && isListedThreadLineage(thread.lineage)
   );
 }
 

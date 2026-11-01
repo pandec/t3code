@@ -178,6 +178,18 @@ it.effect("creates groups at the bottom, reuses exact names, and lists them arou
         },
       }),
     ],
+    [
+      ThreadId.make("thread:groups-side-chat"),
+      shell(ThreadId.make("thread:groups-side-chat"), {
+        customGroupId: "top",
+        lineage: {
+          parentThreadId: targetId,
+          relationshipToParent: "fork",
+          rootThreadId: targetId,
+          sideChat: true,
+        },
+      }),
+    ],
     // Membership of a deleted group reads as Active, like the sidebar.
     [
       ThreadId.make("thread:groups-orphan"),

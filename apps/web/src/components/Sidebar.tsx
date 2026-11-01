@@ -137,7 +137,10 @@ import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../termina
 import { cn, isMacPlatform } from "~/lib/utils";
 import { readLocalApi } from "../localApi";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
-import { selectProjectGroupingSettings } from "@t3tools/client-runtime/state/project-grouping";
+import {
+  pickableProjectGroups,
+  selectProjectGroupingSettings,
+} from "@t3tools/client-runtime/state/project-grouping";
 import {
   projectGroupsSpanEnvironments,
   getSidebarProjectSettingsKey,
@@ -155,6 +158,7 @@ import {
   useThreadActions,
 } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useProjectPin } from "../hooks/useProjectGroupUpdate";
 import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
 import { useTerminalFocus } from "../hooks/useTerminalFocus";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
@@ -177,6 +181,7 @@ import { useNowMinute } from "../hooks/useNowMinute";
 import {
   useEnvironmentIdentities,
   useConnectedEnvironmentIds,
+  useEnvironmentConnectionSummaries,
   useEnvironmentMachines,
   useEnvironments,
   usePrimaryEnvironmentId,
@@ -235,6 +240,8 @@ import {
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
   deleteSelectedThreadEntries,
+  belongsInSidebarWorkingShelf,
+  isSidebarEnvironmentDisconnected,
   isSidebarNestedLinkClick,
   isSidebarProjectScopeIsolated,
   isTrailingDoubleClick,
@@ -428,10 +435,15 @@ interface SidebarThreadPartitionInput {
   readonly includeDone: boolean;
   readonly threadLastVisitedAtById: Readonly<Record<string, string>>;
   readonly routeRowThreadKey: string | null;
+  readonly disconnectedEnvironmentIds: ReadonlySet<EnvironmentId>;
   // Snooze wakes, the queued-turn grace and the Working shelf's exit grace depend
   // on the clock, so the minute tick, the precise snooze-wake tick and the inbox
   // tracker's expiry version are inputs: a new key repartitions.
   readonly clockKey: string;
+}
+
+function scrollSidebarToTop(content: HTMLElement | null) {
+  content?.closest("[data-slot=scroll-area-viewport]")?.scrollTo({ top: 0 });
 }
 
 function threadShellKey(thread: Pick<SidebarThreadSummary, "environmentId" | "id">): string {
@@ -496,6 +508,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     includeDone,
     threadLastVisitedAtById,
     routeRowThreadKey,
+    disconnectedEnvironmentIds,
   } = input;
   const preciseNow = new Date().toISOString();
   // Subagent children live in the parent's Agents surface, not the roster. Each fork
@@ -532,8 +545,11 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
   const active: EnvironmentThreadShell[] = [];
   const working: EnvironmentThreadShell[] = [];
   const inbox = (thread: EnvironmentThreadShell, manuallyMoved = false) =>
-    workingShelfEnabled &&
-    (manuallyMoved ? isThreadWorking(thread) : inboxObservation.isWorking(thread))
+    belongsInSidebarWorkingShelf(thread, {
+      enabled: workingShelfEnabled,
+      disconnectedEnvironmentIds,
+      isWorking: manuallyMoved ? isThreadWorking : inboxObservation.isWorking,
+    })
       ? working
       : active;
   const snoozed: EnvironmentThreadShell[] = [];
@@ -955,8 +971,8 @@ function useSidebarThreads(input: {
   readonly olderSettledScopes: ReadonlyArray<OlderSettledScope>;
   // Set in boring mode: the project groups to fold active threads into, in order.
   readonly folderGroups: readonly SidebarProjectSnapshot[] | null;
-  // Keeps folders with no active threads, so a project the user filtered to can start one.
-  readonly keepEmptyFolders: boolean;
+  // Keeps folders with no active threads, so a project the user filtered to or pinned can start one.
+  readonly keepEmptyFolders: (group: SidebarProjectSnapshot) => boolean;
 }) {
   const {
     threads,
@@ -1051,6 +1067,17 @@ function useSidebarThreads(input: {
     activeWorkFilter && includeDone ? s.threadLastVisitedAtById : NO_LOCAL_VISITS,
   );
   const liveEnvironmentIds = useAtomValue(liveShellEnvironmentIdsAtom);
+  const environmentConnections = useEnvironmentConnectionSummaries();
+  const disconnectedEnvironmentIds = new Set(
+    environmentConnections
+      .filter((environment) =>
+        isSidebarEnvironmentDisconnected(
+          environment.connectionState,
+          liveEnvironmentIds.has(environment.environmentId),
+        ),
+      )
+      .map((environment) => environment.environmentId),
+  );
   const activeWorkThreadKeys = useActiveWorkThreadKeys(
     activeWorkFilter,
     threads,
@@ -1074,6 +1101,7 @@ function useSidebarThreads(input: {
     includeDone,
     threadLastVisitedAtById,
     routeRowThreadKey,
+    disconnectedEnvironmentIds,
     clockKey: `${nowMinute}:${snoozeWakeClock}:${inboxReturnsVersion}`,
   });
   const { pinnedThreads, activeThreads, workingThreads, snoozedThreads, settledThreads } =
@@ -1195,7 +1223,7 @@ function useSidebarThreads(input: {
             }
           : { kind: "thread", key, section };
       });
-    // Boring mode keeps a project the user filtered to, so it can start a thread.
+    // Boring mode keeps a pinned open project or one the user filtered to, so it can start a thread.
     if (
       (projectFolders === null || projectFolders.length === 0) &&
       pinnedThreads.length +
@@ -1580,6 +1608,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   // key would count as a mutation spanning the hooks below, leaving the sorting
   // strategy and the row callbacks uncached.
   const routeThreadKey = routeThreadRef ? `${scopedThreadKey(routeThreadRef)}` : null;
+  const sidebarContentRef = useRef<HTMLDivElement | null>(null);
   const routeRowThreadKey =
     routeThreadRef === null
       ? null
@@ -1611,6 +1640,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     storedProjectScopeKeys === null ? null : new Set(storedProjectScopeKeys);
   const hiddenProjectKeys = new Set(storedHiddenProjectKeys);
   const showProjectEnvironments = projectGroupsSpanEnvironments(projectGroups);
+  const scopeGroups = pickableProjectGroups(projectGroups);
   const scratchMachineLabelFor = (
     thread: Pick<SidebarThreadSummary, "environmentId" | "projectId">,
   ) => {
@@ -1667,7 +1697,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const folderScope = revealClearsProjects ? null : resolvedProjectScopeKeys;
   const folderProjectGroups =
     folderScope === null
-      ? projectGroups
+      ? // An archived project keeps a folder for its active threads, below the rest.
+        [...scopeGroups, ...projectGroups.filter((project) => project.archived)]
       : projectGroups.filter((project) => folderScope.has(project.projectKey));
   const hiddenPhysicalProjectKeys = revealClearsProjects
     ? new Set<string>()
@@ -1718,8 +1749,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     projectIdsByEnvironment,
     routeThreadKey,
   });
+  // The viewport outlives the filter and does not anchor, so a new list starts at the top.
+  const changeProjectFilters = (update: Parameters<typeof updateSidebarProjectFilters>[0]) => {
+    updateSidebarProjectFilters(update);
+    scrollSidebarToTop(sidebarContentRef.current);
+  };
   const selectProjectScope = (scopeKey: string) => {
-    updateSidebarProjectFilters((current) => {
+    changeProjectFilters((current) => {
       const next = toggleSidebarProjectSelection(
         {
           scope: resolveSidebarProjectScope(
@@ -1737,7 +1773,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     });
   };
   const toggleProjectHidden = (scopeKey: string) => {
-    updateSidebarProjectFilters((current) => {
+    changeProjectFilters((current) => {
       const storedScope = current.scopeKeys === null ? null : new Set(current.scopeKeys);
       const isHiding = !current.hiddenProjectKeys.includes(scopeKey);
       const next = toggleSidebarProjectHidden(
@@ -1754,11 +1790,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     });
   };
   const clearProjectFilters = () =>
-    updateSidebarProjectFilters(() => ({ scopeKeys: null, hiddenProjectKeys: [] }));
+    changeProjectFilters(() => ({ scopeKeys: null, hiddenProjectKeys: [] }));
   // The thread menu's "Filter by project" over the persisted multi-select:
   // isolate this project, or return to all projects when it is already alone.
   const isolateProjectScope = (scopeKey: string) => {
-    updateSidebarProjectFilters((current) => {
+    changeProjectFilters((current) => {
       const next = toggleSidebarProjectIsolation(
         {
           scope: resolveSidebarProjectScope(
@@ -1900,6 +1936,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       });
     },
   );
+  const { canPinProjectGroup: canPinProject, setProjectGroupPinned } = useProjectPin();
   const handleProjectSettings = useStableCallback(
     (
       event: ReactMouseEvent<HTMLElement> | ReactKeyboardEvent<HTMLElement>,
@@ -1925,6 +1962,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             [
               { id: "new-thread", label: "New thread" },
               { id: "copy-path", label: "Copy path" },
+              ...(canPinProject(group)
+                ? [
+                    group.pinned
+                      ? { id: "unpin", label: "Unpin project", icon: "pin-off" }
+                      : { id: "pin", label: "Pin project", icon: "pin" },
+                  ]
+                : []),
               { id: "project-settings", label: "Project settings", icon: "settings" },
             ],
             position,
@@ -1937,6 +1981,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             return;
           case "copy-path":
             copyPathToClipboard(group.workspaceRoot, { path: group.workspaceRoot });
+            return;
+          case "pin":
+          case "unpin":
+            setProjectGroupPinned(group, clicked.value === "pin");
             return;
           case "project-settings":
             openProjectSettings(group);
@@ -2069,7 +2117,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       ? []
       : olderSettledScopes(environmentFilter.environmentIds, projectIdsByEnvironment),
     folderGroups: boringSidebarEnabled ? folderProjectGroups : null,
-    keepEmptyFolders: folderScope !== null,
+    keepEmptyFolders: (group) => folderScope !== null || (group.pinned && !group.archived),
   });
   const hasProjectFolders = projectFolders !== null && projectFolders.length > 0;
   const [sidebarListItemsState, setSidebarListItems] = useState(sidebarListItemsFresh);
@@ -2792,10 +2840,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     dragState === null && sidebarListItems.length + visibleDraftSessionCount > 0;
   // Cache on both fields so layout-key changes trigger the effect even when animate is unchanged.
   const listMotionPass = { layoutKey: listMotionLayoutKey, animate: listMotionAnimate };
+  const shelfExpansionKey = [workingShelfExpanded, snoozedShelfExpanded, settledShelfExpanded].join(
+    ":",
+  );
+  const previousShelfExpansionKeyRef = useRef(shelfExpansionKey);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- tells the list motion controller to animate or not after each layout-affecting commit
   useLayoutEffect(() => {
-    listMotionRef.current?.update(listMotionPass.animate);
-  }, [listMotionPass, listMotionRef]);
+    // Shelf rows would travel over stationary headers below the bottom-anchored shelf.
+    const shelvesUnchanged = previousShelfExpansionKeyRef.current === shelfExpansionKey;
+    previousShelfExpansionKeyRef.current = shelfExpansionKey;
+    listMotionRef.current?.update(listMotionPass.animate && shelvesUnchanged);
+  }, [listMotionPass, listMotionRef, shelfExpansionKey]);
   const handleThreadDragOver = (event: DragOverEvent) => {
     const target = event.over
       ? resolveSidebarDropTarget(sidebarListItems, String(event.active.id), String(event.over.id))
@@ -3145,6 +3200,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       // mixed selection would half-apply. Presets sync across environments, so
       // the first selected thread's stand for all.
       const snoozePresets = resolveSnoozePresets(
+        // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
         new Date(),
         timestampFormat,
         selectedThreads[0]!.environmentId,
@@ -3916,10 +3972,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     if (
       targetIsVisible &&
       (boringSidebarEnabled ||
-        shouldCreateNewThreadInCurrentProject(event?.shiftKey ?? false, projectGroups.length))
+        shouldCreateNewThreadInCurrentProject(
+          event?.shiftKey ?? false,
+          scopeGroups.length,
+          projectGroups.length,
+        ))
     ) {
       if (isMobile) setOpenMobile(false);
-      void startNewThreadFromContext(context);
+      // With no current or open project, such as when every project is archived, pick one.
+      void startNewThreadFromContext(context).then((started) => {
+        if (!started) openCommandPalette({ open: "new-thread-in" });
+      });
       return;
     }
     if (isMobile) setOpenMobile(false);
@@ -3928,7 +3991,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
 
   const newThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "chat.new") ??
-    (projectGroups.length <= 1 ? shortcutLabelForCommand(keybindings, "chat.newLocal") : undefined);
+    (shouldCreateNewThreadInCurrentProject(false, scopeGroups.length, projectGroups.length)
+      ? shortcutLabelForCommand(keybindings, "chat.newLocal")
+      : undefined);
   const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
   const newThreadButton = (
     <Tooltip>
@@ -3974,6 +4039,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       <ThreadContextDragGhost />
       <SidebarChromeHeader isElectron={isElectron} />
       <SidebarContent
+        ref={sidebarContentRef}
         className="min-h-full"
         fixedHeader={
           <SidebarGroup className="z-[1]">

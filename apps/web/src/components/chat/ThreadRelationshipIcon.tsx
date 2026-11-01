@@ -1,6 +1,7 @@
 import type { ProviderDriverKind, ServerProvider } from "@t3tools/contracts";
 import { BotIcon, type LucideIcon } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../providerInstances";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 
 export function threadRelationshipStatusLabel(status: string | null): string {
@@ -46,24 +47,34 @@ export function ThreadRelationshipIcon({
   driver,
   provider,
   modelIcon,
+  providerEntries = [],
   status,
   fallbackIcon: FallbackIcon = BotIcon,
 }: {
   driver?: ProviderDriverKind | undefined;
   provider?: ServerProvider | undefined;
   modelIcon?: string | undefined;
+  providerEntries?: ReadonlyArray<ProviderInstanceEntry>;
   status: string | null;
   fallbackIcon?: LucideIcon;
 }) {
   const iconClassName = "size-4 shrink-0 text-muted-foreground";
+  const entry = driver
+    ? providerEntries.find((candidate) => candidate.instanceId === provider?.instanceId)
+    : undefined;
+  const showInstanceBadge = entry !== undefined && shouldShowInstanceBadge(entry, providerEntries);
   return (
     <span className="relative inline-flex size-4 shrink-0 items-center justify-center">
       {driver ? (
         <ProviderInstanceIcon
           driverKind={driver}
-          displayName={provider?.displayName ?? driver}
+          displayName={entry?.displayName ?? provider?.displayName ?? driver}
           modelIcon={modelIcon}
-          acpRegistryIconUrl={provider?.iconUrl}
+          accentColor={entry?.accentColor}
+          acpRegistryAgentId={entry?.acpRegistryAgentId}
+          acpRegistryIconUrl={entry?.acpRegistryIconUrl ?? provider?.iconUrl}
+          showBadge={showInstanceBadge}
+          size="compact"
           iconClassName={iconClassName}
           className="z-auto"
         />
@@ -72,7 +83,8 @@ export function ThreadRelationshipIcon({
       )}
       <span
         className={cn(
-          "absolute -bottom-1 -right-1 size-2 rounded-full border-2 border-card",
+          "absolute size-2 rounded-full border-2 border-card",
+          showInstanceBadge ? "-left-1 -top-1" : "-bottom-1 -right-1",
           status === "running" ||
             status === "in_progress" ||
             status === "pending" ||

@@ -213,9 +213,11 @@ export function WorkspaceTitlebarControls(props: {
       {props.showMaximizeControl ? (
         <span
           aria-hidden={!props.rightPanelOpen}
+          // Fading out on close would show it beside the thread details toggle that replaces it.
           className={cn(
             "flex shrink-0",
-            props.animationsActive &&
+            props.rightPanelOpen &&
+              props.animationsActive &&
               "motion-safe:transition-opacity motion-safe:duration-(--panel-animation-duration) motion-safe:ease-out",
             // Closed, the control leaves the flex flow so the cluster is only as wide as the
             // controls the header reserves room for; anchored to the cluster's left edge, it fades

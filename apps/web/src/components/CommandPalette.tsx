@@ -39,6 +39,7 @@ import {
   createBrowseNavigationCoordinator,
   filterFilesystemBrowseEntries,
   getFilesystemBrowsePath,
+  getFilesystemBrowseTabCompletion,
 } from "@t3tools/client-runtime/state/filesystem";
 import {
   type AtomCommandResult,
@@ -155,11 +156,14 @@ import { threadEnvironment } from "../state/threads";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
+import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useScratchProject } from "../hooks/useScratchProject";
 import { useStartTriage } from "../hooks/useStartTriage";
 import { pickTriageEnvironment } from "../lib/triageTarget";
 import { useNewProject } from "../hooks/useNewProject";
+import { useOrderWhileOpen } from "../hooks/useOrderWhileOpen";
+import { reportProjectFailure, useProjectPin } from "../hooks/useProjectGroupUpdate";
 import {
   useEnvironmentProviders,
   useEnvironments,
@@ -232,6 +236,7 @@ import {
   resolveThreadUtilityOpenTarget,
   buildCommandPaletteRows,
   enumerateCommandPaletteItems,
+  newThreadNoProjectIndex,
   findHighlightedCommandPaletteItem,
   RENAME_THREAD_VIEW_VALUE,
   SNOOZE_THREAD_VIEW_VALUE,
@@ -322,6 +327,7 @@ import {
   useThreadSplitStore,
 } from "./thread-split/threadSplitStore";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-grouping";
 import { buildSidebarProjectPickerEntries } from "../sidebarProjectGrouping";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { readPullRequestListPreferences } from "~/components/pullRequest/pullRequestListPreferences";
@@ -364,6 +370,8 @@ function openIntentView(intent: CommandPaletteOpenIntent | null): CommandPalette
       return null;
   }
 }
+
+const NEW_THREAD_NO_PROJECT_VALUE = "new-thread-in:no-project";
 
 function threadActionIcon(id: CommandPaletteThreadActionId): ReactNode {
   switch (id) {
@@ -578,6 +586,9 @@ function OpenCommandPaletteDialog(props: {
   const createProject = useAtomCommand(projectEnvironment.create, {
     reportFailure: false,
   });
+  const updateProject = useOrchestrationCommand(projectEnvironment.update, {
+    label: "project unarchive",
+  });
   const { scratchEnvironmentId, scratchWorkspaceRootFor, startScratchThread } = useScratchProject();
   const startTriage = useStartTriage();
   const lookupRepository = useAtomQueryRunner(sourceControlEnvironment.repository, {
@@ -713,7 +724,7 @@ function OpenCommandPaletteDialog(props: {
     handleNewThread,
   });
   const projectPickerEntries = buildSidebarProjectPickerEntries({
-    groups: projectGroups,
+    groups: pickableProjectGroups(projectGroups),
     preferredProjectRef: contextualProjectRef,
   });
   const pickerProjects = projectPickerEntries.map(({ group, targetProject }) => ({
@@ -726,6 +737,21 @@ function OpenCommandPaletteDialog(props: {
       group,
     ]),
   );
+  const { canPinProjectGroup, toggleProjectGroupPin } = useProjectPin();
+  // A row's target record can change when another machine's copy loads, so the kept
+  // order follows the project group instead.
+  const rowOrderKey = (prefix: string) => (item: CommandPaletteActionItem) =>
+    projectGroupByTargetKey.get(item.value.slice(prefix.length + 1))?.projectKey ?? item.value;
+  const projectPin = (project: CommandPaletteProject) => {
+    const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
+    return group && canPinProjectGroup(group)
+      ? {
+          name: group.displayName,
+          pinned: group.pinned,
+          toggle: () => toggleProjectGroupPin(group),
+        }
+      : null;
+  };
 
   const projectAccentColorByKey = useProjectAccentColorByKey(projectGroups);
 
@@ -969,14 +995,20 @@ function OpenCommandPaletteDialog(props: {
     await handleNewThread(scopeProjectRef(project.environmentId, project.id));
   };
 
-  const projectSearchItems = buildProjectSearchItems({
-    projects: pickerProjects,
-    projectGroupByTargetKey,
-    locationByEnvironmentId: projectEnvironmentLocationById,
-    projectAccentColor: (project) =>
-      projectAccentColorByKey.get(`${project.environmentId}:${project.id}`) ?? null,
-    runProject: openProjectFromSearch,
-  });
+  // Pinning from a row keeps rows in place while the palette is open.
+  const projectSearchItems = useOrderWhileOpen(
+    buildProjectSearchItems({
+      projects: pickerProjects,
+      projectGroupByTargetKey,
+      locationByEnvironmentId: projectEnvironmentLocationById,
+      projectAccentColor: (project) =>
+        projectAccentColorByKey.get(`${project.environmentId}:${project.id}`) ?? null,
+      runProject: openProjectFromSearch,
+      pin: projectPin,
+    }),
+    rowOrderKey("project"),
+    true,
+  );
 
   // A pick lands on the contextual member when the project is part of the
   // viewed logical project.
@@ -995,48 +1027,52 @@ function OpenCommandPaletteDialog(props: {
   };
   // Fork: one project list serves "New thread in..." and each group of "New
   // thread in group...": the group only changes the draft the pick lands in.
+  // Group lists skip pin toggles because only the main list keeps its order while open.
   const buildNewThreadProjectItems = (customGroupId: string | null) => {
     const isScratch = (project: CommandPaletteProject) =>
       isScratchProject(project, scratchWorkspaceRootFor(project.environmentId));
-    const projectItems = enumerateCommandPaletteItems(
-      buildNewThreadInProjectItems({
-        projects: pickerProjects.filter((project) => !isScratch(project)),
-        projectGroupByTargetKey,
-        locationByEnvironmentId: projectEnvironmentLocationById,
-        projectAccentColor: (project) =>
-          projectAccentColorByKey.get(`${project.environmentId}:${project.id}`) ?? null,
-        customGroupId,
-        runProject: async (project) => {
-          await handleNewThread(
-            resolveNewThreadTargetRef(project),
-            // An explicit New thread starts in Active unless a group was picked.
-            { customGroupId },
-          );
-        },
-        ...(customGroupId === null
-          ? {}
-          : {
-              disabledReason: (project: CommandPaletteProject) =>
-                serverConfigs.get(resolveNewThreadTargetRef(project).environmentId)?.environment
-                  .capabilities.threadCustomGroupCreation === true
-                  ? null
-                  : "Environment cannot create grouped threads",
-            }),
-      }),
-    );
+    const projectItems = buildNewThreadInProjectItems({
+      projects: pickerProjects.filter((project) => !isScratch(project)),
+      projectGroupByTargetKey,
+      locationByEnvironmentId: projectEnvironmentLocationById,
+      projectAccentColor: (project) =>
+        projectAccentColorByKey.get(`${project.environmentId}:${project.id}`) ?? null,
+      customGroupId,
+      runProject: async (project) => {
+        await handleNewThread(
+          resolveNewThreadTargetRef(project),
+          // An explicit New thread starts in Active unless a group was picked.
+          { customGroupId },
+        );
+      },
+      ...(customGroupId === null
+        ? { pin: projectPin }
+        : {
+            disabledReason: (project: CommandPaletteProject) =>
+              serverConfigs.get(resolveNewThreadTargetRef(project).environmentId)?.environment
+                .capabilities.threadCustomGroupCreation === true
+                ? null
+                : "Environment cannot create grouped threads",
+          }),
+    });
     // Starting a thread without a project does not take a group.
     if (customGroupId !== null || scratchTargetEnvironmentId === null) return projectItems;
 
-    // "No project" goes right after the current project: visible without
-    // scrolling past every project, while Enter still starts in the current
-    // one. When the current thread has no project, it is the current entry and
-    // goes first. It keeps its own shortcut, so the projects' mod+1..9 hold.
-    const noProjectIndex = pickerProjects[0] !== undefined && isScratch(pickerProjects[0]) ? 0 : 1;
+    const noProjectIndex = newThreadNoProjectIndex(
+      projectPickerEntries.map(({ group, targetProject, isPreferred }) => ({
+        isScratch: isScratchProject(
+          targetProject,
+          scratchWorkspaceRootFor(targetProject.environmentId),
+        ),
+        pinned: group.pinned,
+        isPreferred,
+      })),
+    );
     return [
       ...projectItems.slice(0, noProjectIndex),
       {
         kind: "action" as const,
-        value: "new-thread-in:no-project",
+        value: NEW_THREAD_NO_PROJECT_VALUE,
         searchTerms: ["no project", "without project", "none"],
         title: "No project",
         icon: <MessageSquareDashedIcon className={ITEM_ICON_CLASS} />,
@@ -1046,10 +1082,21 @@ function OpenCommandPaletteDialog(props: {
       ...projectItems.slice(noProjectIndex),
     ];
   };
-  const projectThreadItems = buildNewThreadProjectItems(null);
+  // Jump shortcuts follow the rows as shown, so a pin cannot move a number to another row.
+  const withProjectJumpShortcuts = (items: ReadonlyArray<CommandPaletteActionItem>) => {
+    const projectJumpItems = new Map(
+      enumerateCommandPaletteItems(
+        items.filter((item) => item.value !== NEW_THREAD_NO_PROJECT_VALUE),
+      ).map((item) => [item.value, item] as const),
+    );
+    return items.map((item) => projectJumpItems.get(item.value) ?? item);
+  };
+  const projectThreadItems = withProjectJumpShortcuts(
+    useOrderWhileOpen(buildNewThreadProjectItems(null), rowOrderKey("new-thread-in"), true),
+  );
   const groupedProjectThreadItems = customGroupCatalog.groups.map((group) => ({
     group,
-    items: buildNewThreadProjectItems(group.id),
+    items: withProjectJumpShortcuts(buildNewThreadProjectItems(group.id)),
   }));
 
   const {
@@ -2127,7 +2174,7 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
-  actionItems.push({
+  const addProjectAction: CommandPaletteActionItem = {
     kind: "action",
     value: "action:add-project",
     searchTerms: [
@@ -2155,7 +2202,8 @@ function OpenCommandPaletteDialog(props: {
     run: async () => {
       openAddProjectFlow();
     },
-  });
+  };
+  actionItems.push(addProjectAction);
 
   if (wslAddProjectEnvironmentOption) {
     actionItems.push({
@@ -2243,14 +2291,38 @@ function OpenCommandPaletteDialog(props: {
     },
   });
 
-  const contextualProjectGroup =
-    (contextualProjectRef
-      ? projectGroupByTargetKey.get(
-          `${contextualProjectRef.environmentId}:${contextualProjectRef.projectId}`,
+  // Fork: project actions follow the active pane's thread, like the thread actions.
+  const currentProjectRef =
+    currentThread && currentThread.projectId !== null
+      ? scopeProjectRef(currentThread.environmentId, currentThread.projectId)
+      : contextualProjectRef;
+  // Every group, so an archived project's thread still opens its own settings.
+  const currentProjectGroup =
+    (currentProjectRef
+      ? projectGroups.find((group) =>
+          group.memberProjectRefs.some(
+            (ref) =>
+              ref.environmentId === currentProjectRef.environmentId &&
+              ref.projectId === currentProjectRef.projectId,
+          ),
         )
-      : null) ??
-    projectGroups[0] ??
-    null;
+      : null) ?? null;
+  if (currentProjectGroup && canPinProjectGroup(currentProjectGroup)) {
+    actionItems.push({
+      kind: "action",
+      value: "action:project-pin",
+      searchTerms: ["pin", "unpin", "project", "favorite"],
+      title: currentProjectGroup.pinned ? "Unpin project" : "Pin project",
+      description: currentProjectGroup.displayName,
+      icon: currentProjectGroup.pinned ? (
+        <PinOffIcon className={ITEM_ICON_CLASS} />
+      ) : (
+        <PinIcon className={ITEM_ICON_CLASS} />
+      ),
+      run: async () => toggleProjectGroupPin(currentProjectGroup),
+    });
+  }
+  const contextualProjectGroup = currentProjectGroup ?? projectGroups[0] ?? null;
   if (contextualProjectGroup) {
     actionItems.push({
       kind: "action",
@@ -2369,7 +2441,14 @@ function OpenCommandPaletteDialog(props: {
       : currentView?.groups[0]?.value === ADD_PROJECT_ENTRY_GROUP
         ? addProjectEntryGroups()
         : currentView?.groups[0]?.value === NEW_THREAD_IN_GROUP
-          ? [{ value: NEW_THREAD_IN_GROUP, label: "Projects", items: projectThreadItems }]
+          ? [
+              {
+                value: NEW_THREAD_IN_GROUP,
+                label: "Projects",
+                // Every project archived and no "No project" home leaves only adding one.
+                items: projectThreadItems.length > 0 ? projectThreadItems : [addProjectAction],
+              },
+            ]
           : currentView?.groups[0]?.value === OPEN_IN_SPLIT_GROUP
             ? openInSplitGroups()
             : currentView?.groups[0]?.value === "themes"
@@ -2564,6 +2643,13 @@ function OpenCommandPaletteDialog(props: {
       cwd,
     );
     if (existing) {
+      // Adding an archived project's folder again brings the project back.
+      if (existing.archivedAt != null) {
+        void updateProject({
+          environmentId: existing.environmentId,
+          input: { projectId: existing.id, archived: false },
+        }).then((result) => reportProjectFailure("Failed to unarchive project", result));
+      }
       const latestThread = getLatestThreadForProject(
         threads.filter((thread) => thread.environmentId === existing.environmentId),
         existing.id,
@@ -3170,6 +3256,19 @@ function OpenCommandPaletteDialog(props: {
       platform: navigator.platform,
       context: { modelPickerOpen: false, editableFocus: true },
     });
+    if (command === "thread.pin") {
+      const highlightedItem = findHighlightedCommandPaletteItem(
+        displayedGroups,
+        highlightedItemValue ??
+          (autoHighlightsFirstRow ? (resultRows.itemValues[0] ?? null) : null),
+      );
+      if (highlightedItem?.kind === "action" && highlightedItem.pin) {
+        event.preventDefault();
+        event.stopPropagation();
+        highlightedItem.pin.toggle();
+        return;
+      }
+    }
     // Global new-thread handlers ignore shortcuts while the palette is open.
     const isJump = threadJumpIndexFromCommand(command ?? "") !== null;
     const isNewThread =
@@ -3302,6 +3401,30 @@ function OpenCommandPaletteDialog(props: {
     }
 
     if (event.ctrlKey || event.shiftKey || event.altKey || event.metaKey) return;
+
+    if (event.key === "Tab" && isBrowsing && !relativePathNeedsActiveProject) {
+      if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+      (event as typeof event & { preventBaseUIHandler?: () => void }).preventBaseUIHandler?.();
+      event.preventDefault();
+      if (highlightedItemValue === "browse:up") {
+        void browseUp();
+        return;
+      }
+      const highlightedEntry = visibleBrowseEntries.find(
+        (entry) => `browse:${entry.fullPath}` === highlightedItemValue,
+      );
+      const completion = highlightedEntry
+        ? { name: highlightedEntry.name, isComplete: true }
+        : getFilesystemBrowseTabCompletion(visibleBrowseEntries, browsePath.filterQuery);
+      if (completion?.isComplete) {
+        void browseTo(completion.name);
+      } else if (completion && !pinnedCloneDirectoryName) {
+        setHighlightedItemValue(null);
+        setQuery(`${getBrowseDirectoryPath(query)}${completion.name}`);
+      }
+      return;
+    }
+
     const firstItemValue = autoHighlightsFirstRow ? resultRows.itemValues[0] : undefined;
     if (
       event.key === "ArrowDown" &&

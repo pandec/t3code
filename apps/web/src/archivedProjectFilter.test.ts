@@ -40,6 +40,8 @@ const group: SidebarProjectSnapshot = {
     { environmentId: serverId, projectId: serverCheckout.id },
   ],
   groupedProjectCount: 2,
+  pinned: false,
+  archived: false,
   environmentPresence: "mixed",
   allRemoteMembersAreDesktopLocal: false,
   allRemoteMembersAreWsl: false,

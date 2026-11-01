@@ -6,6 +6,7 @@ import type { Project } from "../types";
 import {
   buildCommandPaletteProjectMetadata,
   buildProjectActionItems,
+  type CommandPaletteItemPin,
   type CommandPaletteProject,
   ITEM_ICON_CLASS,
 } from "./CommandPalette.logic";
@@ -31,6 +32,7 @@ interface ProjectItemsInput {
   readonly locationByEnvironmentId: ReadonlyMap<EnvironmentId, CommandPaletteProjectLocation>;
   readonly runProject: (project: CommandPaletteProject) => Promise<void>;
   readonly projectAccentColor: (project: CommandPaletteProject) => SidebarProjectAccentColor | null;
+  readonly pin?: (project: CommandPaletteProject) => CommandPaletteItemPin | null;
 }
 
 function projectFaviconIcon(project: Project) {
@@ -69,6 +71,7 @@ export function buildProjectSearchItems(input: ProjectItemsInput) {
     projectAccentColor: input.projectAccentColor,
     icon: projectFaviconIcon,
     runProject: input.runProject,
+    ...(input.pin ? { pin: input.pin } : {}),
   });
 }
 
@@ -104,6 +107,7 @@ export function buildNewThreadInProjectItems(
     icon: projectFaviconIcon,
     runProject: input.runProject,
     ...(input.disabledReason ? { disabledReason: input.disabledReason } : {}),
+    ...(input.pin ? { pin: input.pin } : {}),
   });
 }
 

@@ -233,6 +233,7 @@ export const make = Effect.gen(function* () {
       pullRequests: true,
       pullRequestChecks: true,
       linearIssues: true,
+      sideChats: true,
       inlineMessageContext: true,
       requiredWorktreeBootstrap: true,
       threadSettlement: true,
@@ -283,6 +284,7 @@ export const make = Effect.gen(function* () {
       // Fork: bounded recent-archive query, project-filtered.
       recentArchivedThreads: true,
       recentArchivedThreadsProjectFilter: true,
+      projectOrganization: true,
       ignoredFileListing: true,
       triage: true,
       npmReleaseLookup: true,

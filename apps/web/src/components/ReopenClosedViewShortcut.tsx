@@ -45,12 +45,13 @@ import { openThreadInActivePane } from "./thread-split/threadOpenTarget";
 import { useThreadSplitStore } from "./thread-split/threadSplitStore";
 import { toastManager } from "./ui/toast";
 
-const PREVIEW_FORWARDED_LAYOUT_COMMANDS = [
+const PREVIEW_FORWARDED_COMMANDS = [
   "workspace.focusNext",
   "workspace.focusPrevious",
   "sidebar.toggle",
   "rightPanel.toggle",
   "rightPanel.toggleMaximized",
+  "preview.focusUrl",
 ] as const;
 
 const isGlobalPullRequests = (ref: ScopedThreadRef) =>
@@ -98,6 +99,7 @@ export function ReopenClosedViewShortcut() {
           environmentKnown: true,
           catalogReady: true,
           ownerExists: true,
+          sideChatExists: true,
           shellLive: true,
           panel,
         };
@@ -106,6 +108,10 @@ export function ReopenClosedViewShortcut() {
         environmentKnown: catalog.entries.has(ref.environmentId),
         catalogReady: catalog.isReady,
         ownerExists: readThreadShell(ref) !== null || drafts.getDraftThreadByRef(ref) !== null,
+        sideChatExists:
+          entry.kind !== "panel-tab" ||
+          entry.surface.kind !== "side-chat" ||
+          readThreadShell(scopeThreadRef(ref.environmentId, entry.surface.threadId)) !== null,
         shellLive:
           appAtomRegistry.get(environmentShell.stateValueAtom(ref.environmentId)).status === "live",
         panel,
@@ -216,7 +222,7 @@ export function ReopenClosedViewShortcut() {
     // Guest browser processes miss app keydown listeners; desktop forwards the chords as menu actions.
     const commands = [
       ...(hasHistory ? (["view.reopenClosed"] as const) : []),
-      ...PREVIEW_FORWARDED_LAYOUT_COMMANDS,
+      ...PREVIEW_FORWARDED_COMMANDS,
     ];
     void preview
       .setForwardedShortcuts(

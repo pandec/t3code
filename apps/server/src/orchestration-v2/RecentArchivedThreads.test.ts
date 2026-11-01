@@ -31,6 +31,7 @@ const thread = (
     readonly archivedMinute?: number;
     readonly deleted?: boolean;
     readonly subagentOf?: string;
+    readonly sideChatOf?: string;
     readonly pullRequest?: number;
   } = {},
 ): OrchestrationV2DomainEvent => {
@@ -65,13 +66,20 @@ const thread = (
           }),
       activeProviderThreadId: null,
       lineage:
-        overrides.subagentOf === undefined
-          ? { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId }
-          : {
+        overrides.subagentOf !== undefined
+          ? {
               parentThreadId: ThreadId.make(overrides.subagentOf),
               relationshipToParent: "subagent",
               rootThreadId: ThreadId.make(overrides.subagentOf),
-            },
+            }
+          : overrides.sideChatOf !== undefined
+            ? {
+                parentThreadId: ThreadId.make(overrides.sideChatOf),
+                relationshipToParent: "fork",
+                rootThreadId: ThreadId.make(overrides.sideChatOf),
+                sideChat: true,
+              }
+            : { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
       forkedFrom: null,
       createdAt: at(0),
       updatedAt: at(0),
@@ -97,6 +105,10 @@ const seed = Effect.flatMap(ProjectionStore.ProjectionStoreV2, (projections) =>
         archivedMinute: 21,
         subagentOf: "archived-a-new",
       }),
+      thread("archived-side-chat", projectA, {
+        archivedMinute: 22,
+        sideChatOf: "archived-a-new",
+      }),
     ],
     (event) => projections.apply(event),
     { discard: true },
@@ -116,7 +128,7 @@ it.layer(TestLayer)("RecentArchivedThreads", (it) => {
 
         const window = yield* recent.get({ limit: 2 });
         assert.deepStrictEqual(ids(window), ["archived-b-newest", "archived-a-new"]);
-        // Deleted and subagent threads are neither listed nor counted.
+        // Deleted, subagent and side-chat threads are neither listed nor counted.
         assert.strictEqual(window.totalArchivedCount, 4);
         assert.strictEqual(window.threads[1]?.linkedPullRequest?.number, 42);
 

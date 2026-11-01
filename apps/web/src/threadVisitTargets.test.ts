@@ -8,7 +8,15 @@ import { threadVisitHistory } from "./threadLastVisited";
 import { resolveVisitTarget, resolveVisitTargetAfterPark } from "./threadVisitTargets";
 
 const shells = vi.hoisted(
-  () => new Map<string, { archivedAt: string | null; snoozedUntil: string | null }>(),
+  () =>
+    new Map<
+      string,
+      {
+        archivedAt: string | null;
+        snoozedUntil: string | null;
+        lineage: { relationshipToParent: "fork" | "subagent" | null; sideChat?: boolean };
+      }
+    >(),
 );
 vi.mock("./state/entities", () => ({
   readThreadShell: (ref: { threadId: string }) => shells.get(ref.threadId) ?? null,
@@ -47,6 +55,7 @@ vi.mock("./composerDraftStore", () => ({
 
 const environmentId = EnvironmentId.make("env");
 const ref = (id: string) => scopeThreadRef(environmentId, ThreadId.make(id));
+const listed = { relationshipToParent: null };
 const visit = (id: string) => threadVisitHistory.record({ kind: "server", threadRef: ref(id) });
 
 beforeEach(() => {
@@ -55,7 +64,7 @@ beforeEach(() => {
   shellState.olderSettledCut = true;
   shellState.removed.clear();
   for (const id of ["previous", "snoozed"]) {
-    shells.set(id, { archivedAt: null, snoozedUntil: null });
+    shells.set(id, { archivedAt: null, snoozedUntil: null, lineage: listed });
   }
   visit("previous");
   visit("snoozed");
@@ -70,12 +79,25 @@ describe("resolveVisitTargetAfterPark", () => {
   });
 
   it("skips a previous thread that is snoozed or snoozing in the same batch", () => {
-    shells.set("previous", { archivedAt: null, snoozedUntil: "2999-01-01T00:00:00.000Z" });
+    shells.set("previous", {
+      archivedAt: null,
+      snoozedUntil: "2999-01-01T00:00:00.000Z",
+      lineage: listed,
+    });
     expect(resolveVisitTargetAfterPark(ref("snoozed"))).toBeNull();
-    shells.set("previous", { archivedAt: null, snoozedUntil: null });
+    shells.set("previous", { archivedAt: null, snoozedUntil: null, lineage: listed });
     expect(
       resolveVisitTargetAfterPark(ref("snoozed"), new Set([scopedThreadKey(ref("previous"))])),
     ).toBeNull();
+  });
+
+  it("skips a previous side chat, which the thread list hides", () => {
+    shells.set("previous", {
+      archivedAt: null,
+      snoozedUntil: null,
+      lineage: { relationshipToParent: "fork", sideChat: true },
+    });
+    expect(resolveVisitTargetAfterPark(ref("snoozed"))).toBeNull();
   });
 });
 

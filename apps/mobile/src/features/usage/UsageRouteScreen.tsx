@@ -28,6 +28,7 @@ import {
   formatUsd,
   makeWindow,
   refreshWindow as refreshUsageWindow,
+  usageSourceMessages,
 } from "@t3tools/shared/usageFormat";
 import { useRef, useState, type ReactNode } from "react";
 import { Platform, Pressable, RefreshControl, View } from "react-native";
@@ -126,24 +127,16 @@ function UsageScreen(props: {
     void refresh();
     void limits.refreshAfterEnable();
   };
-  const sourceMessages = [
-    ...new Set(
-      selectedEnvironments.flatMap(
-        (environment) =>
-          (environment.state.kind === "reported"
-            ? environment.state.summary
-            : null
-          )?.sources.flatMap((source) =>
-            source.message &&
-            !source.action &&
-            source.fingerprint.provider === "cursor" &&
-            source.status === "missing"
-              ? [source.message]
-              : [],
-          ) ?? [],
-      ),
+  // Fork: scan errors report as partial sources, so only Cursor's missing note shows here (as on web).
+  const sourceMessages = usageSourceMessages(
+    selectedEnvironments.flatMap((environment) =>
+      environment.state.kind === "reported"
+        ? environment.state.summary.sources.filter(
+            (source) => source.fingerprint.provider === "cursor" && source.status === "missing",
+          )
+        : [],
     ),
-  ];
+  );
   const canReadDiagnostics = selectedEnvironments.some(
     (environment) => environment.canReadDiagnostics,
   );

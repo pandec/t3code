@@ -359,13 +359,12 @@ async function loadImagePicker() {
 async function reencodeImageAsJpeg(input: {
   readonly uri: string;
   readonly mimeType: string;
-}): Promise<{ readonly base64: string; readonly sizeBytes: number } | null> {
+}): Promise<{ readonly base64: string; readonly uri: string } | null> {
   if (input.mimeType === "image/jpeg" || input.mimeType === "image/gif") {
     return null;
   }
   try {
-    const rendered = await renderPhoto(input.uri, "jpeg");
-    return { base64: rendered.base64, sizeBytes: estimateBase64ByteSize(rendered.base64) };
+    return await renderPhoto(input.uri, "jpeg");
   } catch {
     return null;
   }
@@ -616,21 +615,28 @@ export async function convertPastedImagesToAttachments(input: {
   const results: DraftComposerImageAttachment[] = [];
 
   for (const [index, uri] of input.uris.entries()) {
-    const ownedTemporaryFile = isOwnedPastedImageUri(uri);
+    const temporaryUris = isOwnedPastedImageUri(uri) ? [uri] : [];
     try {
       if (index >= Math.max(0, remainingSlots)) {
         continue;
       }
-      const originalMimeType = mimeTypeFromUri(uri);
-      const reencoded = await reencodeImageAsJpeg({ uri, mimeType: originalMimeType });
-      const originalBase64 = reencoded ? null : await new File(uri).base64();
+      const file = new File(uri);
+      const reportedMimeType = file.type;
+      const sourceMimeType = reportedMimeType?.startsWith("image/")
+        ? reportedMimeType
+        : mimeTypeFromUri(uri);
+      const reencoded = await reencodeImageAsJpeg({ uri, mimeType: sourceMimeType });
+      if (reencoded !== null) {
+        temporaryUris.push(reencoded.uri);
+      }
+      const originalBase64 = reencoded ? null : await file.base64();
       // A JPEG skips the re-encode; an oversized one is still scaled down.
       const fitted =
         originalBase64 === null
           ? null
-          : await fitComposerImage({ uri, mimeType: originalMimeType, base64: originalBase64 });
+          : await fitComposerImage({ uri, mimeType: sourceMimeType, base64: originalBase64 });
       const base64 = reencoded?.base64 ?? fitted?.base64 ?? originalBase64 ?? "";
-      const mimeType = reencoded ? "image/jpeg" : originalMimeType;
+      const mimeType = reencoded ? "image/jpeg" : sourceMimeType;
       // Same attach-time invariant as the picker: a paste whose re-encode
       // failed must not enter the draft as an unsendable type.
       if (!isProviderSendTurnSupportedImageMimeType(mimeType)) {
@@ -647,19 +653,19 @@ export async function convertPastedImagesToAttachments(input: {
         mimeType,
         sizeBytes,
         dataUrl: `data:${mimeType};base64,${base64}`,
-        previewUri: ownedTemporaryFile ? `data:${mimeType};base64,${base64}` : (fitted?.uri ?? uri),
+        previewUri: `data:${mimeType};base64,${base64}`,
       });
     } catch (error) {
       console.warn("Failed to read pasted image", uri, error);
     } finally {
-      if (ownedTemporaryFile) {
+      for (const temporaryUri of temporaryUris) {
         try {
-          const file = new File(uri);
+          const file = new File(temporaryUri);
           if (file.exists) {
             file.delete();
           }
         } catch (error) {
-          console.warn("Failed to remove temporary pasted image", uri, error);
+          console.warn("Failed to remove temporary pasted image", temporaryUri, error);
         }
       }
     }

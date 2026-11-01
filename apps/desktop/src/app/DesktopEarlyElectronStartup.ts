@@ -30,7 +30,6 @@ export interface EarlyLinuxElectronOptions {
   readonly isDevelopment: boolean;
   /** Dev server OR packaged Dev: the identity that picks scheme, entry, and state paths. */
   readonly usesDevelopmentIdentity: boolean;
-  readonly linuxWmClass: string;
   readonly linuxDesktopEntryName: string;
   readonly passwordStore: LinuxPasswordStoreSwitch | null;
 }
@@ -152,7 +151,6 @@ export function resolveEarlyLinuxElectronOptions(
   return {
     isDevelopment,
     usesDevelopmentIdentity: usesDevelopmentIdentity(input),
-    linuxWmClass: usesDevelopmentIdentity(input) ? "t3code-dev" : "t3code",
     linuxDesktopEntryName: resolveLinuxDesktopEntryName(usesDevelopmentIdentity(input)),
     passwordStore: resolveLinuxPasswordStoreSwitch({
       preference,

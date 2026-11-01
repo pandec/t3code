@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  isListedThreadLineage,
   ORCHESTRATION_V2_WS_METHODS,
   ProjectId,
   type OrchestrationV2ArchivedShellSnapshot,
@@ -149,9 +150,9 @@ export function parseRecentArchivedThreadsKey(key: string): {
   };
 }
 
-/** Fork: archive lists show the user's own archived threads, never subagent children. */
+/** Fork: archive lists show the user's own archived threads, never subagents or side chats. */
 export function isListedArchivedThread(thread: OrchestrationV2ThreadShell): boolean {
-  return thread.archivedAt !== null && thread.lineage.relationshipToParent !== "subagent";
+  return thread.archivedAt !== null && isListedThreadLineage(thread.lineage);
 }
 
 function presentArchived(

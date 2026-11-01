@@ -70,7 +70,6 @@ describe("DesktopEarlyElectronStartup", () => {
       // identity so its portal entry never overwrites the release one.
       isDevelopment: false,
       usesDevelopmentIdentity: true,
-      linuxWmClass: "t3code-dev",
       linuxDesktopEntryName: "com.t3tools.T3Code.Development.desktop",
       passwordStore: "gnome-libsecret",
     });

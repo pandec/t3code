@@ -145,7 +145,7 @@ const makeCache = Effect.fn("TestThreadPrewarm.makeCache")(function* (options: {
 });
 
 describe("selectPrewarmCandidates", () => {
-  it("ranks recently updated threads and drops archived, subagent and running ones", () => {
+  it("ranks recently updated threads and drops archived, subagent, side chat and running ones", () => {
     const threads = [
       shell("old", { updatedAt: at("2026-06-01T00:00:00.000Z") }),
       shell("archived", {
@@ -158,6 +158,15 @@ describe("selectPrewarmCandidates", () => {
           rootThreadId: ThreadId.make("newest"),
           parentThreadId: ThreadId.make("newest"),
           relationshipToParent: "subagent",
+        },
+      }),
+      shell("side", {
+        updatedAt: at("2026-06-08T00:00:00.000Z"),
+        lineage: {
+          rootThreadId: ThreadId.make("newest"),
+          parentThreadId: ThreadId.make("newest"),
+          relationshipToParent: "fork",
+          sideChat: true,
         },
       }),
       shell("running", { updatedAt: at("2026-06-06T00:00:00.000Z"), status: "running" }),

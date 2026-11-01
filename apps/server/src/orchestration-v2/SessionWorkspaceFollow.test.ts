@@ -520,6 +520,8 @@ it.live("the follow worker moves the thread for the live process only", () =>
                   scripts: [],
                   createdAt: "2026-10-04T00:00:00.000Z",
                   updatedAt: "2026-10-04T00:00:00.000Z",
+                  pinnedAt: null,
+                  archivedAt: null,
                   deletedAt: null,
                 })
               : Option.none(),

@@ -1,5 +1,5 @@
 /** Resolves remembered thread visits against live state (see threadLastVisited). */
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import { isListedThreadLineage, type ScopedThreadRef } from "@t3tools/contracts";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import * as Option from "effect/Option";
@@ -30,7 +30,7 @@ function isThreadOpenable(ref: ScopedThreadRef): boolean {
   );
   const key = scopedThreadKey(ref);
   if (shell !== null) {
-    if (shell.archivedAt !== null) return false;
+    if (shell.archivedAt !== null || !isListedThreadLineage(shell.lineage)) return false;
     if (state !== null) noteShellSeen(key, state.generation);
     return true;
   }

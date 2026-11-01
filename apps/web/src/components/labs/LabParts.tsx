@@ -5,12 +5,13 @@ import { presentThreadShell } from "@t3tools/client-runtime/state/models";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { liveArchivedShellSnapshotAtom } from "../../lib/archivedThreadsState";
 import { cn } from "~/lib/utils";
 import { useThreadShell } from "../../state/entities";
-import { environmentThreadShells, useThreadFamily } from "../../state/threads";
+import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { environmentThreadShells, threadFamilies } from "../../state/threads";
 import { Badge } from "../ui/badge";
 import { resolveSidebarThreadStatus } from "../Sidebar.logic";
 import { useOpenThreadInPane } from "../thread-split/useOpenThreadInPane";
@@ -77,10 +78,12 @@ function useLabOwnerFamily(environmentId: EnvironmentId, threadId: string | null
   if (threadId !== null && shell === null && familyThreadId !== threadId) {
     setFamilyThreadId(threadId);
   }
-  useThreadFamily(
-    environmentId,
-    familyThreadId === threadId ? (threadId as ThreadId | null) : null,
-  );
+  const rootThreadId = familyThreadId === threadId ? (threadId as ThreadId | null) : null;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- mounts the owner's subagent tree into the thread family registry while the lab row shows it
+  useEffect(() => {
+    if (rootThreadId === null) return;
+    return threadFamilies.mount(appAtomRegistry, environmentId, rootThreadId);
+  }, [environmentId, rootThreadId]);
 }
 
 /** The owner thread, read from the cheap thread shells; null when it is not a T3 thread. */

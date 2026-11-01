@@ -7,6 +7,7 @@ import {
   CommandId,
   EnvironmentId,
   IsoDateTime,
+  isListedThreadLineage,
   OrchestrationV2ThreadShell,
   ThreadId,
 } from "@t3tools/contracts";
@@ -298,7 +299,7 @@ export function deriveThreadLifecyclePresentation(
     if (intent.desiredArchived) {
       activeByKey.delete(key);
       pendingArchivedThreadKeys.add(key);
-      if (shell !== undefined)
+      if (shell !== undefined && isListedThreadLineage(shell.lineage))
         pendingArchivedThreads.push({ ...shell, archivedAt: intent.createdAt });
       continue;
     }

@@ -5,6 +5,7 @@ import { useEffect, useRef } from "react";
 import { isMacPlatform } from "../../lib/utils";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { getTerminalFocusOwner } from "../../lib/terminalFocus";
+import { isInSideChatPane } from "../../lib/sideChatPane";
 import type { ThreadId } from "@t3tools/contracts";
 import type { ComposerHandleRef } from "../../composerHandleContext";
 import { useThreadPaneId } from "../thread-split/threadPaneContext";
@@ -22,6 +23,7 @@ export function usePasteToFocusComposer(
   const threadPaneId = useThreadPaneId();
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- attaches window keydown and paste capture listeners that route stray pastes into the composer
   useEffect(() => {
+    if (!activeThreadId) return;
     const keyHandler = (event: KeyboardEvent) => {
       if (!isThreadPaneActive(threadPaneId)) return;
       if (
@@ -33,7 +35,7 @@ export function usePasteToFocusComposer(
     };
     const handler = (event: ClipboardEvent) => {
       if (!isThreadPaneActive(threadPaneId)) return;
-      if (!activeThreadId || isCommandPaletteOpen()) return;
+      if (isCommandPaletteOpen() || isInSideChatPane(event.target)) return;
       if (getTerminalFocusOwner() !== null) return;
       if (composerRef.current?.isModelPickerOpen()) return;
       const text = pasteTextToFocusComposer(event);

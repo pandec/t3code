@@ -1,5 +1,6 @@
 import {
   CommandId,
+  isListedThreadLineage,
   OrchestratorMcpFailure,
   type ThreadGroup,
   type ThreadId,
@@ -115,7 +116,7 @@ const make = Effect.gen(function* () {
       .pipe(Effect.mapError(unavailable));
     const counts = new Map<string | null, number>();
     for (const thread of snapshot.threads) {
-      if (thread.archivedAt !== null || thread.lineage.relationshipToParent === "subagent") {
+      if (thread.archivedAt !== null || !isListedThreadLineage(thread.lineage)) {
         continue;
       }
       const groupId = threadGroupId(thread, groups);

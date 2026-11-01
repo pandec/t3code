@@ -14,10 +14,11 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
+import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
 
 const failedAt = DateTime.makeUnsafe("2026-10-04T10:00:00.000Z");
 const resetAt = "2026-10-04T11:00:00.000Z";
-const nowMs = Date.parse("2026-10-04T12:00:00.000Z");
+const resumeNowMs = Date.parse("2026-10-04T12:00:00.000Z");
 const runId = RunId.make("run-limited");
 
 // An armed auto-resume past its reset time.
@@ -45,11 +46,11 @@ const armed: ProjectionStore.ProjectionLimitRecoveryCandidate = {
 
 describe("limitRecoveryCommand (fork)", () => {
   it("resumes past a stored snooze marker without a wake time", () => {
-    expect(UsageLimitRecoveryWorker.limitRecoveryCommand(armed, true, nowMs)?.type).toBe(
+    expect(UsageLimitRecoveryWorker.limitRecoveryCommand(armed, true, resumeNowMs)?.type).toBe(
       "message.dispatch",
     );
     const legacy = { ...armed, snoozedAt: DateTime.makeUnsafe("2026-10-04T10:30:00.000Z") };
-    expect(UsageLimitRecoveryWorker.limitRecoveryCommand(legacy, true, nowMs)?.type).toBe(
+    expect(UsageLimitRecoveryWorker.limitRecoveryCommand(legacy, true, resumeNowMs)?.type).toBe(
       "message.dispatch",
     );
   });
@@ -108,3 +109,50 @@ it.effect("idle sweeps skip SQL until the next wake time or a relevant event", (
     }).pipe(Effect.provide(layer));
   }),
 );
+
+const HOUR_MS = 60 * 60 * 1000;
+const nowMs = Date.parse("2026-10-19T12:00:00.000Z");
+
+const failedThread = (failedAgoMs: number, resetAgoMs: number) => {
+  const failedAt = DateTime.makeUnsafe(nowMs - failedAgoMs);
+  const candidate: ProjectionStore.ProjectionLimitRecoveryCandidate = {
+    id: ThreadId.make("thread:limited"),
+    status: "failed",
+    lastErrorClass: "usage_limit",
+    usageLimitResetAt: DateTime.formatIso(DateTime.makeUnsafe(nowMs - resetAgoMs)),
+    latestRunId: RunId.make("run:limited"),
+    latestRunCompletedAt: failedAt,
+    updatedAt: failedAt,
+    archivedAt: null,
+    settledOverride: null,
+    pendingRuntimeRequest: null,
+    limitRecovery: null,
+    snoozedUntil: null,
+  };
+  return candidate;
+};
+
+describe("limitRecoveryCommand arming", () => {
+  it("does not freshly arm a failure whose reset passed days ago", () => {
+    const thread = failedThread(5 * 24 * HOUR_MS, 4 * 24 * HOUR_MS);
+    assert.isNull(limitRecoveryCommand(thread, true, nowMs));
+    assert.isNull(limitRecoveryCommand(thread, true, nowMs, true));
+  });
+
+  it("still arms a failure whose reset only just passed", () => {
+    const thread = failedThread(6 * HOUR_MS, HOUR_MS);
+    const arm = limitRecoveryCommand(thread, true, nowMs);
+    assert.equal(arm?.type, "thread.metadata.update");
+  });
+
+  it("arms a reset that is exactly 24 hours overdue", () => {
+    const thread = failedThread(30 * HOUR_MS, 24 * HOUR_MS);
+    const arm = limitRecoveryCommand(thread, true, nowMs);
+    assert.equal(arm?.type, "thread.metadata.update");
+  });
+
+  it("does not arm a reset that is 24 hours and 1ms overdue", () => {
+    const thread = failedThread(30 * HOUR_MS, 24 * HOUR_MS + 1);
+    assert.isNull(limitRecoveryCommand(thread, true, nowMs));
+  });
+});

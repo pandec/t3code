@@ -1,4 +1,5 @@
 import {
+  latestExecutedRun,
   latestRootProviderFailure,
   latestUnheldRun,
   threadErrorSummary,
@@ -18,6 +19,7 @@ import {
   orchestrationV2RunWorkStartedAt,
   type EnvironmentId,
   type OrchestrationV2ThreadShell,
+  type RunId,
   type ThreadId,
 } from "@t3tools/contracts";
 import {
@@ -37,6 +39,7 @@ import {
   type ThreadStructure,
   type ThreadStructureRuntime,
 } from "./models.ts";
+import { commandDisplayText } from "../work-log/commandLabel.ts";
 import { formatSubagentDisplayTitle } from "./subagentDisplay.ts";
 
 const ACTIVITY_RUN_STATUSES = new Set(["preparing", "starting", "running", "waiting"]);
@@ -213,6 +216,20 @@ export function formatProviderSubagentStatus(
   return live ? `${label} ${elapsed}` : `${label} in ${elapsed}`;
 }
 
+/** The run a manual continuation resumes; the server holds the queue until it does. */
+export function deriveResumableRunId(
+  projection: Pick<ThreadStructure, "runs" | "turnItems">,
+  runtime: Pick<ThreadStructureRuntime, "lastErrorClass"> | null,
+): RunId | null {
+  const run = latestExecutedRun(projection.runs);
+  if (run?.status === "interrupted") return run.id;
+  return run?.status === "failed" &&
+    runtime?.lastErrorClass === "usage_limit" &&
+    latestRootProviderFailure(run, projection.turnItems)?.class === "usage_limit"
+    ? run.id
+    : null;
+}
+
 export function deriveThreadRuntime(
   projection: ThreadStructure & Pick<OrchestrationV2ThreadProjection, "updatedAt">,
 ): ThreadRuntimeSummary | null {
@@ -374,9 +391,13 @@ export function presentPendingBackgroundWork(
     .map((task): PendingBackgroundWorkItem => {
       const description = task.description?.trim();
       const label =
-        task.kind === "subagent" && description !== undefined
-          ? formatSubagentDisplayTitle(description).trim()
-          : description;
+        description === undefined
+          ? undefined
+          : task.kind === "subagent"
+            ? formatSubagentDisplayTitle(description).trim()
+            : task.kind === "command" || task.kind === "monitor"
+              ? commandDisplayText(description)
+              : description;
       return {
         taskId: task.taskId,
         kind: task.kind,

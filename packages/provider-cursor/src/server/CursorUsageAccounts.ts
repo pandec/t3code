@@ -252,18 +252,18 @@ const make = Effect.gen(function* () {
     retentionStartMs: number,
     awaitRefresh: boolean,
   ) {
-    if (
-      typeof credential === "string" &&
-      !(yield* fileSystem.exists(credential).pipe(Effect.orElseSucceed(() => true)))
-    ) {
-      return null;
-    }
+    // A Keychain login outlives an uninstalled Cursor, so it also needs Cursor's local directory.
+    // Fork: without it, skip the Keychain probe but keep reporting retained account history.
+    const localLogin = typeof credential === "string" ? credential : path.dirname(authPath);
+    const installed = yield* fileSystem.exists(localLogin).pipe(Effect.orElseSucceed(() => true));
+    if (!installed && typeof credential === "string") return null;
     yield* ensureLoaded;
     const credentialKey = typeof credential === "string" ? credential : "keychain";
     const nowMs = yield* Clock.currentTimeMillis;
     const recentFailure = failures.get(credentialKey);
     let refreshing = false;
     if (
+      installed &&
       (recentFailure === undefined || nowMs - recentFailure.atMs >= CURSOR_ACCOUNT_TTL_MS) &&
       !isCursorCacheFresh(caches.get(credentialKey), nowMs)
     ) {
@@ -295,6 +295,7 @@ const make = Effect.gen(function* () {
             : { status: "partial", message: failureMessage ?? CURSOR_ACCOUNT_READ_ERROR }),
         } satisfies ProviderUsageScan;
       }
+      if (!installed) return null;
       return {
         dir: authPath,
         // Never combine a local fallback with another server's account-wide history.

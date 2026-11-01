@@ -47,6 +47,7 @@ import {
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import {
   applyProviderInstanceSettings,
+  brandProviderInstanceEntries,
   deriveProviderInstanceEntries,
   shouldShowInstanceBadge,
   type ProviderInstanceEntry,
@@ -208,6 +209,8 @@ function SubagentAvatar({
   displayName,
   iconUrl,
   modelIcon,
+  accentColor,
+  showBadge,
   status,
   className,
 }: {
@@ -215,6 +218,8 @@ function SubagentAvatar({
   displayName?: string | undefined;
   iconUrl?: string | undefined;
   modelIcon?: string | undefined;
+  accentColor?: string | undefined;
+  showBadge: boolean;
   status?: OrchestrationV2TurnItem["status"] | undefined;
   className?: string;
 }) {
@@ -231,7 +236,10 @@ function SubagentAvatar({
           driverKind={driver}
           displayName={displayName ?? driver}
           modelIcon={modelIcon}
+          accentColor={accentColor}
           acpRegistryIconUrl={iconUrl}
+          showBadge={showBadge}
+          size="compact"
           className="z-auto"
           iconClassName="size-3.5"
         />
@@ -241,7 +249,8 @@ function SubagentAvatar({
       {status ? (
         <span
           className={cn(
-            "absolute -right-px -bottom-px size-2 rounded-full ring-2 ring-background",
+            "absolute size-2 rounded-full ring-2 ring-background",
+            showBadge ? "-left-px -top-px" : "-right-px -bottom-px",
             subagentStatusVisual(status).dotClass,
           )}
         />
@@ -267,9 +276,13 @@ export function EnvironmentSubagentAvatar({
   remote?: OrchestrationV2RemoteTaskChild | undefined;
   status?: OrchestrationV2TurnItem["status"] | undefined;
 }) {
-  const providersAtom = serverEnvironment.providersValueAtom(
-    remote?.environmentId ?? environmentId,
-  );
+  const providerEnvironmentId = remote?.environmentId ?? environmentId;
+  const providersAtom = serverEnvironment.providersValueAtom(providerEnvironmentId);
+  const settings = useAtomValue(serverEnvironment.settingsValueAtom(providerEnvironmentId));
+  const entries = (providers: ReadonlyArray<ServerProvider> | null | undefined) => {
+    const derived = deriveProviderInstanceEntries(providers ?? []);
+    return settings ? brandProviderInstanceEntries(derived, settings) : derived;
+  };
   const providerDriver = useAtomValue(
     providersAtom,
     (providers) =>
@@ -278,8 +291,18 @@ export function EnvironmentSubagentAvatar({
   const displayName = useAtomValue(
     providersAtom,
     (providers) =>
-      providers?.find((provider) => provider.instanceId === providerInstanceId)?.displayName,
+      entries(providers).find((entry) => entry.instanceId === providerInstanceId)?.displayName,
   );
+  const accentColor = useAtomValue(
+    providersAtom,
+    (providers) =>
+      entries(providers).find((entry) => entry.instanceId === providerInstanceId)?.accentColor,
+  );
+  const showBadge = useAtomValue(providersAtom, (providers) => {
+    const all = entries(providers);
+    const entry = all.find((candidate) => candidate.instanceId === providerInstanceId);
+    return entry !== undefined && shouldShowInstanceBadge(entry, all);
+  });
   const iconUrl = useAtomValue(
     providersAtom,
     (providers) =>
@@ -297,6 +320,8 @@ export function EnvironmentSubagentAvatar({
       displayName={displayName}
       iconUrl={iconUrl}
       modelIcon={modelIcon}
+      accentColor={accentColor}
+      showBadge={showBadge}
     />
   );
 }

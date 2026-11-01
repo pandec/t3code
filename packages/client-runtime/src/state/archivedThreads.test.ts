@@ -105,7 +105,7 @@ describe("recent archive shelf", () => {
     });
   });
 
-  it("never pages the full archive for a filtered shelf, and drops subagents from the fallback", () => {
+  it("never pages the full archive for a filtered shelf, and drops subagents and side chats from the fallback", () => {
     const fallbackReads: EnvironmentId[] = [];
     const runtime = Atom.runtime(
       Layer.succeed(
@@ -132,6 +132,14 @@ describe("recent archive shelf", () => {
                   rootThreadId: ThreadId.make("root"),
                   parentThreadId: ThreadId.make("root"),
                   relationshipToParent: "subagent",
+                },
+              }),
+              archived("side", 4, {
+                lineage: {
+                  rootThreadId: ThreadId.make("root"),
+                  parentThreadId: ThreadId.make("root"),
+                  relationshipToParent: "fork",
+                  sideChat: true,
                 },
               }),
             ],

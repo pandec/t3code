@@ -72,6 +72,7 @@ import { useAtomValue } from "@effect/atom-react";
 import type { RunStopPresentation } from "@t3tools/client-runtime/state/thread-execution";
 import { Atom } from "effect/reactivity";
 import { environmentThreadDetails } from "../../state/threads";
+import { openSideChatTab } from "../../lib/sideChatPane";
 import type { useLocalDispatchState } from "./useLocalDispatchState";
 const RELATED_THREAD_SHELL_WAIT_MS = 1_000;
 const NO_RUN_STOP_ATOM = Atom.make<RunStopPresentation | null>(null).pipe(
@@ -474,10 +475,12 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     }
     // Fork: an archived thread leaves the live shell but still opens through
     // detail hydration, as from the archive browser; only a deleted one is gone.
-    if (readThreadShell(threadRef)?.deletedAt != null) {
+    const shell = readThreadShell(threadRef);
+    if (shell?.deletedAt != null) {
       toastManager.add({ type: "info", title: "This thread is no longer available" });
       return;
     }
+    if (activeThreadRef && openSideChatTab(activeThreadRef, shell)) return;
     void openThreadInPane(threadRef);
   };
   const onOpenRelatedThreadStable = useStableCallback(onOpenRelatedThread);
@@ -699,7 +702,14 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
       if (settleAndAdvance(activeThreadRef)) return;
       void settleThread(activeThreadRef).then(toastThreadActionFailure("Failed to settle thread"));
     },
-    "thread.pin": () => {
+    "thread.pin": ({ event }) => {
+      // An open project list pins its highlighted project with this key instead.
+      if (
+        event.target instanceof Element &&
+        event.target.closest('[role="combobox"][aria-expanded="true"]') !== null
+      ) {
+        return false;
+      }
       if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return false;
       if (!activeThreadShell || !activeThreadRef || !serverConfigLoaded) return;
       void (

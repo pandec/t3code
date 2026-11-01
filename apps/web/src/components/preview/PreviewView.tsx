@@ -863,12 +863,20 @@ export function PreviewView({
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to preview actions while the view is visible
   useEffect(() => {
     if (!visible) return;
-    return subscribePreviewAction((action) => {
-      // Split view: both panes can show a visible preview — the bus is
-      // untargeted, so only the active pane's preview reacts.
-      if (!isThreadPaneActive(threadPaneId)) return;
-      onPreviewAction(action);
+    // Split view: both panes can show a visible preview and these buses are
+    // untargeted, so only the active pane's preview reacts.
+    const unsubscribeAction = subscribePreviewAction((action) => {
+      if (isThreadPaneActive(threadPaneId)) onPreviewAction(action);
     });
+    const unsubscribeMenu = window.desktopBridge?.onMenuAction((action) => {
+      if (action === "preview.focusUrl" && isThreadPaneActive(threadPaneId)) {
+        onPreviewAction("focus-url");
+      }
+    });
+    return () => {
+      unsubscribeAction();
+      unsubscribeMenu?.();
+    };
   }, [threadPaneId, visible]);
 
   return (

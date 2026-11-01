@@ -48,7 +48,7 @@ import {
   parseTimestampDate,
 } from "../timestampFormat";
 import { type Project, type SidebarThreadSummary, type Thread } from "../types";
-import { isSidebarSubagentThread } from "./Sidebar.logic";
+import { isSidebarHiddenThread } from "./Sidebar.logic";
 
 export const RECENT_THREAD_LIMIT = 12;
 export const ITEM_ICON_CLASS = "size-4 text-icon-muted";
@@ -282,6 +282,14 @@ export interface CommandPaletteActionItem extends CommandPaletteItem {
   readonly kind: "action";
   readonly keepOpen?: boolean;
   readonly run: () => Promise<void>;
+  /** A pin toggle on the row, also reached with the pin shortcut while the row is highlighted. */
+  readonly pin?: CommandPaletteItemPin;
+}
+
+export interface CommandPaletteItemPin {
+  readonly name: string;
+  readonly pinned: boolean;
+  readonly toggle: () => void;
 }
 
 export interface CommandPaletteSubmenuItem extends CommandPaletteItem {
@@ -441,10 +449,12 @@ export function buildProjectActionItems(input: {
   shortcutCommand?: KeybindingCommand;
   /** Reason a project cannot be picked; it replaces the description and disables the row. */
   disabledReason?: (project: CommandPaletteProject) => string | null;
+  pin?: (project: CommandPaletteProject) => CommandPaletteItemPin | null;
 }): CommandPaletteActionItem[] {
   return input.projects.map((project) => {
     const projectAccentColor = input.projectAccentColor?.(project) ?? null;
     const disabledReason = input.disabledReason?.(project) ?? null;
+    const pin = input.pin?.(project) ?? null;
     return {
       kind: "action",
       value: `${input.valuePrefix}:${project.environmentId}:${project.id}`,
@@ -460,6 +470,7 @@ export function buildProjectActionItems(input: {
       ...(projectAccentColor !== null ? { projectAccentColor } : {}),
       ...(disabledReason !== null ? { disabled: true, description: disabledReason } : {}),
       ...(input.shortcutCommand !== undefined ? { shortcutCommand: input.shortcutCommand } : {}),
+      ...(pin ? { pin } : {}),
       run: async () => {
         await input.runProject(project);
       },
@@ -922,7 +933,7 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
 }): CommandPaletteActionItem[] {
   // Callers order these: recents by last use, search results by rank.
   const visibleThreads = input.threads.filter(
-    (thread) => thread.archivedAt === null && !isSidebarSubagentThread(thread),
+    (thread) => thread.archivedAt === null && !isSidebarHiddenThread(thread),
   );
 
   return visibleThreads.map((thread) => {
@@ -1371,4 +1382,26 @@ export function resolveCommandPaletteProject<TProject>(
   projectId: ProjectId | null,
 ) {
   return environmentId && projectId ? projects.get(`${environmentId}:${projectId}`) : undefined;
+}
+
+/**
+ * Where "No project" goes among the new-thread picker's real projects: at the
+ * scratch project's own place when it is pinned or current, else after the
+ * pinned projects and the first unpinned one.
+ */
+export function newThreadNoProjectIndex(
+  entries: ReadonlyArray<{
+    readonly isScratch: boolean;
+    readonly pinned: boolean;
+    readonly isPreferred: boolean;
+  }>,
+): number {
+  const projects = entries.filter((entry) => !entry.isScratch);
+  const scratchAt = entries.findIndex((entry) => entry.isScratch);
+  const scratch = entries[scratchAt];
+  if (scratch && (scratch.pinned || scratch.isPreferred)) {
+    return entries.slice(0, scratchAt).filter((entry) => !entry.isScratch).length;
+  }
+  const pinnedCount = projects.filter((entry) => entry.pinned).length;
+  return Math.min(pinnedCount + 1, projects.length);
 }
