@@ -554,3 +554,66 @@ describe("archive runner script", () => {
       }).pipe(Effect.provide(NodeServices.layer)),
   );
 });
+
+describe("remote launch script", () => {
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "waits for t3code.service instead of launching a competing server",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-launch-service-" });
+        const bin = `${root}/bin`;
+        const script = `${root}/launch.sh`;
+        yield* fs.makeDirectory(bin);
+        const writeExecutable = (file: string, contents: string) =>
+          fs.writeFileString(file, contents).pipe(Effect.andThen(fs.chmod(file, 0o755)));
+        yield* writeExecutable(
+          `${bin}/systemctl`,
+          [
+            "#!/bin/sh",
+            'case "$2" in',
+            '  cat) case "$HOME" in *" "*) q=\'"\' ;; *) q= ;; esac',
+            '    printf "[Service]\\nEnvironment=T3CODE_HOME=%s%s/.t3%s\\n" "$q" "$HOME" "$q" ;;',
+            '  start) [ ! -f "$HOME/masked" ] && : >"$HOME/service-started" ;;',
+            "esac",
+          ].join("\n"),
+        );
+        yield* fs.writeFileString(
+          script,
+          SshTunnel.buildRemoteLaunchScript({ ...ARCHIVE, preferInstalledLauncher: true }),
+        );
+        const launch = Effect.fn("launch")(function* (name: string, masked: boolean) {
+          const home = `${root}/${name}`;
+          yield* fs.makeDirectory(`${home}/.local/bin`, { recursive: true });
+          if (masked) yield* fs.writeFileString(`${home}/masked`, "");
+          yield* writeExecutable(
+            `${home}/.local/bin/t3`,
+            [
+              "#!/bin/sh",
+              'case "$1:${2:-}" in',
+              '  __ssh-helper:runtime-port) [ -f "$HOME/service-started" ] && echo "4242 3773" ;;',
+              '  __ssh-helper:wait-ready) echo "$3" >>"$HOME/probed" ;;',
+              "  __ssh-helper:pick-port) echo 3999 ;;",
+              '  serve:*) : >"$HOME/spawned" ;;',
+              "esac",
+            ].join("\n"),
+          );
+          const result = yield* runScript(home, [script, "state"], {
+            path: `${bin}:/usr/bin:/bin`,
+          });
+          assert.equal(result.exitCode, 0, result.stderr);
+          return { stdout: result.stdout, home };
+        });
+
+        for (const name of ["plain", "quoted home"]) {
+          const service = yield* launch(name, false);
+          assert.include(service.stdout, '{"remotePort":3773,"serverKind":"external"}', name);
+          assert.isFalse(yield* fs.exists(`${service.home}/spawned`), name);
+          assert.equal(yield* fs.readFileString(`${service.home}/probed`), "3773\n", name);
+        }
+
+        const masked = yield* launch("masked home", true);
+        assert.include(masked.stdout, '{"remotePort":3999,"serverKind":"managed"}');
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+});
