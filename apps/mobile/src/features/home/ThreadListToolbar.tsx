@@ -18,6 +18,7 @@ import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands
 import { WorkspaceListToolbarRow } from "../workspace/WorkspaceListToolbarRow";
 import { useWorkspaceConnectionState } from "../../state/workspace";
 import { useActiveWorkFilter } from "../../state/use-mobile-preferences";
+import { ACTIVE_WORK_TOGGLE_LABEL, activeWorkToggleIcon } from "../threads/active-work-toggle";
 import { useToolbarLayout } from "../../components/ui/useToolbarLayout";
 
 export function ThreadListToolbar(props: {
@@ -93,8 +94,8 @@ export function ThreadListToolbar(props: {
   const filterButton = connectionState.hasConnections ? (
     <>
       <AndroidHeaderIconButton
-        accessibilityLabel={activeWork.enabled ? "Show all threads" : "Show only active threads"}
-        icon={activeWork.enabled ? "bolt.fill" : "bolt"}
+        accessibilityLabel={ACTIVE_WORK_TOGGLE_LABEL}
+        icon={activeWorkToggleIcon(activeWork.enabled)}
         selected={activeWork.enabled}
         onPress={activeWork.toggle}
       />

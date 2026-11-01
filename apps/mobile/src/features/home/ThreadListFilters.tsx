@@ -3,6 +3,7 @@ import { SymbolView } from "../../components/ui/AppSymbol";
 import { Chip } from "../../components/ui/Chip";
 import { useActiveWorkFilter } from "../../state/use-mobile-preferences";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
+import { ACTIVE_WORK_TOGGLE_LABEL, activeWorkToggleIcon } from "../threads/active-work-toggle";
 import { ListFilterMenu } from "../workspace/ListFilterMenu";
 import type { HomeHeaderProps } from "./HomeHeader.types";
 
@@ -37,8 +38,8 @@ export function ThreadListFilters(
     >
       <Chip
         label=""
-        accessibilityLabel={activeWork.enabled ? "Show all threads" : "Show only active threads"}
-        icon={activeWork.enabled ? "bolt.fill" : "bolt"}
+        accessibilityLabel={ACTIVE_WORK_TOGGLE_LABEL}
+        icon={activeWorkToggleIcon(activeWork.enabled)}
         selected={activeWork.enabled}
         glass
         colorScheme={themeAppearance}

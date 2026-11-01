@@ -6,6 +6,7 @@ import type {
 import type { HomeListFilterMenu } from "../home/home-list-filter-menu";
 import { sfSymbolIcon, toNativeHeaderMenuItems } from "../layout/native-filter-menu-items";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
+import { ACTIVE_WORK_TOGGLE_LABEL, activeWorkToggleIcon } from "./active-work-toggle";
 
 function createSidebarFilterHeaderItem(input: {
   readonly filterIcon: string;
@@ -49,8 +50,8 @@ export function createSidebarHeaderItems(input: {
       type: "button",
       axisBehavior: "horizontalOnly",
       label: "",
-      accessibilityLabel: input.activeWorkFilter ? "Show all threads" : "Show only active threads",
-      icon: sfSymbolIcon(input.activeWorkFilter ? "bolt.fill" : "bolt"),
+      accessibilityLabel: ACTIVE_WORK_TOGGLE_LABEL,
+      icon: sfSymbolIcon(activeWorkToggleIcon(input.activeWorkFilter)),
       selected: input.activeWorkFilter,
       onPress: input.onToggleActiveWork,
     }),

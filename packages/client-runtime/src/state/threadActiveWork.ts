@@ -57,6 +57,8 @@ export function nextActiveWorkThreadKeys<T extends EnvironmentThreadShell>(
     }),
   );
   for (const thread of threads) {
+    // Cached or resyncing shells can be stale, so only live ones change membership.
+    if (!liveEnvironmentIds.has(thread.environmentId)) continue;
     const key = threadKey(thread);
     if (!isEligible(thread, now)) next.delete(key);
     else if (isActiveWorkThread(thread, status)) next.add(key);

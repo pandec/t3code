@@ -59,28 +59,23 @@ describe("active work filter session", () => {
   };
 
   it("retains activity, admits later activity, and resets on disable", () => {
-    const first = nextActiveWorkThreadKeys([], true, [thread], now, liveEnvironmentIds);
+    const bothLive = new Set([thread.environmentId, other.environmentId]);
+    const first = nextActiveWorkThreadKeys([], true, [thread], now, bothLive);
     expect(first).toEqual([key(thread)]);
-    const later = nextActiveWorkThreadKeys(first, true, [finished, other], now, liveEnvironmentIds);
+    const later = nextActiveWorkThreadKeys(first, true, [finished, other], now, bothLive);
     expect(later).toEqual([key(thread), key(other)]);
-    expect(nextActiveWorkThreadKeys(later, true, [finished], now, liveEnvironmentIds)).toBe(later);
+    expect(nextActiveWorkThreadKeys(later, true, [finished, other], now, bothLive)).toBe(later);
     expect(
       matchesSidebarActiveWorkFilter(finished, {
         ...options,
         retainedKeys: new Set(later),
       }),
     ).toBe(true);
-    const disabled = nextActiveWorkThreadKeys(
-      later,
-      false,
-      [finished, other],
-      now,
-      liveEnvironmentIds,
-    );
+    const disabled = nextActiveWorkThreadKeys(later, false, [finished, other], now, bothLive);
     expect(disabled).toEqual([]);
-    expect(
-      nextActiveWorkThreadKeys(disabled, true, [finished, other], now, liveEnvironmentIds),
-    ).toEqual([key(other)]);
+    expect(nextActiveWorkThreadKeys(disabled, true, [finished, other], now, bothLive)).toEqual([
+      key(other),
+    ]);
   });
 
   it("forgets an archived shell removed by a live environment, but retains disconnected keys", () => {
@@ -90,6 +85,8 @@ describe("active work filter session", () => {
     expect(nextActiveWorkThreadKeys(afterArchive, true, [finished], now, liveEnvironmentIds)).toBe(
       afterArchive,
     );
+    // A cached active shell from a disconnected environment may already be stale.
+    expect(nextActiveWorkThreadKeys([], true, [other], now, liveEnvironmentIds)).toEqual([]);
   });
 
   it.each([

@@ -78,6 +78,7 @@ import { ThreadListToolbar } from "../home/ThreadListToolbar";
 import { useToolbarLayout } from "../../components/ui/useToolbarLayout";
 import { useFabScroll } from "../home/FabScrollContext";
 import { SidebarFilterButton } from "./sidebar-filter-button";
+import { ACTIVE_WORK_TOGGLE_LABEL, activeWorkToggleIcon } from "./active-work-toggle";
 import { createSidebarHeaderItems } from "./sidebar-native-header-items";
 import { SidebarNavigationShell } from "./sidebar-navigation-shell";
 import {
@@ -1052,9 +1053,9 @@ function ThreadNavigationSidebarPane(
             />
             <View className="flex-row items-center gap-2.5">
               <SidebarFilterButton
-                accessibilityLabel={activeWork ? "Show all threads" : "Show only active threads"}
+                accessibilityLabel={ACTIVE_WORK_TOGGLE_LABEL}
                 active={activeWork}
-                icon={activeWork ? "bolt.fill" : "bolt"}
+                icon={activeWorkToggleIcon(activeWork)}
                 onPress={toggleActiveWork}
               />
               <Menu actions={listMenuActions} onPressAction={handleListMenuAction}>
