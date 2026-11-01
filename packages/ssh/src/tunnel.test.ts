@@ -592,6 +592,7 @@ describe("remote launch script", () => {
               "#!/bin/sh",
               'case "$1:${2:-}" in',
               '  __ssh-helper:runtime-port) [ -f "$HOME/service-started" ] && echo "4242 3773" ;;',
+              '  __ssh-helper:wait-ready) echo "$3" >>"$HOME/probed" ;;',
               "  __ssh-helper:pick-port) echo 3999 ;;",
               '  serve:*) : >"$HOME/spawned" ;;',
               "esac",
@@ -608,6 +609,7 @@ describe("remote launch script", () => {
           const service = yield* launch(name, false);
           assert.include(service.stdout, '{"remotePort":3773,"serverKind":"external"}', name);
           assert.isFalse(yield* fs.exists(`${service.home}/spawned`), name);
+          assert.equal(yield* fs.readFileString(`${service.home}/probed`), "3773\n", name);
         }
 
         const masked = yield* launch("masked home", true);
