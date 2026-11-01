@@ -216,6 +216,17 @@ async function verifyServiceServes(version: string) {
   }
 }
 
+// Mirrors `bootServiceBaseDirOf` in apps/server/src/cloud/bootService.ts, which scripts can't import.
+function unitHomeOf(unit: string): string | undefined {
+  const raw = /^Environment=T3CODE_HOME=(.*)$/m.exec(unit)?.[1]?.trim();
+  if (raw === undefined) return undefined;
+  const value =
+    raw.startsWith('"') && raw.endsWith('"')
+      ? raw.slice(1, -1).replaceAll('\\"', '"').replaceAll("\\\\", "\\")
+      : raw;
+  return NodePath.resolve(value.replaceAll("%%", "%"));
+}
+
 function pruneReleases() {
   const releases = NodeFS.readdirSync(releaseRoot)
     .filter((name) => releaseDirPattern.test(name))
@@ -252,15 +263,21 @@ try {
 await run("apps/server/dist-exe/t3", ["update", version, "--yes", "--allow-downgrade"], {
   [CLI_RELEASE_BASE_URL_ENV]: NodeURL.pathToFileURL(releaseRoot).href,
 });
-// `update` leaves a unit that serves another home alone. The unit quotes a home with spaces.
 const unit =
   target.platform === "linux"
     ? NodeChildProcess.spawnSync("systemctl", ["--user", "cat", "t3code.service"], {
         encoding: "utf8",
       })
     : undefined;
-const homeLines = [`Environment=T3CODE_HOME=${t3Home}`, `Environment=T3CODE_HOME="${t3Home}"`];
-if (unit?.status === 0 && unit.stdout.split("\n").some((line) => homeLines.includes(line))) {
-  await verifyServiceServes(version);
+if (unit?.status === 0) {
+  // `update` leaves a unit that serves another home alone.
+  const unitHome = unitHomeOf(unit.stdout);
+  if (unitHome === t3Home) {
+    await verifyServiceServes(version);
+  } else {
+    console.log(
+      `t3code.service serves ${unitHome ?? "an unknown home"}, not ${t3Home}; not verified.`,
+    );
+  }
 }
 pruneReleases();

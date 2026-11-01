@@ -572,7 +572,8 @@ describe("remote launch script", () => {
           [
             "#!/bin/sh",
             'case "$2" in',
-            '  cat) printf "[Service]\\nEnvironment=T3CODE_HOME=\\"%s/.t3\\"\\n" "$HOME" ;;',
+            '  cat) case "$HOME" in *" "*) q=\'"\' ;; *) q= ;; esac',
+            '    printf "[Service]\\nEnvironment=T3CODE_HOME=%s%s/.t3%s\\n" "$q" "$HOME" "$q" ;;',
             '  start) [ ! -f "$HOME/masked" ] && : >"$HOME/service-started" ;;',
             "esac",
           ].join("\n"),
@@ -582,7 +583,7 @@ describe("remote launch script", () => {
           SshTunnel.buildRemoteLaunchScript({ ...ARCHIVE, preferInstalledLauncher: true }),
         );
         const launch = Effect.fn("launch")(function* (name: string, masked: boolean) {
-          const home = `${root}/${name} home`;
+          const home = `${root}/${name}`;
           yield* fs.makeDirectory(`${home}/.local/bin`, { recursive: true });
           if (masked) yield* fs.writeFileString(`${home}/masked`, "");
           yield* writeExecutable(
@@ -603,11 +604,13 @@ describe("remote launch script", () => {
           return { stdout: result.stdout, home };
         });
 
-        const service = yield* launch("service", false);
-        assert.include(service.stdout, '{"remotePort":3773,"serverKind":"external"}');
-        assert.isFalse(yield* fs.exists(`${service.home}/spawned`));
+        for (const name of ["plain", "quoted home"]) {
+          const service = yield* launch(name, false);
+          assert.include(service.stdout, '{"remotePort":3773,"serverKind":"external"}', name);
+          assert.isFalse(yield* fs.exists(`${service.home}/spawned`), name);
+        }
 
-        const masked = yield* launch("masked", true);
+        const masked = yield* launch("masked home", true);
         assert.include(masked.stdout, '{"remotePort":3999,"serverKind":"managed"}');
       }).pipe(Effect.provide(NodeServices.layer)),
   );
