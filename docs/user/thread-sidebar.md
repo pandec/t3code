@@ -96,7 +96,8 @@ On web and desktop, unpinning, settling, snoozing, and archiving a thread each s
 a notification with **Undo** for five seconds. Undo restores the thread's previous
 state, including its pinned position and any snooze that settling cleared. Settling stops
 the work an "until it's done" snooze waits on, so Undo leaves that thread awake. Snoozing
-or archiving the thread you are viewing returns you to the previous thread. Undoing the
+or archiving the thread you are viewing returns you to the previous thread; turn off
+**Return to previous thread** in Settings → Extras to stay on it instead. Undoing the
 archive reopens it while you are still there, or when archiving left you on an empty
 new-thread screen; it keeps another active conversation in place.
 Discarding an unsent draft from the sidebar works the same way: Undo brings back its

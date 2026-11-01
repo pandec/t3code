@@ -34,7 +34,10 @@ vi.mock("react", async (original) => ({
   useRef: (value: unknown) => ({ current: value }),
 }));
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => router }));
-const clientSettings = vi.hoisted(() => ({ confirmThreadArchive: false }));
+const clientSettings = vi.hoisted(() => ({
+  confirmThreadArchive: false,
+  returnToPreviousThread: true,
+}));
 vi.mock("./useSettings", () => ({
   useClientSettings: (select: (settings: Record<string, unknown>) => unknown) =>
     select(clientSettings) ?? false,
@@ -143,6 +146,7 @@ beforeEach(() => {
   threadShell.latestRun = null;
   threadShell.pendingBackgroundTasks = [];
   clientSettings.confirmThreadArchive = false;
+  clientSettings.returnToPreviousThread = true;
   dialogs.confirm.mockReset();
 });
 afterEach(() => {
@@ -366,6 +370,21 @@ describe("archive Undo", () => {
     );
   });
 
+  it("stays on the archived thread when returning to the previous thread is off", async () => {
+    clientSettings.returnToPreviousThread = false;
+    router.state.matches[0]!.params = {
+      environmentId: target.environmentId,
+      threadId: target.threadId,
+    };
+    visitAfterPark.target = {
+      kind: "server",
+      threadRef: { environmentId: "undo-env", threadId: "previous" },
+    };
+    await useThreadActions().archiveThread(target);
+    expect(commands.archive).toHaveBeenCalledOnce();
+    expect(router.navigate).not.toHaveBeenCalled();
+  });
+
   it("leaves a reader who moved off the previous thread there on Undo", async () => {
     router.state.matches[0]!.params = {
       environmentId: target.environmentId,
@@ -541,6 +560,18 @@ describe("snoozing the open thread", () => {
     await snoozeOpenThread({ moveOnFallback });
     expect(router.navigate).not.toHaveBeenCalled();
     expect(moveOnFallback).toHaveBeenCalledOnce();
+  });
+
+  it("stays on the thread when returning to the previous thread is off", async () => {
+    clientSettings.returnToPreviousThread = false;
+    visitAfterPark.target = {
+      kind: "server",
+      threadRef: { environmentId: "undo-env", threadId: "previous" },
+    };
+    const moveOnFallback = vi.fn();
+    await snoozeOpenThread({ moveOnFallback });
+    expect(router.navigate).not.toHaveBeenCalled();
+    expect(moveOnFallback).not.toHaveBeenCalled();
   });
 
   it("leaves a reader who navigated away during the snooze where they are", async () => {
