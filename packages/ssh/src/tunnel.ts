@@ -709,25 +709,26 @@ else
 fi
 # Private fork: when t3code.service serves this home, start it and wait rather
 # than launch a second server, which would own the home and idle the service.
+# The unit quotes a home that contains spaces.
 service_serves_home() {
   command -v systemctl >/dev/null 2>&1 &&
-    systemctl --user cat t3code.service 2>/dev/null | grep -qxF "Environment=T3CODE_HOME=$DEFAULT_SERVER_HOME"
+    systemctl --user cat t3code.service 2>/dev/null |
+    grep -qxF -e "Environment=T3CODE_HOME=$DEFAULT_SERVER_HOME" -e "Environment=T3CODE_HOME=\\"$DEFAULT_SERVER_HOME\\""
 }
-if [ -z "$REMOTE_PORT" ] && service_serves_home; then
-  systemctl --user start t3code.service >/dev/null 2>&1 || true
-  SERVICE_WAITED=0
+# A unit that cannot start (masked, start limit hit) leaves the home free to serve.
+if [ -z "$REMOTE_PORT" ] && service_serves_home && systemctl --user start t3code.service >/dev/null 2>&1; then
+  SERVICE_DEADLINE=$(($(date +%s) + @@T3_SERVICE_WAIT_SECONDS@@))
   while :; do
     DEFAULT_RUNTIME_INFO="$(resolve_default_runtime_port 2>/dev/null || true)"
     if [ -n "$DEFAULT_RUNTIME_INFO" ]; then
       REMOTE_PORT="\${DEFAULT_RUNTIME_INFO#* }"
       wait_ready "@@T3_REUSE_READY_TIMEOUT_MS@@" && break
     fi
-    if [ "$SERVICE_WAITED" -ge @@T3_SERVICE_WAIT_SECONDS@@ ]; then
+    if [ "$(date +%s)" -ge "$SERVICE_DEADLINE" ]; then
       printf 'The t3code.service server on the remote host did not become ready. Check it with: t3 service status\\n' >&2
       exit 1
     fi
     sleep 1
-    SERVICE_WAITED=$((SERVICE_WAITED + 1))
   done
   REMOTE_PID=""
   REMOTE_MANAGED="external"

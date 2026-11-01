@@ -562,10 +562,8 @@ describe("remote launch script", () => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-launch-service-" });
-        const home = `${root}/home`;
         const bin = `${root}/bin`;
         const script = `${root}/launch.sh`;
-        yield* fs.makeDirectory(`${home}/.local/bin`, { recursive: true });
         yield* fs.makeDirectory(bin);
         const writeExecutable = (file: string, contents: string) =>
           fs.writeFileString(file, contents).pipe(Effect.andThen(fs.chmod(file, 0o755)));
@@ -574,19 +572,8 @@ describe("remote launch script", () => {
           [
             "#!/bin/sh",
             'case "$2" in',
-            '  cat) [ -f "$HOME/unit" ] || exit 1; printf "[Service]\\nEnvironment=T3CODE_HOME=%s/.t3\\n" "$HOME" ;;',
-            '  start) : >"$HOME/service-started" ;;',
-            "esac",
-          ].join("\n"),
-        );
-        yield* writeExecutable(
-          `${home}/.local/bin/t3`,
-          [
-            "#!/bin/sh",
-            'case "$1:${2:-}" in',
-            '  __ssh-helper:runtime-port) [ -f "$HOME/service-started" ] && echo "4242 3773" ;;',
-            "  __ssh-helper:pick-port) echo 3999 ;;",
-            '  serve:*) : >"$HOME/spawned" ;;',
+            '  cat) printf "[Service]\\nEnvironment=T3CODE_HOME=\\"%s/.t3\\"\\n" "$HOME" ;;',
+            '  start) [ ! -f "$HOME/masked" ] && : >"$HOME/service-started" ;;',
             "esac",
           ].join("\n"),
         );
@@ -594,19 +581,34 @@ describe("remote launch script", () => {
           script,
           SshTunnel.buildRemoteLaunchScript({ ...ARCHIVE, preferInstalledLauncher: true }),
         );
-        const launch = runScript(home, [script, "state"], { path: `${bin}:/usr/bin:/bin` });
+        const launch = Effect.fn("launch")(function* (name: string, masked: boolean) {
+          const home = `${root}/${name} home`;
+          yield* fs.makeDirectory(`${home}/.local/bin`, { recursive: true });
+          if (masked) yield* fs.writeFileString(`${home}/masked`, "");
+          yield* writeExecutable(
+            `${home}/.local/bin/t3`,
+            [
+              "#!/bin/sh",
+              'case "$1:${2:-}" in',
+              '  __ssh-helper:runtime-port) [ -f "$HOME/service-started" ] && echo "4242 3773" ;;',
+              "  __ssh-helper:pick-port) echo 3999 ;;",
+              '  serve:*) : >"$HOME/spawned" ;;',
+              "esac",
+            ].join("\n"),
+          );
+          const result = yield* runScript(home, [script, "state"], {
+            path: `${bin}:/usr/bin:/bin`,
+          });
+          assert.equal(result.exitCode, 0, result.stderr);
+          return { stdout: result.stdout, home };
+        });
 
-        const withoutService = yield* launch;
-        assert.equal(withoutService.exitCode, 0, withoutService.stderr);
-        assert.include(withoutService.stdout, '{"remotePort":3999,"serverKind":"managed"}');
+        const service = yield* launch("service", false);
+        assert.include(service.stdout, '{"remotePort":3773,"serverKind":"external"}');
+        assert.isFalse(yield* fs.exists(`${service.home}/spawned`));
 
-        yield* fs.remove(`${home}/spawned`);
-        yield* fs.writeFileString(`${home}/unit`, "");
-        const withService = yield* launch;
-        assert.equal(withService.exitCode, 0, withService.stderr);
-        assert.include(withService.stdout, '{"remotePort":3773,"serverKind":"external"}');
-        assert.isTrue(yield* fs.exists(`${home}/service-started`));
-        assert.isFalse(yield* fs.exists(`${home}/spawned`));
+        const masked = yield* launch("masked", true);
+        assert.include(masked.stdout, '{"remotePort":3999,"serverKind":"managed"}');
       }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

@@ -28,7 +28,9 @@ const KEEP_RELEASES = 3;
 // Covers the launcher's database backup and the new server's migrations.
 const SERVICE_SWITCH_TIMEOUT_MS = 120_000;
 const repoRoot = NodePath.resolve(import.meta.dirname, "..");
-const t3Home = process.env["T3CODE_HOME"] || NodePath.join(NodeOS.homedir(), ".t3");
+const t3Home = NodePath.resolve(
+  process.env["T3CODE_HOME"] || NodePath.join(NodeOS.homedir(), ".t3"),
+);
 const releaseRoot = NodePath.join(t3Home, "fork-releases");
 const releaseDirPattern = new RegExp(
   `^v\\d+\\.\\d+\\.\\d+-${FORK_RELEASE_PRERELEASE_ID}\\.\\d{8}\\.(\\d+)$`,
@@ -250,10 +252,15 @@ try {
 await run("apps/server/dist-exe/t3", ["update", version, "--yes", "--allow-downgrade"], {
   [CLI_RELEASE_BASE_URL_ENV]: NodeURL.pathToFileURL(releaseRoot).href,
 });
-if (
-  target.platform === "linux" &&
-  NodeChildProcess.spawnSync("systemctl", ["--user", "cat", "t3code.service"]).status === 0
-) {
+// `update` leaves a unit that serves another home alone. The unit quotes a home with spaces.
+const unit =
+  target.platform === "linux"
+    ? NodeChildProcess.spawnSync("systemctl", ["--user", "cat", "t3code.service"], {
+        encoding: "utf8",
+      })
+    : undefined;
+const homeLines = [`Environment=T3CODE_HOME=${t3Home}`, `Environment=T3CODE_HOME="${t3Home}"`];
+if (unit?.status === 0 && unit.stdout.split("\n").some((line) => homeLines.includes(line))) {
   await verifyServiceServes(version);
 }
 pruneReleases();
