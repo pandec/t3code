@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import {
   DesktopInstallError,
   escapeProcessNameForExactMatch,
+  hasGraphicalSession,
   launchEnvironment,
   macQuitScript,
   parseMacDmgMountPoint,
@@ -270,4 +271,13 @@ it("parses macOS DMG mount paths containing spaces", () => {
     ),
     "/Volumes/T3 Code Dev 0.0.1",
   );
+});
+
+it("launches the Linux app only into a live graphical session", () => {
+  assert.isTrue(hasGraphicalSession("HOME=/home/u\nWAYLAND_DISPLAY=wayland-0\n", "wayland\n"));
+  assert.isTrue(hasGraphicalSession("DISPLAY=:0\nPATH=/usr/bin\n", "x11\n"));
+  assert.isFalse(hasGraphicalSession("HOME=/home/u\nDISPLAY=\nXDG_DISPLAY_HINT=:0\n", "wayland\n"));
+  // Lingering keeps the variables after logout, and logind then elects the SSH or tty session.
+  assert.isFalse(hasGraphicalSession("WAYLAND_DISPLAY=wayland-0\nDISPLAY=:0\n", "tty\n"));
+  assert.isFalse(hasGraphicalSession("WAYLAND_DISPLAY=wayland-0\nDISPLAY=:0\n", ""));
 });

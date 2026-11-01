@@ -27,7 +27,7 @@ const MAC_APP_PROCESS = "T3 Code (Dev)";
 const MAC_APP_PROCESS_PATTERN = escapeProcessNameForExactMatch(MAC_APP_PROCESS);
 const MAC_APP_ID = MAC_DEV_APP_ID;
 const LINUX_APP_PROCESS = "t3code-dev";
-const LINUX_SERVICE = "t3code.service";
+const LINUX_APP_UNIT = "t3code-dev-app";
 const PROCESS_STATE_ATTEMPTS = 20;
 const PROCESS_POLL_INTERVAL = Duration.millis(250);
 // The launches we saw fail died within ~1.3s, so watch a little longer than
@@ -41,7 +41,7 @@ const STARTUP_STABILITY_SAMPLES = Math.ceil(
 // path that has already failed.
 const RELAUNCH_BACKOFF = Duration.seconds(2);
 const MAC_DIAGNOSTICS_HINT = `Inspect the launch with: log show --predicate 'process == "${MAC_APP_PROCESS}"' --last 5m`;
-const LINUX_DIAGNOSTICS_HINT = `Inspect the launch with: journalctl --user -u ${LINUX_SERVICE} -n 100`;
+const LINUX_DIAGNOSTICS_HINT = `Inspect the launch with: journalctl --user -u ${LINUX_APP_UNIT} -n 100`;
 
 export class DesktopInstallError extends Data.TaggedError("DesktopInstallError")<{
   readonly message: string;
@@ -406,11 +406,12 @@ const createMacLifecycle = Effect.fn("installDesktopDev.createMacLifecycle")(fun
   } satisfies DesktopInstallLifecycle;
 });
 
-// The service keeps running: it runs its own pinned runtime, not the AppImage, and an SSH client
+// t3code.service keeps running: it runs its own pinned runtime, not the AppImage, and an SSH client
 // that finds no server while it is down starts a competing one that then owns the T3 home.
 const stopLinuxApp = Effect.fn("installDesktopDev.stopLinuxApp")(function* (
   spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
 ) {
+  yield* commandSucceeds(spawner, "systemctl", ["--user", "stop", LINUX_APP_UNIT]);
   if (!(yield* commandSucceeds(spawner, "pgrep", ["-x", LINUX_APP_PROCESS]))) return;
   yield* terminateProcess(spawner, LINUX_APP_PROCESS, LINUX_APP_PROCESS);
 });
@@ -431,6 +432,24 @@ function linuxDesktopEntry(appPath: string): string {
   ].join("\n")}\n`;
 }
 
+// The fleet updater runs this over SSH, which has no display; the user manager holds the desktop
+// session's, so the app launches through it and outlives the SSH session. With lingering the
+// manager keeps those variables after logout, so logind must also report a graphical session;
+// with none, it elects any other session, such as this SSH login, as the display.
+export function hasGraphicalSession(
+  managerEnvironment: string,
+  displaySessionType: string,
+): boolean {
+  return (
+    /^(?:WAYLAND_DISPLAY|DISPLAY)=./mu.test(managerEnvironment) &&
+    /^(?:x11|wayland)$/u.test(displaySessionType.trim())
+  );
+}
+
+function linuxAppPath(path: Path.Path, homeDirectory: string): string {
+  return path.join(homeDirectory, ".local/opt/t3code-dev/T3-Code-Dev.AppImage");
+}
+
 const installLinuxArtifact = Effect.fn("installDesktopDev.installLinuxArtifact")(
   function* (
     spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
@@ -447,8 +466,8 @@ const installLinuxArtifact = Effect.fn("installDesktopDev.installLinuxArtifact")
       "T3-Code-Dev-",
       ".AppImage",
     );
-    const installDirectory = path.join(homeDirectory, ".local/opt/t3code-dev");
-    const appPath = path.join(installDirectory, "T3-Code-Dev.AppImage");
+    const appPath = linuxAppPath(path, homeDirectory);
+    const installDirectory = path.dirname(appPath);
     const temporaryAppPath = path.join(
       installDirectory,
       `.T3-Code-Dev.AppImage.installing.${String(process.pid)}`,
@@ -501,30 +520,70 @@ const createLinuxLifecycle = Effect.fn("installDesktopDev.createLinuxLifecycle")
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const isRunning = Effect.gen(function* () {
-    const serviceRunning = yield* commandSucceeds(spawner, "systemctl", [
+  const isRunning = commandSucceeds(spawner, "pgrep", ["-x", LINUX_APP_PROCESS]);
+  // The unit's main process is the GUI; pgrep also matches helpers that can briefly outlive it.
+  const launchedAppRunning = captureCommand(spawner, "systemctl", [
+    "--user",
+    "show",
+    LINUX_APP_UNIT,
+    "--property=MainPID",
+    "--value",
+  ]).pipe(
+    Effect.map((mainPid) => Number(mainPid.trim()) > 0),
+    Effect.orElseSucceed(() => false),
+  );
+  // No launchEnvironment(): the user manager's environment applies. Stopping first lets the
+  // retry replace a launch still starting or a unit a leftover helper keeps alive.
+  const launch = Effect.gen(function* () {
+    yield* commandSucceeds(spawner, "systemctl", ["--user", "stop", LINUX_APP_UNIT]);
+    yield* runCommand(spawner, "systemd-run", [
       "--user",
-      "is-active",
+      "--collect",
       "--quiet",
-      LINUX_SERVICE,
+      // Keeps the instance the app relaunches itself into alive past the original process.
+      "--property=ExitType=cgroup",
+      `--unit=${LINUX_APP_UNIT}`,
+      linuxAppPath(path, homeDirectory),
+      "--no-sandbox",
     ]);
-    return serviceRunning || (yield* commandSucceeds(spawner, "pgrep", ["-x", LINUX_APP_PROCESS]));
   });
-  // No launchEnvironment() here: `systemctl --user start` asks the user manager
-  // to start the unit, so the unit's own environment applies and ours is never
-  // forwarded. Scrubbing the client side would only look like protection.
-  const start = runCommand(spawner, "systemctl", ["--user", "start", LINUX_SERVICE]);
+  const start = Effect.gen(function* () {
+    const environment = yield* captureCommand(spawner, "systemctl", [
+      "--user",
+      "show-environment",
+    ]).pipe(Effect.orElseSucceed(() => ""));
+    const displaySession = (yield* captureCommand(spawner, "loginctl", [
+      "show-user",
+      String(NodeOS.userInfo().uid),
+      "--property=Display",
+      "--value",
+    ]).pipe(Effect.orElseSucceed(() => ""))).trim();
+    const displaySessionType =
+      displaySession === ""
+        ? ""
+        : yield* captureCommand(spawner, "loginctl", [
+            "show-session",
+            displaySession,
+            "--property=Type",
+            "--value",
+          ]).pipe(Effect.orElseSucceed(() => ""));
+    if (!hasGraphicalSession(environment, displaySessionType)) {
+      yield* Effect.log("No graphical session; open T3 Code (Dev) from the app menu.");
+      return;
+    }
+    yield* startAppWithVerification(
+      "T3 Code (Dev)",
+      launch,
+      () => waitForAppToStart(launchedAppRunning),
+      LINUX_DIAGNOSTICS_HINT,
+    );
+  });
   return {
     isRunning,
     stop: stopLinuxApp(spawner),
     build: runCommand(spawner, "vp", ["run", "dist:desktop:dev:linux"], { cwd: repoRoot }),
     install: installLinuxArtifact(spawner, fs, path, repoRoot, homeDirectory),
-    start: startAppWithVerification(
-      "T3 Code (Dev)",
-      start,
-      () => waitForAppToStart(isRunning),
-      LINUX_DIAGNOSTICS_HINT,
-    ),
+    start,
   } satisfies DesktopInstallLifecycle;
 });
 
