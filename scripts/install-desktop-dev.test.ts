@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import {
   DesktopInstallError,
   escapeProcessNameForExactMatch,
+  hasGraphicalSession,
   launchEnvironment,
   macQuitScript,
   parseMacDmgMountPoint,
@@ -270,4 +271,10 @@ it("parses macOS DMG mount paths containing spaces", () => {
     ),
     "/Volumes/T3 Code Dev 0.0.1",
   );
+});
+
+it("launches the Linux app only when the user manager has a display", () => {
+  assert.isTrue(hasGraphicalSession("HOME=/home/u\nWAYLAND_DISPLAY=wayland-0\n"));
+  assert.isTrue(hasGraphicalSession("DISPLAY=:0\nPATH=/usr/bin\n"));
+  assert.isFalse(hasGraphicalSession("HOME=/home/u\nDISPLAY=\nXDG_DISPLAY_HINT=:0\n"));
 });
