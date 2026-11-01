@@ -2,6 +2,8 @@ import { SymbolView } from "../../components/ui/AppSymbol";
 import { Pressable } from "react-native";
 
 export type SidebarFilterButtonIcon =
+  | "bolt"
+  | "bolt.fill"
   | "line.3.horizontal.decrease"
   | "line.3.horizontal.decrease.circle"
   | "line.3.horizontal.decrease.circle.fill"

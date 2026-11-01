@@ -1,5 +1,8 @@
 import { Pressable, ScrollView } from "react-native";
 import { SymbolView } from "../../components/ui/AppSymbol";
+import { Chip } from "../../components/ui/Chip";
+import { useActiveWorkFilter } from "../../state/use-mobile-preferences";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { ListFilterMenu } from "../workspace/ListFilterMenu";
 import type { HomeHeaderProps } from "./HomeHeader.types";
 
@@ -23,6 +26,8 @@ export function ThreadListFilters(
   const selectedProject = props.projects.find(
     (project) => project.key === props.selectedProjectKey,
   );
+  const activeWork = useActiveWorkFilter();
+  const { themeAppearance } = useAppearancePreferences();
   return (
     <ScrollView
       horizontal
@@ -30,6 +35,15 @@ export function ThreadListFilters(
       style={{ marginHorizontal: -props.gutter }}
       contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 2, paddingBottom: 10, gap: 8 }}
     >
+      <Chip
+        label=""
+        accessibilityLabel={activeWork.enabled ? "Show all threads" : "Show only active threads"}
+        icon={activeWork.enabled ? "bolt.fill" : "bolt"}
+        selected={activeWork.enabled}
+        glass
+        colorScheme={themeAppearance}
+        onPress={activeWork.toggle}
+      />
       <ListFilterMenu
         label={selectedEnvironment?.label ?? "All environments"}
         accessibilityLabel="Filter threads by environment"
@@ -85,7 +99,9 @@ export function ThreadListFilters(
           }
         }}
       />
-      {props.selectedEnvironmentId !== null || props.selectedProjectKey !== null ? (
+      {props.selectedEnvironmentId !== null ||
+      props.selectedProjectKey !== null ||
+      activeWork.enabled ? (
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Reset thread filters"
@@ -93,6 +109,7 @@ export function ThreadListFilters(
           onPress={() => {
             props.onEnvironmentChange(null);
             props.onProjectChange(null);
+            if (activeWork.enabled) activeWork.toggle();
           }}
         >
           <SymbolView name="xmark.circle.fill" size={18} tintColorClassName="accent-icon-muted" />

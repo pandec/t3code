@@ -241,6 +241,14 @@ export function DeviceThreadSettingsSection() {
         value={archivedSectionVisibleCount}
         valueLabel={`${archivedSectionVisibleCount}`}
       />
+      <SettingsSwitchRow
+        disabled={!hydrated}
+        icon="bolt"
+        label="Include Done threads in active filter"
+        subtitle="Include threads with an unread completed reply when the active threads filter is on. Snoozed, archived, and settled threads stay hidden."
+        value={hydrated && preferencesResult.value.activeFilterIncludeDone === true}
+        onValueChange={(value) => savePreferences({ activeFilterIncludeDone: value })}
+      />
       <ThreadSyncRow />
     </SettingsSection>
   );

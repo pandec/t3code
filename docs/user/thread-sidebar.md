@@ -15,6 +15,11 @@ settling a thread removes it. Project and environment filters still apply.
 threads with unread completed replies. It is off by default. Done is separate
 from settled; settled threads stay hidden.
 
+On mobile, the bolt sits before the environment and project filters on iPhone,
+and beside the filter button on iPad and Android. Long-press a thread to mark or
+unmark it as active. The filter and **Settings → General → Include Done threads
+in active filter** are remembered on each device.
+
 ## Start a thread
 
 On web and desktop, a new thread keeps the current project and carries your model

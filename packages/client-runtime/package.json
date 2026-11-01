@@ -419,6 +419,10 @@
       "types": "./src/state/threadSettled.ts",
       "default": "./src/state/threadSettled.ts"
     },
+    "./state/thread-active-work": {
+      "types": "./src/state/threadActiveWork.ts",
+      "default": "./src/state/threadActiveWork.ts"
+    },
     "./state/thread-fork": {
       "types": "./src/state/threadFork.ts",
       "default": "./src/state/threadFork.ts"

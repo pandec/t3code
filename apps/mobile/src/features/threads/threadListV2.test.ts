@@ -1989,6 +1989,14 @@ describe("custom thread groups", () => {
       "plain",
       "v2-custom-group:later",
     ]);
+    // Fork: the Active work filter hides the groups it leaves empty, Active included.
+    const filtered = buildThreadListV2ListItems({
+      items: layout.items.filter((item) => item.thread.customGroupId === "research"),
+      pendingTasks: [],
+      customGroups: groups,
+      hideEmptyGroups: true,
+    });
+    expect(keysOf(filtered)).toEqual(["v2-custom-group:research", "r1", "r2"]);
   });
 
   it("keeps ranked search results in rank order instead of regrouping them", () => {

@@ -74,6 +74,13 @@ function environmentSupportsAutoSettleOptOut(
   );
 }
 
+function environmentSupportsActiveMark(environmentId: EnvironmentThreadShell["environmentId"]) {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadActiveMark === true
+  );
+}
+
 type ThreadListAction = ThreadLifecycleUserAction | "delete" | "settle" | "unsettle";
 
 const ACTION_FAILURE_MESSAGES: Record<ThreadListAction, string> = {
@@ -349,6 +356,11 @@ export function useThreadListActions(
     thread: EnvironmentThreadShell,
     enabled: boolean,
   ) => Promise<boolean>;
+  /** Fork: the mark the Active work filter keeps. */
+  readonly setThreadActiveMark: (
+    thread: EnvironmentThreadShell,
+    marked: boolean,
+  ) => Promise<boolean>;
   readonly moveThread: (
     thread: EnvironmentThreadShell,
     direction: ThreadMoveDestination,
@@ -375,6 +387,9 @@ export function useThreadListActions(
   const pinMutation = useAtomCommand(threadEnvironment.pin, { reportFailure: false });
   const unpinMutation = useAtomCommand(threadEnvironment.unpin, { reportFailure: false });
   const setAutoSettleMutation = useAtomCommand(threadEnvironment.setAutoSettle, {
+    reportFailure: false,
+  });
+  const setActiveMarkMutation = useAtomCommand(threadEnvironment.setActiveMark, {
     reportFailure: false,
   });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
@@ -684,6 +699,33 @@ export function useThreadListActions(
     }
     return true;
   };
+  const setThreadActiveMark = async (thread: EnvironmentThreadShell, marked: boolean) => {
+    const title = marked ? "Could not mark thread as active" : "Could not unmark thread";
+    if (!checkThreadOperationPermission(thread, title)) return false;
+    if (!environmentSupportsActiveMark(thread.environmentId)) {
+      Dialog.alert(
+        title,
+        "This environment's server does not support marking threads as active yet. Update the server to use it.",
+      );
+      return false;
+    }
+    selectionHaptic();
+    const result = await setActiveMarkMutation({
+      environmentId: thread.environmentId,
+      input: { threadId: thread.id, marked },
+    });
+    if (result._tag === "Failure") {
+      const error = Cause.squash(result.cause);
+      Dialog.alert(
+        title,
+        error instanceof Error && error.message.trim().length > 0
+          ? error.message
+          : "The active mark could not be changed.",
+      );
+      return false;
+    }
+    return true;
+  };
   const regenerateThreadTitle = async (thread: EnvironmentThreadShell) => {
     if (!checkThreadOperationPermission(thread, "Could not regenerate title")) return false;
     const key = scopedThreadKey(thread.environmentId, thread.id);
@@ -942,6 +984,7 @@ export function useThreadListActions(
     pinThread,
     unpinThread,
     setThreadAutoSettle,
+    setThreadActiveMark,
     moveThread,
     renameThread,
     regenerateThreadTitle,

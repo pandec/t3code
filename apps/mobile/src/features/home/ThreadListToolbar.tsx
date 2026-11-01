@@ -17,6 +17,7 @@ import { SearchField } from "../../components/ui/SearchField";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { WorkspaceListToolbarRow } from "../workspace/WorkspaceListToolbarRow";
 import { useWorkspaceConnectionState } from "../../state/workspace";
+import { useActiveWorkFilter } from "../../state/use-mobile-preferences";
 import { useToolbarLayout } from "../../components/ui/useToolbarLayout";
 
 export function ThreadListToolbar(props: {
@@ -38,6 +39,7 @@ export function ThreadListToolbar(props: {
     homeFocused && (workspace === null || workspace.state.selectedTab === "threads");
   const { paddingTop, paddingBottom } = useToolbarLayout();
   const connectionState = useWorkspaceConnectionState();
+  const activeWork = useActiveWorkFilter();
   const { onRequestVisibility, onSearchQueryChange } = props;
   const searchRef = useRef<TextInputInstance>(null);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -89,15 +91,23 @@ export function ThreadListToolbar(props: {
     />
   );
   const filterButton = connectionState.hasConnections ? (
-    <AndroidAnchoredMenu actions={props.filterActions} onPressAction={props.onFilterAction}>
-      {(open) => (
-        <AndroidHeaderIconButton
-          accessibilityLabel="Filter threads"
-          icon={filterIcon}
-          onPress={open}
-        />
-      )}
-    </AndroidAnchoredMenu>
+    <>
+      <AndroidHeaderIconButton
+        accessibilityLabel={activeWork.enabled ? "Show all threads" : "Show only active threads"}
+        icon={activeWork.enabled ? "bolt.fill" : "bolt"}
+        selected={activeWork.enabled}
+        onPress={activeWork.toggle}
+      />
+      <AndroidAnchoredMenu actions={props.filterActions} onPressAction={props.onFilterAction}>
+        {(open) => (
+          <AndroidHeaderIconButton
+            accessibilityLabel="Filter threads"
+            icon={filterIcon}
+            onPress={open}
+          />
+        )}
+      </AndroidAnchoredMenu>
+    </>
   ) : null;
 
   return (

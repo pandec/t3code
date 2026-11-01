@@ -2,11 +2,10 @@ import { useEffect, useState } from "react";
 import * as Schema from "effect/Schema";
 import type { EnvironmentId } from "@t3tools/contracts";
 import {
-  parseScopedThreadKey,
-  scopeThreadRef,
-  scopedThreadKey,
-} from "@t3tools/client-runtime/environment";
-import { effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
+  isActiveWorkThread,
+  matchesActiveWorkFilter,
+  nextActiveWorkThreadKeys as nextSharedActiveWorkThreadKeys,
+} from "@t3tools/client-runtime/state/thread-active-work";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 
 import type { SidebarThreadSummary } from "../../types";
@@ -14,35 +13,13 @@ import {
   hasUnseenCompletion,
   resolveSidebarThreadStatus,
   resolveThreadLastVisitedAt,
-  type SidebarThreadStatus,
 } from "../Sidebar.logic";
 
-const ACTIVE_WORK_STATUSES: ReadonlySet<SidebarThreadStatus> = new Set([
-  "working",
-  "monitoring",
-  "waiting",
-  "approval",
-  "input",
-  "request",
-]);
-
-/** Fork: the Active filter keeps threads the user marked plus threads that are
-    running or need the user right now. */
 export function isSidebarActiveWorkThread(
   thread: Parameters<typeof resolveSidebarThreadStatus>[0] &
     Pick<SidebarThreadSummary, "activeMarkedAt">,
 ): boolean {
-  return (
-    thread.activeMarkedAt != null || ACTIVE_WORK_STATUSES.has(resolveSidebarThreadStatus(thread))
-  );
-}
-
-function isEligible(thread: SidebarThreadSummary, now: string): boolean {
-  return (
-    thread.archivedAt === null &&
-    thread.settledOverride !== "settled" &&
-    !effectiveSnoozed(thread, { now })
-  );
+  return isActiveWorkThread(thread, resolveSidebarThreadStatus);
 }
 
 export function nextActiveWorkThreadKeys(
@@ -52,25 +29,14 @@ export function nextActiveWorkThreadKeys(
   now: string,
   liveEnvironmentIds: ReadonlySet<EnvironmentId>,
 ): readonly string[] {
-  if (!enabled) return previous.length === 0 ? previous : [];
-  // Live snapshots omit archived/deleted threads; missing offline shells prove no removal.
-  const present = new Set(
-    threads.map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
+  return nextSharedActiveWorkThreadKeys(
+    previous,
+    enabled,
+    threads,
+    now,
+    liveEnvironmentIds,
+    resolveSidebarThreadStatus,
   );
-  const next = new Set(
-    previous.filter((key) => {
-      const ref = parseScopedThreadKey(key);
-      return ref !== null && (!liveEnvironmentIds.has(ref.environmentId) || present.has(key));
-    }),
-  );
-  for (const thread of threads) {
-    const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-    if (!isEligible(thread, now)) next.delete(key);
-    else if (isSidebarActiveWorkThread(thread)) next.add(key);
-  }
-  return next.size === previous.length && previous.every((key) => next.has(key))
-    ? previous
-    : [...next];
 }
 
 export function matchesSidebarActiveWorkFilter(
@@ -83,19 +49,22 @@ export function matchesSidebarActiveWorkFilter(
     readonly localLastVisitedAt?: string | undefined;
   },
 ): boolean {
-  const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-  if (key === options.routeThreadKey) return true;
-  if (!isEligible(thread, options.now)) return false;
-  return (
-    options.retainedKeys.has(key) ||
-    isSidebarActiveWorkThread(thread) ||
-    (options.includeDone &&
-      resolveSidebarThreadStatus(thread) === "ready" &&
-      hasUnseenCompletion({
-        ...thread,
-        lastVisitedAt: resolveThreadLastVisitedAt(thread.lastVisitedAt, options.localLastVisitedAt),
-      }))
-  );
+  return matchesActiveWorkFilter(thread, {
+    retainedKeys: options.retainedKeys,
+    openThreadKey: options.routeThreadKey,
+    now: options.now,
+    status: resolveSidebarThreadStatus,
+    includesDone: options.includeDone
+      ? (candidate) =>
+          hasUnseenCompletion({
+            ...candidate,
+            lastVisitedAt: resolveThreadLastVisitedAt(
+              candidate.lastVisitedAt,
+              options.localLastVisitedAt,
+            ),
+          })
+      : undefined,
+  });
 }
 
 const RETAINED_KEYS_SCHEMA = Schema.Array(Schema.String);

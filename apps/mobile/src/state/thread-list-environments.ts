@@ -16,7 +16,11 @@ export type ThreadListProvider = Pick<
   readonly customModelIcons?: Readonly<Record<string, string>>;
 };
 
-const capabilityKeys = ["threadSnoozeUntilDone", "threadAutoSettleOptOut"] as const;
+const capabilityKeys = [
+  "threadSnoozeUntilDone",
+  "threadAutoSettleOptOut",
+  "threadActiveMark",
+] as const;
 
 function selectEnvironment(config: ServerConfig, isConnected: boolean) {
   return {
@@ -83,6 +87,7 @@ function collectEnvironments(environments: ReadonlyMap<EnvironmentId, ListEnviro
   const loadedEnvironmentIds = new Set<EnvironmentId>();
   const snoozeUntilDoneEnvironmentIds = new Set<EnvironmentId>();
   const autoSettleOptOutEnvironmentIds = new Set<EnvironmentId>();
+  const activeMarkEnvironmentIds = new Set<EnvironmentId>();
   const reorderableEnvironmentIds = new Set<EnvironmentId>();
   const snoozePresetsByEnvironmentId = new Map<EnvironmentId, ListEnvironment["snoozePresets"]>();
   for (const [
@@ -95,6 +100,7 @@ function collectEnvironments(environments: ReadonlyMap<EnvironmentId, ListEnviro
     loadedEnvironmentIds.add(id);
     if (capabilities.threadSnoozeUntilDone === true) snoozeUntilDoneEnvironmentIds.add(id);
     if (capabilities.threadAutoSettleOptOut === true) autoSettleOptOutEnvironmentIds.add(id);
+    if (capabilities.threadActiveMark === true) activeMarkEnvironmentIds.add(id);
     if (isConnected) reorderableEnvironmentIds.add(id);
   }
   return {
@@ -105,6 +111,7 @@ function collectEnvironments(environments: ReadonlyMap<EnvironmentId, ListEnviro
     snoozeUntilDoneEnvironmentIds,
     pinningEnvironmentIds: loadedEnvironmentIds,
     autoSettleOptOutEnvironmentIds,
+    activeMarkEnvironmentIds,
     pinReorderEnvironmentIds: reorderableEnvironmentIds,
     activeReorderEnvironmentIds: reorderableEnvironmentIds,
     titleRegenerationEnvironmentIds: loadedEnvironmentIds,

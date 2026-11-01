@@ -25,14 +25,16 @@ function createSidebarFilterHeaderItem(input: {
 }
 
 /**
- * Settings, then the filter/sort menu, in one glass capsule; the filter sits at the trailing edge
- * to match the compact Home header. The embedded sidebar keeps these beside its title; only the
- * detail column uses the Duo's vertical bar.
+ * Settings, the Active work toggle, then the filter/sort menu, in one glass capsule; the filter
+ * sits at the trailing edge to match the compact Home header. The embedded sidebar keeps these
+ * beside its title; only the detail column uses the Duo's vertical bar.
  */
 export function createSidebarHeaderItems(input: {
   readonly filterIcon: string;
   readonly filterMenu: HomeListFilterMenu;
   readonly onOpenSettings: () => void;
+  readonly activeWorkFilter: boolean;
+  readonly onToggleActiveWork: () => void;
 }): NativeStackHeaderItem[] {
   return [
     withNativeGlassHeaderItem({
@@ -42,6 +44,15 @@ export function createSidebarHeaderItems(input: {
       accessibilityLabel: "Open settings",
       icon: sfSymbolIcon("gearshape"),
       onPress: input.onOpenSettings,
+    }),
+    withNativeGlassHeaderItem({
+      type: "button",
+      axisBehavior: "horizontalOnly",
+      label: "",
+      accessibilityLabel: input.activeWorkFilter ? "Show all threads" : "Show only active threads",
+      icon: sfSymbolIcon(input.activeWorkFilter ? "bolt.fill" : "bolt"),
+      selected: input.activeWorkFilter,
+      onPress: input.onToggleActiveWork,
     }),
     createSidebarFilterHeaderItem(input),
   ];
