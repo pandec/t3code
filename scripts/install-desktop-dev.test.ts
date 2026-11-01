@@ -273,8 +273,10 @@ it("parses macOS DMG mount paths containing spaces", () => {
   );
 });
 
-it("launches the Linux app only when the user manager has a display", () => {
-  assert.isTrue(hasGraphicalSession("HOME=/home/u\nWAYLAND_DISPLAY=wayland-0\n"));
-  assert.isTrue(hasGraphicalSession("DISPLAY=:0\nPATH=/usr/bin\n"));
-  assert.isFalse(hasGraphicalSession("HOME=/home/u\nDISPLAY=\nXDG_DISPLAY_HINT=:0\n"));
+it("launches the Linux app only into a live graphical session", () => {
+  assert.isTrue(hasGraphicalSession("HOME=/home/u\nWAYLAND_DISPLAY=wayland-0\n", "2\n"));
+  assert.isTrue(hasGraphicalSession("DISPLAY=:0\nPATH=/usr/bin\n", "2\n"));
+  assert.isFalse(hasGraphicalSession("HOME=/home/u\nDISPLAY=\nXDG_DISPLAY_HINT=:0\n", "2\n"));
+  // Lingering keeps the variables after logout.
+  assert.isFalse(hasGraphicalSession("WAYLAND_DISPLAY=wayland-0\nDISPLAY=:0\n", "\n"));
 });
