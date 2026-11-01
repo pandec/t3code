@@ -521,6 +521,17 @@ const createLinuxLifecycle = Effect.fn("installDesktopDev.createLinuxLifecycle")
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const isRunning = commandSucceeds(spawner, "pgrep", ["-x", LINUX_APP_PROCESS]);
+  // The unit's main process is the GUI; pgrep also matches helpers that can briefly outlive it.
+  const launchedAppRunning = captureCommand(spawner, "systemctl", [
+    "--user",
+    "show",
+    LINUX_APP_UNIT,
+    "--property=MainPID",
+    "--value",
+  ]).pipe(
+    Effect.map((mainPid) => Number(mainPid.trim()) > 0),
+    Effect.orElseSucceed(() => false),
+  );
   // No launchEnvironment(): the user manager's environment applies. Stopping first lets the
   // retry replace a launch still starting or a unit a leftover helper keeps alive.
   const launch = Effect.gen(function* () {
@@ -563,7 +574,7 @@ const createLinuxLifecycle = Effect.fn("installDesktopDev.createLinuxLifecycle")
     yield* startAppWithVerification(
       "T3 Code (Dev)",
       launch,
-      () => waitForAppToStart(isRunning),
+      () => waitForAppToStart(launchedAppRunning),
       LINUX_DIAGNOSTICS_HINT,
     );
   });
