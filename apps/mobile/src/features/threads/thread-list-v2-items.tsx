@@ -1048,6 +1048,18 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     ],
     [snoozePresets, untilDoneOffered],
   );
+  // Snoozing keeps the mark, so snoozed rows offer it too.
+  const activeMarkMenuItem = useMemo<MenuAction[]>(
+    () =>
+      props.activeMarkSupported
+        ? [
+            thread.activeMarkedAt != null
+              ? { id: "unmark-active", title: "Unmark as active", image: "bolt.slash" }
+              : { id: "mark-active", title: "Mark as active", image: "bolt" },
+          ]
+        : [],
+    [props.activeMarkSupported, thread.activeMarkedAt],
+  );
   const arrangementMenuItems = useMemo<MenuAction[]>(
     () => [
       ...(props.reorderSupported === true
@@ -1074,22 +1086,15 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
               : { id: "pin", title: "Pin", image: "pin" },
           ]
         : []),
-      ...(props.activeMarkSupported
-        ? [
-            thread.activeMarkedAt != null
-              ? { id: "unmark-active", title: "Unmark as active", image: "bolt.slash" }
-              : { id: "mark-active", title: "Mark as active", image: "bolt" },
-          ]
-        : []),
+      ...activeMarkMenuItem,
     ],
     [
+      activeMarkMenuItem,
       props.canMoveDown,
       props.canMoveUp,
       props.reorderSupported,
       props.pinningSupported,
-      props.activeMarkSupported,
       thread.pinnedAt,
-      thread.activeMarkedAt,
     ],
   );
   // Menu twin for the swipe-right Fork action, so the gesture keeps a
@@ -1197,11 +1202,12 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const snoozedMenuActions = useMemo<MenuAction[]>(
     () => [
       ...withArchiveToggle(SNOOZED_MENU_ACTIONS.slice(0, -1)),
+      ...activeMarkMenuItem,
       ...titleMenuItems,
       ...autoSettleMenuItems,
       SNOOZED_MENU_ACTIONS.at(-1)!,
     ],
-    [autoSettleMenuItems, titleMenuItems, withArchiveToggle],
+    [activeMarkMenuItem, autoSettleMenuItems, titleMenuItems, withArchiveToggle],
   );
   const legacyMenuActions = useMemo<MenuAction[]>(
     () => [
