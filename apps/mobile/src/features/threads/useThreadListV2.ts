@@ -13,6 +13,7 @@ import {
   threadListInboxReturns,
 } from "./threadListV2";
 import { computeGroupedThreadMoveAvailability } from "./threadOrder";
+import { useActiveWorkThreadFilter } from "./useActiveWorkThreadFilter";
 
 /**
  * Screens' select handlers read the content-only key set; a fresh one per list rebuild gave
@@ -73,7 +74,8 @@ export function useThreadListV2(input: {
   readonly collapsedGroupIds: ReadonlySet<string>;
   readonly activeShelfExpanded: boolean;
   readonly selectedThreadKey: string | null;
-  /** False while the threads are a held snapshot, which must not overwrite live attention. */
+  /** False while the threads are a held snapshot, which must not overwrite live attention or
+      Active filter membership. */
   readonly observesAttention: boolean;
 }) {
   const { threads, workingShelfEnabled } = input;
@@ -118,8 +120,16 @@ export function useThreadListV2(input: {
     ...sectionAvailability("pinned"),
     ...(workingShelfEnabled ? [] : sectionAvailability("active")),
   ]);
+  const matchesActiveWork = useActiveWorkThreadFilter({
+    threads,
+    now: input.now,
+    openThreadKey: input.selectedThreadKey,
+    persists: input.observesAttention,
+  });
+  const activeWork = matchesActiveWork !== null;
   // Older settled threads load in pages; the shelf lists them only as far as they are loaded.
-  const scopes = olderSettledScopes(input);
+  // The Active filter never lists settled threads, so it loads none.
+  const scopes = activeWork ? [] : olderSettledScopes(input);
   const olderSettledShelf = useOlderSettledShelf({
     scopes,
     expanded: input.settledShelfExpanded,
@@ -128,7 +138,9 @@ export function useThreadListV2(input: {
   });
   const layout = buildThreadListV2Items({
     pendingOrder: input.pendingOrder,
-    threads: threads.filter((thread) => thread.archivedAt === null),
+    threads: threads.filter(
+      (thread) => thread.archivedAt === null && (matchesActiveWork?.(thread) ?? true),
+    ),
     environmentId: input.environmentId,
     projectRefs: input.projectRefs,
     searchQuery: input.searchQuery,
@@ -182,6 +194,7 @@ export function useThreadListV2(input: {
     customGroups: input.customGroups,
     // Searching reveals folded groups without touching the saved fold state.
     collapsedGroupIds: searchQuery.length > 0 ? NO_COLLAPSED_GROUPS : input.collapsedGroupIds,
+    hideEmptyGroups: activeWork,
     activeShelfExpanded: input.activeShelfExpanded || searchQuery.length > 0,
     selectedThreadKey: input.selectedThreadKey,
     surfacesAttention,
@@ -204,7 +217,7 @@ export function useThreadListV2(input: {
     moveAvailability,
     shelfPreferencesLoading: !input.shelfPreferencesLoaded,
   });
-  return { layout, items, contentOnlyThreadKeys, olderSettledShelf };
+  return { layout, items, contentOnlyThreadKeys, olderSettledShelf, activeWork };
 }
 
 /** The list's scope per environment: its projects there, or every project. */

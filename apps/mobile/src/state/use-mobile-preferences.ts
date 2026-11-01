@@ -1,4 +1,4 @@
-import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { RegistryContext, useAtomSet, useAtomValue } from "@effect/atom-react";
 import {
   clampArchivedSectionVisibleCount,
   clampAccentTintIntensityPercent,
@@ -10,7 +10,8 @@ import {
   type ArchivedSectionVisibleCount,
   type SteerGraceWindowMs,
 } from "@t3tools/contracts/settings";
-import { AsyncResult } from "effect/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
+import { useContext } from "react";
 
 import { resolveAccentTintAlphas, type AccentTintAlphas } from "../lib/accentTint";
 import type { Preferences } from "../persistence/mobile-preferences";
@@ -26,6 +27,19 @@ import {
 } from "./thread-shelf-expansion";
 
 const EMPTY_PREFERENCES: Preferences = {};
+const NO_FOLDS: ReadonlySet<string> = new Set();
+
+/**
+ * Fork: while the Active work filter is on, every section opens and folds live in memory only,
+ * keyed like `threadGroupFold`, so turning the filter off restores the saved folds.
+ */
+const activeWorkFoldsAtom = Atom.make(NO_FOLDS).pipe(Atom.keepAlive);
+
+function toggledFold(folds: ReadonlySet<string>, key: string): ReadonlySet<string> {
+  const next = new Set(folds);
+  if (!next.delete(key)) next.add(key);
+  return next;
+}
 
 /**
  * Mobile has no client-settings sync, so these are the fork's Extras settings stored on this
@@ -75,11 +89,20 @@ export function useThreadShelfExpansion(shelf: ThreadShelfId): {
 } {
   const { preferences, hydrated } = useMobilePreferences();
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
-  const expanded = resolveThreadShelfExpanded({ shelf, preferences });
+  const registry = useContext(RegistryContext);
+  const activeWorkFolds = useAtomValue(activeWorkFoldsAtom);
+  const activeWork = preferences.activeWorkFilter === true;
+  const expanded = activeWork
+    ? !activeWorkFolds.has(shelf)
+    : resolveThreadShelfExpanded({ shelf, preferences });
   // A transform reads the optimistic value, so two presses before the next
   // render still toggle twice instead of writing the same value.
   const toggle = () => {
     threadListFoldedAttention.acknowledge(shelf);
+    if (activeWork) {
+      registry.update(activeWorkFoldsAtom, (folds) => toggledFold(folds, shelf));
+      return;
+    }
     savePreferences({
       transform: (current) =>
         threadShelfExpandedPatch(
@@ -134,10 +157,40 @@ export function useAccentTintSettings(): AccentTintSettings {
 export function useCollapsedThreadGroups() {
   const { preferences } = useMobilePreferences();
   const save = useAtomSet(updateMobilePreferencesAtom);
-  const ids = new Set(preferences.collapsedThreadGroups ?? []);
+  const registry = useContext(RegistryContext);
+  const activeWorkFolds = useAtomValue(activeWorkFoldsAtom);
+  const activeWork = preferences.activeWorkFilter === true;
+  const ids = activeWork
+    ? new Set(
+        [...activeWorkFolds].flatMap((key) =>
+          key.startsWith("group:") ? [key.slice("group:".length)] : [],
+        ),
+      )
+    : new Set(preferences.collapsedThreadGroups ?? []);
   const toggle = (id: string) => {
-    threadListFoldedAttention.acknowledge(threadGroupFold(id));
+    const fold = threadGroupFold(id);
+    threadListFoldedAttention.acknowledge(fold);
+    if (activeWork) {
+      registry.update(activeWorkFoldsAtom, (folds) => toggledFold(folds, fold));
+      return;
+    }
     save({ transform: (current) => toggleCollapsedThreadGroup(current, id) });
   };
   return { ids, toggle };
+}
+
+/** Fork: the thread list's Active work filter, remembered on this device. */
+export function useActiveWorkFilter() {
+  const { preferences } = useMobilePreferences();
+  const save = useAtomSet(updateMobilePreferencesAtom);
+  const registry = useContext(RegistryContext);
+  const toggle = () => {
+    registry.set(activeWorkFoldsAtom, NO_FOLDS);
+    save({ transform: (current) => ({ activeWorkFilter: current.activeWorkFilter !== true }) });
+  };
+  return {
+    enabled: preferences.activeWorkFilter === true,
+    includeDone: preferences.activeFilterIncludeDone === true,
+    toggle,
+  };
 }

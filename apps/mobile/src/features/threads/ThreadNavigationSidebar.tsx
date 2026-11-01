@@ -38,6 +38,7 @@ import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { useProjects, useNavigationThreadShells } from "../../state/entities";
 import { useThreadSearch } from "../../state/queries";
 import {
+  useActiveWorkFilter,
   useArchivedSectionVisibleCount,
   useCollapsedThreadGroups,
   useThreadShelfExpansion,
@@ -77,6 +78,7 @@ import { ThreadListToolbar } from "../home/ThreadListToolbar";
 import { useToolbarLayout } from "../../components/ui/useToolbarLayout";
 import { useFabScroll } from "../home/FabScrollContext";
 import { SidebarFilterButton } from "./sidebar-filter-button";
+import { ACTIVE_WORK_TOGGLE_LABEL, activeWorkToggleIcon } from "./active-work-toggle";
 import { createSidebarHeaderItems } from "./sidebar-native-header-items";
 import { SidebarNavigationShell } from "./sidebar-navigation-shell";
 import {
@@ -192,6 +194,7 @@ function ThreadNavigationSidebarPane(
     pinThread,
     unpinThread,
     setThreadAutoSettle,
+    setThreadActiveMark,
     moveThread,
     renameThread,
     regenerateThreadTitle,
@@ -364,6 +367,7 @@ function ThreadNavigationSidebarPane(
   const workingShelfEnabled = useWorkingShelfEnabled();
   const { expanded: workingShelfExpanded, toggle: toggleWorkingShelf } =
     useThreadShelfExpansion("working");
+  const { toggle: toggleActiveWork } = useActiveWorkFilter();
   // Fork: custom thread groups split Active into folding sections.
   const { groups: customGroups } = useThreadGroups();
   const collapsedThreadGroups = useCollapsedThreadGroups();
@@ -380,6 +384,7 @@ function ThreadNavigationSidebarPane(
     snoozePresetsByEnvironmentId,
     pinningEnvironmentIds,
     autoSettleOptOutEnvironmentIds,
+    activeMarkEnvironmentIds,
     pinReorderEnvironmentIds,
     activeReorderEnvironmentIds,
     titleRegenerationEnvironmentIds,
@@ -391,6 +396,7 @@ function ThreadNavigationSidebarPane(
     items: threadListV2Items,
     contentOnlyThreadKeys,
     olderSettledShelf,
+    activeWork,
   } = useThreadListV2({
     threads,
     pendingTasks,
@@ -553,7 +559,7 @@ function ThreadNavigationSidebarPane(
     openSwipeableRef.current?.close();
   };
   const archivedSectionFooter =
-    recentArchive.threads.length > 0 ? (
+    !activeWork && recentArchive.threads.length > 0 ? (
       <RecentArchivedThreadSection
         environmentLabels={archivedEnvironmentLabels}
         projects={projects}
@@ -730,6 +736,7 @@ function ThreadNavigationSidebarPane(
             snoozePresets={snoozePresetsByEnvironmentId.get(thread.environmentId)}
             pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
             autoSettleOptOutSupported={autoSettleOptOutEnvironmentIds.has(thread.environmentId)}
+            activeMarkSupported={activeMarkEnvironmentIds.has(thread.environmentId)}
             reorderSupported={
               item.item.pinned
                 ? pinReorderEnvironmentIds.has(thread.environmentId)
@@ -744,6 +751,7 @@ function ThreadNavigationSidebarPane(
             onUnpinThread={unpinThread}
             onForkThread={forkThread}
             onSetThreadAutoSettle={setThreadAutoSettle}
+            onSetThreadActiveMark={setThreadActiveMark}
             onMoveThread={moveThread}
             onSwipeableClose={handleSwipeableClose}
             onSwipeableWillOpen={handleSwipeableWillOpen}
@@ -836,6 +844,8 @@ function ThreadNavigationSidebarPane(
     filterIcon,
     filterMenu,
     onOpenSettings: props.onOpenSettings,
+    activeWorkFilter: activeWork,
+    onToggleActiveWork: toggleActiveWork,
   });
   const listEmpty = (
     <Text
@@ -853,13 +863,15 @@ function ThreadNavigationSidebarPane(
             ? threadSearch.isPending
               ? "Searching thread messages…"
               : "No matching threads"
-            : selectedProjectScope !== null
-              ? `No threads in ${selectedProjectScope.title}`
-              : "No threads yet"}
+            : activeWork
+              ? "No active threads"
+              : selectedProjectScope !== null
+                ? `No threads in ${selectedProjectScope.title}`
+                : "No threads yet"}
     </Text>
   );
   // Fork: with archived rows below, "No threads yet" would read as data loss.
-  const listEmptyOrArchive = recentArchive.threads.length > 0 ? null : listEmpty;
+  const listEmptyOrArchive = archivedSectionFooter !== null ? null : listEmpty;
 
   if (props.nativeChrome) {
     return (
@@ -1040,6 +1052,12 @@ function ThreadNavigationSidebarPane(
               }
             />
             <View className="flex-row items-center gap-2.5">
+              <SidebarFilterButton
+                accessibilityLabel={ACTIVE_WORK_TOGGLE_LABEL}
+                active={activeWork}
+                icon={activeWorkToggleIcon(activeWork)}
+                onPress={toggleActiveWork}
+              />
               <Menu actions={listMenuActions} onPressAction={handleListMenuAction}>
                 <SidebarFilterButton accessibilityLabel="Filter threads" icon={filterIcon} />
               </Menu>

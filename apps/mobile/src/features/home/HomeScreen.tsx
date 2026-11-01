@@ -56,6 +56,7 @@ import { useThreadListNow } from "../threads/use-thread-list-now";
 import { useSearchScrollRestoration } from "../workspace/useSearchScrollRestoration";
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
 import {
+  useActiveWorkFilter,
   useArchivedSectionVisibleCount,
   useCollapsedThreadGroups,
   useThreadShelfExpansion,
@@ -143,6 +144,10 @@ interface HomeScreenProps {
   readonly onSetThreadAutoSettle: (
     thread: EnvironmentThreadShell,
     enabled: boolean,
+  ) => Promise<boolean>;
+  readonly onSetThreadActiveMark: (
+    thread: EnvironmentThreadShell,
+    marked: boolean,
   ) => Promise<boolean>;
   readonly onMoveThread: (
     thread: EnvironmentThreadShell,
@@ -442,6 +447,7 @@ export function HomeScreen(props: HomeScreenProps) {
   const handleMoveThread = props.onMoveThread;
   const handleUnpinThread = props.onUnpinThread;
   const handleSetThreadAutoSettle = props.onSetThreadAutoSettle;
+  const handleSetThreadActiveMark = props.onSetThreadActiveMark;
   const handleRegenerateThreadTitle = props.onRegenerateThreadTitle;
   const handleRenameThread = props.onRenameThread;
   const handleDeleteThread = props.onDeleteThread;
@@ -482,6 +488,7 @@ export function HomeScreen(props: HomeScreenProps) {
   const { expanded: activeShelfExpanded, toggle: toggleActiveShelf } =
     useThreadShelfExpansion("active");
   const now = useThreadListNow(props.threads);
+  const { toggle: toggleActiveWork } = useActiveWorkFilter();
   const listEnvironments = useAtomValue(threadListEnvironmentsAtom);
   const {
     providersByEnvironmentId,
@@ -492,6 +499,7 @@ export function HomeScreen(props: HomeScreenProps) {
     snoozePresetsByEnvironmentId,
     pinningEnvironmentIds,
     autoSettleOptOutEnvironmentIds,
+    activeMarkEnvironmentIds,
     pinReorderEnvironmentIds,
     activeReorderEnvironmentIds,
     titleRegenerationEnvironmentIds,
@@ -503,6 +511,7 @@ export function HomeScreen(props: HomeScreenProps) {
     items: threadListV2Items,
     contentOnlyThreadKeys,
     olderSettledShelf,
+    activeWork,
   } = useThreadListV2({
     threads: props.threads,
     pendingTasks: props.pendingTasks,
@@ -705,6 +714,7 @@ export function HomeScreen(props: HomeScreenProps) {
         snoozePresets={snoozePresetsByEnvironmentId.get(thread.environmentId)}
         pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
         autoSettleOptOutSupported={autoSettleOptOutEnvironmentIds.has(thread.environmentId)}
+        activeMarkSupported={activeMarkEnvironmentIds.has(thread.environmentId)}
         reorderSupported={
           item.item.pinned
             ? pinReorderEnvironmentIds.has(thread.environmentId)
@@ -719,6 +729,7 @@ export function HomeScreen(props: HomeScreenProps) {
         onUnpinThread={handleUnpinThread}
         onForkThread={props.onForkThread}
         onSetThreadAutoSettle={handleSetThreadAutoSettle}
+        onSetThreadActiveMark={handleSetThreadActiveMark}
         onMoveThread={handleMoveThread}
         onSwipeableClose={handleSwipeableClose}
         onSwipeableWillOpen={handleSwipeableWillOpen}
@@ -773,7 +784,7 @@ export function HomeScreen(props: HomeScreenProps) {
     props.environments.map((environment) => [environment.environmentId, environment.label]),
   );
   const archivedSectionFooter =
-    recentArchive.threads.length > 0 ? (
+    !activeWork && recentArchive.threads.length > 0 ? (
       <RecentArchivedThreadSection
         environmentLabels={archivedEnvironmentLabels}
         projects={props.projects}
@@ -878,6 +889,14 @@ export function HomeScreen(props: HomeScreenProps) {
       <EmptyState
         title="No results"
         detail={`No threads matching "${props.searchQuery}".`}
+        variant={Platform.OS === "android" ? "plain" : undefined}
+      />
+    ) : activeWork ? (
+      <EmptyState
+        title="No active threads"
+        detail="Threads that are working or need you, and threads you mark as active, appear here."
+        actionLabel="Show all threads"
+        onAction={toggleActiveWork}
         variant={Platform.OS === "android" ? "plain" : undefined}
       />
     ) : v2ScopedProjectGroup !== null ? (

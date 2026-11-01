@@ -9,6 +9,7 @@ import { Atom } from "effect/reactivity";
 
 import { environmentCatalog } from "../connection/catalog";
 import { environmentServerConfigsAtom, serverEnvironment } from "./server";
+import { environmentShell } from "./shell";
 import { createThreadListEnvironmentsAtom } from "./thread-list-environments";
 
 export const environmentPresentations = createEnvironmentPresentationAtoms({
@@ -21,6 +22,16 @@ export const { connectedEnvironmentIdsAtom } = createEnvironmentSummaryAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   presentationAtom: environmentPresentations.presentationAtom,
 });
+
+/** Fork: connected environments whose threads reflect the server now, not a cache or a resync. */
+export const liveShellEnvironmentIdsAtom = Atom.make(
+  (get): ReadonlySet<EnvironmentId> =>
+    new Set(
+      get(connectedEnvironmentIdsAtom).filter(
+        (environmentId) => get(environmentShell.statusAtom(environmentId)) === "live",
+      ),
+    ),
+).pipe(Atom.withLabel("mobile-live-shell-environment-ids"));
 
 export const threadListEnvironmentsAtom = createThreadListEnvironmentsAtom(
   environmentServerConfigsAtom,

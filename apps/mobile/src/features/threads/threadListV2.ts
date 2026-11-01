@@ -573,6 +573,8 @@ export function buildThreadListV2ListItems(input: {
       web or desktop. */
   readonly customGroups?: ReadonlyArray<ThreadGroup>;
   readonly collapsedGroupIds?: ReadonlySet<string>;
+  /** Fork: the Active work filter hides groups it leaves empty. */
+  readonly hideEmptyGroups?: boolean;
   /** False folds the built-in Active group; absent or true keeps it open. */
   readonly activeShelfExpanded?: boolean;
   /** `environmentId:threadId` of the open thread, which a folded group keeps. */
@@ -698,7 +700,11 @@ export function buildThreadListV2ListItems(input: {
     const rows = activeItems.filter(
       (item) => item.type === "v2-thread" && threadGroupId(item.item.thread, customGroups) === id,
     );
-    if (group === null && rows.length === 0 && customGroups.length === 0) continue;
+    if (
+      rows.length === 0 &&
+      (input.hideEmptyGroups === true || (group === null && customGroups.length === 0))
+    )
+      continue;
     const expanded =
       group === null
         ? input.activeShelfExpanded !== false

@@ -42,6 +42,8 @@ const SETTINGS_SEARCH_TERMS = {
     "last project",
     "steer grace window",
     "recent archived threads",
+    "active filter",
+    "include done",
     "sync threads",
   ],
   SettingsThreads: [

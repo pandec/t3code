@@ -152,6 +152,11 @@ export interface Preferences {
   readonly steerGraceWindowMs?: number;
   readonly accentTintsEnabled?: boolean;
   readonly accentTintIntensityPercent?: number;
+  /** Fork: the thread list's Active work filter, like the web sidebar's bolt toggle. */
+  readonly activeWorkFilter?: boolean;
+  /** Threads the Active work filter keeps after their work stops, until it is turned off. */
+  readonly activeWorkThreadKeys?: readonly string[];
+  readonly activeFilterIncludeDone?: boolean;
   readonly threadListFilters?: ThreadListFilters;
   readonly pullRequestListFilters?: PullRequestListPreferences;
   readonly workspaceSelections?: WorkspaceSelections;
@@ -239,6 +244,9 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     steerGraceWindowMs?: number;
     accentTintsEnabled?: boolean;
     accentTintIntensityPercent?: number;
+    activeWorkFilter?: boolean;
+    activeWorkThreadKeys?: readonly string[];
+    activeFilterIncludeDone?: boolean;
     threadListFilters?: ThreadListFilters;
     pullRequestListFilters?: PullRequestListPreferences;
     workspaceSelections?: WorkspaceSelections;
@@ -414,6 +422,17 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.accentTintIntensityPercent === "number") {
     preferences.accentTintIntensityPercent = parsed.accentTintIntensityPercent;
+  }
+  if (typeof parsed.activeWorkFilter === "boolean") {
+    preferences.activeWorkFilter = parsed.activeWorkFilter;
+  }
+  if (Array.isArray(parsed.activeWorkThreadKeys)) {
+    preferences.activeWorkThreadKeys = parsed.activeWorkThreadKeys.filter(
+      (key): key is string => typeof key === "string",
+    );
+  }
+  if (typeof parsed.activeFilterIncludeDone === "boolean") {
+    preferences.activeFilterIncludeDone = parsed.activeFilterIncludeDone;
   }
   if (typeof parsed.threadListWorkingShelfExpanded === "boolean") {
     preferences.threadListWorkingShelfExpanded = parsed.threadListWorkingShelfExpanded;

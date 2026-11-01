@@ -753,6 +753,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       {@link canForkConversation} allows it. */
   readonly onForkThread: (thread: EnvironmentThreadShell) => void;
   readonly onSetThreadAutoSettle: (thread: EnvironmentThreadShell, enabled: boolean) => void;
+  /** Fork: marks the thread for the Active work filter. */
+  readonly onSetThreadActiveMark: (thread: EnvironmentThreadShell, marked: boolean) => void;
   readonly settlementSupported: boolean;
   readonly snoozeSupported: boolean;
   /** Fork: false on servers that predate "Until it's done" (untilDone). */
@@ -760,6 +762,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly snoozePresets: ReadonlyArray<SnoozePresetSetting> | undefined;
   readonly pinningSupported: boolean;
   readonly autoSettleOptOutSupported: boolean;
+  readonly activeMarkSupported: boolean;
   readonly titleRegenerationSupported: boolean;
   readonly reorderSupported?: boolean;
   readonly onMoveThread?: (
@@ -804,6 +807,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     onUnpinThread,
     onForkThread,
     onSetThreadAutoSettle,
+    onSetThreadActiveMark,
     onMoveThread,
   } = props;
   const snoozedRow = props.snoozed === true;
@@ -966,6 +970,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     (enabled: boolean) => onSetThreadAutoSettle(thread, enabled),
     [onSetThreadAutoSettle, thread],
   );
+  const handleSetActiveMark = useCallback(
+    (marked: boolean) => onSetThreadActiveMark(thread, marked),
+    [onSetThreadActiveMark, thread],
+  );
   const handleMoveUp = useCallback(() => onMoveThread?.(thread, "up"), [onMoveThread, thread]);
   const handleMoveDown = useCallback(() => onMoveThread?.(thread, "down"), [onMoveThread, thread]);
   // The toggle itself resolves in onArchiveThread, which queues it offline.
@@ -1040,6 +1048,18 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     ],
     [snoozePresets, untilDoneOffered],
   );
+  // Snoozing keeps the mark, so snoozed rows offer it too.
+  const activeMarkMenuItem = useMemo<MenuAction[]>(
+    () =>
+      props.activeMarkSupported
+        ? [
+            thread.activeMarkedAt != null
+              ? { id: "unmark-active", title: "Unmark as active", image: "bolt.slash" }
+              : { id: "mark-active", title: "Mark as active", image: "bolt" },
+          ]
+        : [],
+    [props.activeMarkSupported, thread.activeMarkedAt],
+  );
   const arrangementMenuItems = useMemo<MenuAction[]>(
     () => [
       ...(props.reorderSupported === true
@@ -1066,8 +1086,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
               : { id: "pin", title: "Pin", image: "pin" },
           ]
         : []),
+      ...activeMarkMenuItem,
     ],
     [
+      activeMarkMenuItem,
       props.canMoveDown,
       props.canMoveUp,
       props.reorderSupported,
@@ -1180,11 +1202,12 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const snoozedMenuActions = useMemo<MenuAction[]>(
     () => [
       ...withArchiveToggle(SNOOZED_MENU_ACTIONS.slice(0, -1)),
+      ...activeMarkMenuItem,
       ...titleMenuItems,
       ...autoSettleMenuItems,
       SNOOZED_MENU_ACTIONS.at(-1)!,
     ],
-    [autoSettleMenuItems, titleMenuItems, withArchiveToggle],
+    [activeMarkMenuItem, autoSettleMenuItems, titleMenuItems, withArchiveToggle],
   );
   const legacyMenuActions = useMemo<MenuAction[]>(
     () => [
@@ -1203,6 +1226,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       if (nativeEvent.event === "unsnooze") handleUnsnooze();
       if (nativeEvent.event === "pin") handlePin();
       if (nativeEvent.event === "unpin") handleUnpin();
+      if (nativeEvent.event === "mark-active") handleSetActiveMark(true);
+      if (nativeEvent.event === "unmark-active") handleSetActiveMark(false);
       if (nativeEvent.event === "auto-settle:enabled") handleSetAutoSettle(true);
       if (nativeEvent.event === "auto-settle:disabled") handleSetAutoSettle(false);
       if (nativeEvent.event === "arrange") appAtomRegistry.set(threadArrangementOpenAtom, true);
@@ -1264,6 +1289,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       handleSettle,
       handleSnooze,
       handleSetAutoSettle,
+      handleSetActiveMark,
       handleUnpin,
       handleUnsettle,
       handleUnsnooze,
