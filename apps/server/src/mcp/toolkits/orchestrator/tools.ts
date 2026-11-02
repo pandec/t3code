@@ -84,9 +84,13 @@ const OrchestratorCapabilitiesTool = Tool.make("orchestrator_capabilities", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
 
+const delegateExample = {
+  task: "Review the diff",
+  target: { driverKind: "codex", options: { reasoningEffort: "high" } },
+} satisfies typeof OrchestratorMcpDelegateTaskInput.Encoded;
+
 const DelegateTaskTool = Tool.make("delegate_task", {
-  description:
-    "Start one child agent with only `task`. No parent history. Separate checkout or PR per child: `isolation:'worktree'`. Keep `taskId` for `task_status` and `task_cancel`.",
+  description: `Start one child agent with only \`task\`. No parent history. Separate checkout or PR per child: \`isolation:'worktree'\`. Keep \`taskId\` for status/cancel. Use option ids from \`orchestrator_capabilities\`. Example: \`${Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(delegateExample)}\`.`,
   parameters: OrchestratorMcpDelegateTaskInput,
   success: OrchestratorMcpDelegateTaskResult,
   failure: OrchestratorMcpFailure,
@@ -138,16 +142,17 @@ const WorkflowStopTool = Tool.make("t3_workflow_stop", {
   .annotate(Tool.Title, "Stop a workflow")
   .annotate(Tool.Destructive, true);
 
+const backgroundWaitParameters = Schema.Struct({
+  taskIds: Schema.Array(TrimmedNonEmptyString).check(Schema.isMinLength(1), Schema.isMaxLength(20)),
+  waiting: Schema.optional(Schema.Boolean),
+});
+const backgroundWaitExample = {
+  taskIds: ["task-123"],
+} satisfies typeof backgroundWaitParameters.Encoded;
+
 const BackgroundWaitTool = Tool.make("t3_background_wait", {
-  description:
-    "Keep this thread in Working while background work runs. Pass its task ID after starting it. Not for work left running (dev server, watcher). `waiting=false` clears. Does not stop the task. Claude only.",
-  parameters: Schema.Struct({
-    taskIds: Schema.Array(TrimmedNonEmptyString).check(
-      Schema.isMinLength(1),
-      Schema.isMaxLength(20),
-    ),
-    waiting: Schema.optional(Schema.Boolean),
-  }),
+  description: `Keep this thread in Working while background work runs. Pass its task IDs after starting it. Not for dev servers or watchers. \`waiting=false\` clears without stopping tasks. Claude only. Example: \`${Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(backgroundWaitExample)}\`.`,
+  parameters: backgroundWaitParameters,
   success: Schema.Struct({
     matched: Schema.Array(Schema.String),
     unmatched: Schema.Array(Schema.String),

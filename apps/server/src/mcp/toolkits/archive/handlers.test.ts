@@ -248,9 +248,11 @@ it.effect("refuses to change a target with broader modes but still reads its sta
 it.effect("refuses to archive another thread once the caller's run ended", () => {
   const calls: Array<string> = [];
   return Effect.gen(function* () {
-    expect(declaredFailure(yield* call("archive_thread", { threadId: targetId }))).toMatchObject({
-      code: "parent_not_active",
-    });
+    for (const args of [{ threadId: targetId }, { includeDescendants: true }]) {
+      expect(declaredFailure(yield* call("archive_thread", args))).toMatchObject({
+        code: "parent_not_active",
+      });
+    }
     expect(calls).toEqual([]);
   }).pipe(Effect.scoped, Effect.provide(makeTargetLayer(calls, { callerLive: false })));
 });

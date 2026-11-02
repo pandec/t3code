@@ -15,6 +15,17 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 export const ArchiveToolResult = Schema.Struct({
   archivedAt: Schema.NullOr(IsoDateTime),
   request: Schema.NullOr(OrchestrationV2ThreadArchiveRequest),
+  descendants: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        threadId: ThreadId,
+        title: Schema.String,
+        state: Schema.String,
+        outcome: Schema.Literals(["archived", "skipped"]),
+        detail: Schema.optional(Schema.String),
+      }),
+    ),
+  ),
 });
 
 const dependencies = [
@@ -32,9 +43,10 @@ const threadId = Schema.optional(
 
 const ArchiveThread = Tool.make("archive_thread", {
   description:
-    "Archive a thread once its current turn succeeds, its final checkpoint lands, and background work it waits on (subagents, awaited commands and monitors) finishes; an idle thread archives immediately. Without threadId this targets your own thread: use it when the user asks to archive this thread when you are done, then finish your response without waiting for your own turn to end (a pending request means scheduled, not archived). With threadId it archives that other thread, which must run within your own runtime and interaction modes. Only set removeWorktree=true when the user also asks to remove the worktree. Removal preserves the branch and refuses dirty, locked, detached, shared, or project-checkout worktrees; a refusal after archiving leaves the thread archived and records the reason. Failed or interrupted turns, a Stop, or a new message from the user or an agent to the target thread cancel the request; automatic wakes such as subagent results or background notifications are waited through. Use archive_thread_status to inspect or cancel_thread_archive to cancel before archiving starts.",
+    "Archive a thread once its current turn succeeds, its final checkpoint lands, and background work it waits on (subagents, awaited commands and monitors) finishes; an idle thread archives immediately. Without threadId this targets your own thread: use it when the user asks to archive this thread when you are done, then finish your response without waiting for your own turn to end (a pending request means scheduled, not archived). With threadId it archives that other thread, which must run within your own runtime and interaction modes. Set includeDescendants=true to archive finished child and subagent threads first; active or unauthorized descendants are skipped and reported, never scheduled for later archiving. Only set removeWorktree=true when the user also asks to remove the worktree. Removal preserves the branch and refuses dirty, locked, detached, shared, or project-checkout worktrees; a refusal after archiving leaves the thread archived and records the reason. Failed or interrupted turns, a Stop, or a new message from the user or an agent to the target thread cancel the request; automatic wakes such as subagent results or background notifications are waited through. Use archive_thread_status to inspect or cancel_thread_archive to cancel before archiving starts.",
   parameters: Schema.Struct({
     threadId,
+    includeDescendants: Schema.optional(Schema.Boolean),
     removeWorktree: Schema.optional(
       Schema.Boolean.annotate({
         description: "Also remove the thread's clean worktree after archiving. Defaults to false.",

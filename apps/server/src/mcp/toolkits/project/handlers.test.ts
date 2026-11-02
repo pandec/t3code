@@ -24,6 +24,7 @@ import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import * as Schema from "effect/Schema";
 
 import * as DocumentText from "../../../provider/DocumentText.ts";
 import * as LabsService from "../../../labs/LabsService.ts";
@@ -812,3 +813,17 @@ it.effect("deleting a project through MCP also discards its clone record", () =>
     expect(discarded).toEqual([harness.projectId]);
   }),
 );
+
+it("validates a lab selector before launching a thread", () => {
+  const decode = Schema.decodeUnknownExit(ProjectToolkit.tools.t3_thread_launch.parametersSchema);
+  for (const lab of [{ kind: "lite", labId: "sp-lab-7" }, {}]) {
+    const result = decode({ title: "Fix", lab });
+    expect(Exit.isFailure(result)).toBe(true);
+    if (Exit.isFailure(result)) {
+      expect(Cause.pretty(result.cause)).toContain("Pass exactly one of lab.kind or lab.labId");
+    }
+  }
+  for (const lab of [{ kind: "lite" }, { labId: "sp-lab-7" }]) {
+    expect(Exit.isSuccess(decode({ title: "Fix", lab }))).toBe(true);
+  }
+});
