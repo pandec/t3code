@@ -2811,6 +2811,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
 ) {
   const isDevFlavor = flavor === "dev";
   const buildConfig: Record<string, unknown> = {
+    afterPack: (yield* Path.Path).join(yield* RepoRoot, "scripts/prepare-server-compile-cache.cjs"),
     appId: isDevFlavor ? `${DESKTOP_APP_ID}.dev` : DESKTOP_APP_ID,
     productName: resolveDesktopProductName(version, flavor),
     artifactName: isDevFlavor

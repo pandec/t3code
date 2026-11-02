@@ -10,6 +10,7 @@ import * as Duration from "effect/Duration";
 import * as Base64 from "effect/encoding/Base64";
 import * as Effect from "effect/Effect";
 import { identity } from "effect/Function";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -352,10 +353,11 @@ const resolveEditorConfig = Effect.fn("ws.resolveEditorConfig")(function* <E, R>
   };
 });
 
-export const withLateEditorConfig = <E, R>(
+export const withLateConfigDiscovery = <E, R>(
   config: ClientServerConfig,
   liveUpdates: Stream.Stream<ServerConfigStreamEvent, E, R>,
   launcher: EditorDiscovery,
+  remoteOpenTargets: RemoteOpenTargets.RemoteOpenTargets["Service"],
 ) => {
   const lateEditorConfig = Stream.fromEffect(launcher.resolveAvailableEditors()).pipe(
     Stream.filter(
@@ -376,7 +378,14 @@ export const withLateEditorConfig = <E, R>(
     Stream.map((editorConfig) => ({ type: "editorsResolved" as const, editorConfig })),
   );
 
-  return Stream.merge(liveUpdates, lateEditorConfig).pipe(
+  const lateRemoteOpenTargets = Stream.fromEffect(remoteOpenTargets.resolveTargets()).pipe(
+    Stream.filter(
+      (targets) => JSON.stringify(targets) !== JSON.stringify(config.remoteOpenTargets ?? []),
+    ),
+    Stream.map((targets) => ({ type: "remoteOpenTargetsResolved" as const, targets })),
+  );
+
+  return Stream.merge(liveUpdates, Stream.merge(lateEditorConfig, lateRemoteOpenTargets)).pipe(
     Stream.mapAccum(
       (): ClientServerConfig => config,
       (current, event): readonly [ClientServerConfig, ReadonlyArray<ServerConfigStreamEvent>] => {
@@ -395,6 +404,10 @@ export const withLateEditorConfig = <E, R>(
           // base; the late editor resend must fold onto it, not roll it back.
           case "snapshot":
             return [event.config, [event]];
+          case "remoteOpenTargetsResolved": {
+            const next = { ...current, remoteOpenTargets: event.targets };
+            return [next, [{ version: 1, type: "snapshot", config: next }]];
+          }
           case "keybindingsUpdated":
             return [{ ...current, ...event.payload }, [event]];
           case "providerStatuses":
@@ -893,7 +906,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
           Stream.map((stored) => ({
             kind: "event" as const,
             sequence: stored.sequence,
-            event: projectDomainEventForWire(stored.event),
+            event: stored.event,
           })),
           coalesceThreadLiveStream,
           Stream.mapError(
@@ -1969,6 +1982,7 @@ const makeWsRpcHandlers = (
       const loadServerConfig = Effect.fn("ws.loadServerConfig")(function* (options: {
         readonly usageLimitsCommand: boolean;
         readonly workspaceSnapshotsOnDemand: boolean;
+        readonly deferRemoteOpenTargets: boolean;
       }) {
         const keybindingsConfig = yield* keybindings.loadConfigState;
         const currentProviders = yield* providerRegistry.getProviders;
@@ -1988,7 +2002,9 @@ const makeWsRpcHandlers = (
         const discovery = yield* resolveOpenDiscoveryForConfig({
           editors: externalLauncher.resolveAvailableEditors(),
           fileManagerRevealKind: externalLauncher.resolveFileManagerRevealKind(),
-          remoteOpenTargets: remoteOpenTargets.resolveTargets(),
+          remoteOpenTargets: options.deferRemoteOpenTargets
+            ? Effect.succeed([])
+            : remoteOpenTargets.resolveTargets(),
           directEndpoints: directEndpoints.resolve(),
         });
 
@@ -2037,6 +2053,9 @@ const makeWsRpcHandlers = (
             available: yield* ttsService.isConfigured(settings.voice.tts.provider),
             persistentJobs: true,
           },
+          ...(serverSettings.managedPolicy === undefined
+            ? {}
+            : { managedPolicy: serverSettings.managedPolicy }),
           shellResumeCompletionMarker: true,
           shellThreadFamilies: true,
           shellOlderSettled: true,
@@ -2449,7 +2468,11 @@ const makeWsRpcHandlers = (
           ),
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
         [WS_METHODS.serverGetConfig]: (_input) =>
-          loadServerConfig({ usageLimitsCommand: false, workspaceSnapshotsOnDemand: false }),
+          loadServerConfig({
+            usageLimitsCommand: false,
+            workspaceSnapshotsOnDemand: false,
+            deferRemoteOpenTargets: false,
+          }),
         [WS_METHODS.serverSearchAcpRegistry]: (input) =>
           acpRegistryCatalog
             .search(input)
@@ -2807,14 +2830,12 @@ const makeWsRpcHandlers = (
         [WS_METHODS.serverUpsertKeybinding]:
           /* Request instrumentation already owns the span; keep this helper in that context. */
           Effect.fnUntraced(function* (rule) {
-            const keybindingsConfig = yield* keybindings.upsertKeybindingRule(rule);
-            return { keybindings: keybindingsConfig, issues: [] };
+            return yield* keybindings.upsertKeybindingRule(rule);
           }),
         [WS_METHODS.serverRemoveKeybinding]:
           /* Request instrumentation already owns the span; keep this helper in that context. */
           Effect.fnUntraced(function* (rule) {
-            const keybindingsConfig = yield* keybindings.removeKeybindingRule(rule);
-            return { keybindings: keybindingsConfig, issues: [] };
+            return yield* keybindings.removeKeybindingRule(rule);
           }),
         [WS_METHODS.serverRunStorageCleanup]: () => storageCleanup.runNow,
         [WS_METHODS.serverGetStorageCleanupReport]: () => storageCleanup.reports,
@@ -3437,9 +3458,13 @@ const makeWsRpcHandlers = (
               // Buffer changes through discovery and the initial snapshot's RPC ACK wait.
               const keybindingsChanges = yield* keybindings.subscribeChanges;
               const settingsChanges = yield* serverSettings.subscribeChanges;
+              const remoteTargets = yield* Effect.forkScoped(remoteOpenTargets.resolveTargets(), {
+                startImmediately: true,
+              });
               const config = yield* loadServerConfig({
                 usageLimitsCommand,
                 workspaceSnapshotsOnDemand,
+                deferRemoteOpenTargets: true,
               });
               const keybindingsUpdates = keybindingsChanges.pipe(
                 Stream.map((event) => ({
@@ -3526,7 +3551,11 @@ const makeWsRpcHandlers = (
               // a fresh snapshot rather than a settingsUpdated event.
               const speechAvailabilityUpdates = ttsService.configuredChanges.pipe(
                 Stream.mapEffect(() =>
-                  loadServerConfig({ usageLimitsCommand, workspaceSnapshotsOnDemand }),
+                  loadServerConfig({
+                    usageLimitsCommand,
+                    workspaceSnapshotsOnDemand,
+                    deferRemoteOpenTargets: false,
+                  }),
                 ),
                 Stream.map((snapshot) => ({
                   version: 1 as const,
@@ -3546,9 +3575,18 @@ const makeWsRpcHandlers = (
                 ),
               );
 
+              const remoteResult = yield* Effect.sync(() => remoteTargets.pollUnsafe());
+              const initialConfig =
+                remoteResult?._tag === "Success"
+                  ? { ...config, remoteOpenTargets: remoteResult.value }
+                  : config;
               return Stream.concat(
-                rpcInitialItems([{ version: 1 as const, type: "snapshot" as const, config }]),
-                withLateEditorConfig(config, liveUpdates, externalLauncher),
+                rpcInitialItems([
+                  { version: 1 as const, type: "snapshot" as const, config: initialConfig },
+                ]),
+                withLateConfigDiscovery(initialConfig, liveUpdates, externalLauncher, {
+                  resolveTargets: () => Fiber.join(remoteTargets),
+                }),
               );
             }),
           ),

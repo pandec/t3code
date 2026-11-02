@@ -100,8 +100,10 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
           cause: forkableSourceRunStatusError(sourceRun),
         });
       }
+      // The remote parent delegated the source thread, not its forks.
+      const { delegatedFrom: _delegatedFrom, ...inherited } = input.sourceProjection.thread;
       const targetThread: OrchestrationV2AppThread = {
-        ...input.sourceProjection.thread,
+        ...inherited,
         // PR context follows the conversation; watching remains the source thread's responsibility.
         pullRequests: input.sourceProjection.thread.pullRequests?.map(
           ({ watch: _watch, ...link }) => link,
@@ -132,12 +134,12 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
         settledAt: null,
         snoozedUntil: null,
         snoozedAt: null,
-        // A fork starts unpinned and unarranged; it never takes over the
-        // source's slot in the pinned or active order.
+        lastSnoozeWakeAt: null,
         pinnedAt: null,
         pinOrderKey: null,
         activeOrderKey: null,
         activeMarkedAt: null,
+        autoSettleDisabledAt: null,
         // A guest link belongs to the thread it was made for.
         guestShare: null,
         lastVisitedAt: null,

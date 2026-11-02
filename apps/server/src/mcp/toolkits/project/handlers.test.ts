@@ -12,6 +12,7 @@ import {
   type ModelSelection,
   type RuntimeMode,
   type OrchestrationV2ThreadShell,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -26,6 +27,7 @@ import * as Stream from "effect/Stream";
 
 import * as DocumentText from "../../../provider/DocumentText.ts";
 import * as LabsService from "../../../labs/LabsService.ts";
+import { OrchestratorRuntimeModeAboveCeilingError } from "../../../orchestration-v2/Orchestrator.ts";
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ServerConfig from "../../../config.ts";
@@ -57,6 +59,8 @@ const clientLaunchHarness = (input: {
   /** The launch is rejected before any thread exists. */
   readonly providerDisabled?: boolean;
   readonly webOrigin?: string;
+  /** The orchestrator refuses the new thread's mode, as under a managed ceiling. */
+  readonly refusedByCeiling?: true;
 }) => {
   const projectId = ProjectId.make("project:client-target");
   const modelSelection = {
@@ -126,6 +130,23 @@ const clientLaunchHarness = (input: {
             }),
           );
         input.launched.push(launch);
+        if (input.refusedByCeiling) {
+          return Effect.fail(
+            new ThreadLaunch.ThreadLaunchError({
+              operation: "create-thread",
+              commandId: launch.commandId,
+              projectId: launch.projectId,
+              cause: new OrchestratorRuntimeModeAboveCeilingError({
+                commandId: launch.commandId,
+                threadId: launch.threadId ?? ThreadId.make("thread:refused"),
+                refused: "mode",
+                runtimeMode: launch.runtimeMode,
+                maxRuntimeMode: "approval-required",
+                organization: "Example Corp",
+              }),
+            }),
+          );
+        }
         return Effect.succeed({
           threadId: launch.threadId,
           projection: {
@@ -197,9 +218,10 @@ it.effect(
           readonly targeted?: false;
           readonly overrideModel?: ModelSelection;
           readonly webOrigin?: string;
+          readonly refusedByCeiling?: true;
         },
       ) {
-        const { targeted, overrideModel, webOrigin, ...input } = params;
+        const { targeted, overrideModel, webOrigin, refusedByCeiling, ...input } = params;
         const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
         const { projectId, modelSelection, dependencies } = clientLaunchHarness({
           runtimeModeCeiling,
@@ -207,6 +229,7 @@ it.effect(
           launched,
           ...(overrideModel === undefined ? {} : { overrideModel }),
           ...(webOrigin === undefined ? {} : { webOrigin }),
+          ...(refusedByCeiling === undefined ? {} : { refusedByCeiling }),
         });
         const toolkit = yield* ProjectToolkit.pipe(
           Effect.provide(
@@ -270,6 +293,16 @@ it.effect(
         overrideModel,
       });
       expect(fromSettings.launched[0]?.modelSelection).toEqual(overrideModel);
+
+      // An administrator's ceiling the orchestrator enforces is named, not reported as unavailable.
+      const managed = yield* launchWith("full-access", "full-access", {
+        title: "Fix",
+        refusedByCeiling: true,
+      });
+      expect(managed.result).toMatchObject({
+        code: "invalid_request",
+        message: "Example Corp limits threads to Supervised.",
+      });
     }),
 );
 
@@ -504,32 +537,41 @@ it.effect("a lab launch reserves the lab for the new thread before binding its w
 );
 
 it.effect("a lab launch rejected before its thread exists gives the lab back", () =>
-  Effect.gen(function* () {
-    const abandoned: Array<{ readonly labId: string; readonly leaseId: string }> = [];
-    const { projectId, dependencies } = clientLaunchHarness({
-      runtimeModeCeiling: "full-access",
-      launched: [],
-      abandoned,
-      providerDisabled: true,
-      prepareAgentThread: () =>
-        Effect.succeed({
-          labId: "sp-lab-6",
-          worktreePath: "/labs/sp-lab-6",
-          branch: "t3/abc",
-          leaseId: "lease-1",
-        }),
-    });
-    const toolkit = yield* ProjectToolkit.pipe(
-      Effect.provide(
-        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(Layer.provide(dependencies)),
-      ),
-    );
-    const result = yield* toolkit
-      .handle("t3_thread_launch", { title: "Fix", projectId, lab: { kind: "lite" } })
-      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
-    expect(result.at(-1)?.result).toMatchObject({ code: "invalid_request" });
-    expect(abandoned).toEqual([{ labId: "sp-lab-6", leaseId: "lease-1" }]);
-  }),
+  Effect.forEach([{ providerDisabled: true }, { refusedByCeiling: true as const }], (rejection) =>
+    Effect.gen(function* () {
+      const abandoned: Array<{ readonly labId: string; readonly leaseId: string }> = [];
+      const { projectId, dependencies } = clientLaunchHarness({
+        runtimeModeCeiling: "full-access",
+        launched: [],
+        abandoned,
+        ...rejection,
+        prepareAgentThread: () =>
+          Effect.succeed({
+            labId: "sp-lab-6",
+            worktreePath: "/labs/sp-lab-6",
+            branch: "t3/abc",
+            leaseId: "lease-1",
+          }),
+      });
+      const toolkit = yield* ProjectToolkit.pipe(
+        Effect.provide(
+          McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(
+            Layer.provide(dependencies),
+          ),
+        ),
+      );
+      const result = yield* toolkit
+        .handle("t3_thread_launch", { title: "Fix", projectId, lab: { kind: "lite" } })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+      expect(result.at(-1)?.result).toMatchObject({
+        code: "invalid_request",
+        ...("refusedByCeiling" in rejection
+          ? { message: "Example Corp limits threads to Supervised." }
+          : {}),
+      });
+      expect(abandoned).toEqual([{ labId: "sp-lab-6", leaseId: "lease-1" }]);
+    }),
+  ),
 );
 
 it.effect("a launch binds only an existing checkout that is one of the project's worktrees", () =>

@@ -66,6 +66,7 @@ const makeSpeech = Effect.fn("makeSpeech")(function* (
     Effect.provideService(TextGeneration, textGeneration),
   );
   const tts = TtsService.of({
+    refreshEnvironment: Effect.void,
     environmentDefaults: {
       elevenlabs: { modelId: "eleven", voiceId: "voice" },
       openrouter: { modelId: "router", voiceId: "voice" },

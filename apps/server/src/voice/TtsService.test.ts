@@ -175,6 +175,11 @@ it.effect("joins piece costs and refuses mixed containers", () =>
 it.effect("publishes key changes and reports effective defaults without exposing secrets", () =>
   Effect.gen(function* () {
     const stored = new Map<string, Uint8Array>();
+    const environment = {
+      ELEVENLABS_API_KEY: "eleven-secret",
+      OPENROUTER_TTS_MODEL: " custom/model ",
+      OPENROUTER_TTS_VOICE_ID: " ",
+    };
     const secrets = Layer.succeed(
       ServerSecretStore,
       ServerSecretStore.of({
@@ -220,6 +225,16 @@ it.effect("publishes key changes and reports effective defaults without exposing
       yield* Fiber.join(removed);
       expect(yield* tts.isConfigured("openrouter")).toBe(false);
       expect(stored.has(OPENROUTER_TTS_API_KEY_SECRET_NAME)).toBe(false);
+      const refreshed = yield* Effect.forkChild(changes, { startImmediately: true });
+      environment.ELEVENLABS_API_KEY = "";
+      environment.OPENROUTER_TTS_MODEL = "late/model";
+      yield* tts.refreshEnvironment;
+      yield* Fiber.join(refreshed);
+      expect(yield* tts.isConfigured("elevenlabs")).toBe(false);
+      expect(tts.environmentDefaults.openrouter.modelId).toBe("late/model");
+      expect((yield* tts.status).openrouter.defaults.modelId).toBe("late/model");
+      const lateChanges = yield* Stream.toPull(tts.configuredChanges);
+      yield* lateChanges;
     }).pipe(
       Effect.provide(
         layer.pipe(
@@ -232,11 +247,7 @@ it.effect("publishes key changes and reports effective defaults without exposing
               ),
               ConfigProvider.layer(
                 ConfigProvider.fromEnv({
-                  env: {
-                    ELEVENLABS_API_KEY: "eleven-secret",
-                    OPENROUTER_TTS_MODEL: " custom/model ",
-                    OPENROUTER_TTS_VOICE_ID: " ",
-                  },
+                  env: environment,
                 }),
               ),
             ),

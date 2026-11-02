@@ -64,7 +64,10 @@ vi.mock("../../state/environments", () => ({ useEnvironments: () => ({ environme
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: () => mocks.updateSettings,
 }));
-vi.mock("../threads/thread-settings-options", () => ({ RUNTIME_MODE_CHOICES: [] }));
+vi.mock("../threads/thread-settings-options", () => ({
+  RUNTIME_MODE_CHOICES: [],
+  withManagedRuntimeModeLimits: (choices: readonly unknown[]) => choices,
+}));
 // Fork: the threads screen's sync row reaches the connection runtime, which loads the expo root.
 vi.mock("../../state/prewarm", () => ({
   didEnvironmentPrewarmRunsAdvance: () => true,

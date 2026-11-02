@@ -114,6 +114,7 @@ const harness = (telegram: { readonly chatId?: string; readonly linkCode?: strin
         Layer.succeed(TelegramTopicStore.TelegramTopicStore, store),
         Layer.succeed(VoiceTranscription.VoiceTranscription, {
           available: false,
+          refreshEnvironment: Effect.void,
           transcribe: () => Effect.die("unused"),
         }),
       ),

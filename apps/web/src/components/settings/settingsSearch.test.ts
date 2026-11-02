@@ -219,6 +219,21 @@ describe("searchSettings", () => {
     expect(searchSettings("sidebar.toggle")[0]?.targetId).toBeUndefined();
   });
 
+  it("finds rows by the titles shown on their pages", () => {
+    for (const [title, id] of [
+      ["Automatic worktree cleanup", "storage-worktrees"],
+      ["Delete settled worktrees", "storage-worktrees"],
+      ["Delete old browser artifacts", "storage-artifacts"],
+      ["Delete old rotated logs", "storage-artifacts"],
+      ["Custom search URL", "browser-search-engine"],
+      ["Native sessions", "providers"],
+      ["CODEX_HOME path", "providers"],
+      ["Shadow home path", "providers"],
+    ] as const) {
+      expect(searchSettings(title)[0]?.id, title).toBe(id);
+    }
+  });
+
   it("keeps catalog result ids unique", () => {
     const ids = SETTINGS_SEARCH_ITEMS.map((item) => item.id);
     expect(new Set(ids).size).toBe(ids.length);
@@ -230,7 +245,7 @@ describe("searchSettings", () => {
   // should resolve to one.
   it("does not index fork-only project rows", () => {
     expect(searchSettings("thread accent")).toEqual([]);
-    expect(searchSettings("import cli")).toEqual([]);
+    expect(searchSettings("import cli").map((item) => item.id)).toEqual(["providers"]);
     // Upstream's storage cleanup row legitimately matches "archived threads";
     // only the fork's per-project archived-threads shortcut must stay out.
     expect(searchSettings("project archived").map((item) => item.id)).toEqual([

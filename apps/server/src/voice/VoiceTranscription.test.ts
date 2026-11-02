@@ -1,12 +1,19 @@
 import { VOICE_TRANSCRIPTION_MAX_BYTES, VoiceTranscriptionRequest } from "@t3tools/contracts";
+import * as ConfigProvider from "effect/ConfigProvider";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { describe, expect, it } from "vite-plus/test";
+import { HttpClient, HttpClientResponse } from "effect/http";
+import { describe, expect } from "vite-plus/test";
+import { it } from "@effect/vitest";
 
 import {
   buildElevenLabsTranscriptionFormData,
   decodeVoiceDataUrl,
   ElevenLabsTranscriptionResponse,
   VoiceTranscriptionError,
+  VoiceTranscription,
+  layer,
 } from "./VoiceTranscription.ts";
 
 const decodeElevenLabsTranscriptionResponse = Schema.decodeUnknownSync(
@@ -101,4 +108,50 @@ describe("buildElevenLabsTranscriptionFormData", () => {
 
     expect(formData.get("no_verbatim")).toBeNull();
   });
+});
+
+it.effect("refreshes transcription credentials and options after shell discovery", () => {
+  const env: Record<string, string> = {};
+  const httpClient = HttpClient.make((request) =>
+    Effect.sync(() => {
+      expect(request.headers["xi-api-key"]).toBe("shell-key");
+      expect(request.body._tag).toBe("FormData");
+      if (request.body._tag === "FormData") {
+        expect(request.body.formData.get("model_id")).toBe("scribe_v1");
+        expect(request.body.formData.get("language_code")).toBe("pl");
+      }
+      return HttpClientResponse.fromWeb(request, Response.json({ text: "hello" }));
+    }),
+  );
+  return Effect.gen(function* () {
+    const voice = yield* VoiceTranscription;
+    expect(voice.available).toBe(false);
+    env.ELEVENLABS_API_KEY = "shell-key";
+    env.ELEVENLABS_STT_MODEL = "scribe_v1";
+    env.ELEVENLABS_STT_LANGUAGE = "pl";
+    yield* voice.refreshEnvironment;
+    expect(voice.available).toBe(true);
+    expect(
+      yield* voice.transcribe({
+        mimeType: "audio/mp4",
+        dataUrl: "data:audio/mp4;base64,aGVsbG8=",
+        durationMs: 1_000,
+        sizeBytes: 5,
+      }),
+    ).toEqual({ text: "hello" });
+    delete env.ELEVENLABS_API_KEY;
+    yield* voice.refreshEnvironment;
+    expect(voice.available).toBe(false);
+  }).pipe(
+    Effect.provide(
+      layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(HttpClient.HttpClient, httpClient),
+            ConfigProvider.layer(ConfigProvider.fromEnv({ env })),
+          ),
+        ),
+      ),
+    ),
+  );
 });

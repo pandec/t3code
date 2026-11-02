@@ -1,4 +1,5 @@
 import type { ServerConfig, ServerConfigStreamEvent } from "@t3tools/contracts";
+import * as Equal from "effect/Equal";
 import * as Option from "effect/Option";
 
 export interface ServerConfigProjection {
@@ -44,6 +45,8 @@ export function reuseUnchanged<T>(previous: unknown, next: T): T {
     });
     return (same ? previous : merged) as T;
   }
+  // Decoded settings carry Durations, which are fresh instances on every push.
+  if (Equal.isEqual(next)) return (Equal.equals(previous, next) ? previous : next) as T;
   if (Object.getPrototypeOf(next) !== Object.prototype) return next;
   const before = previous as Record<string, unknown>;
   const after = next as Record<string, unknown>;
@@ -107,17 +110,26 @@ export function applyServerConfigProjection(
         source: "live",
       }));
     case "settingsUpdated":
-      return Option.map(current, (projection) => ({
-        config: {
-          ...projection.config,
-          settings: reuseUnchanged(projection.config.settings, event.payload.settings),
-          ...(event.payload.textToSpeech === undefined
-            ? {}
-            : { textToSpeech: event.payload.textToSpeech }),
-        },
-        latestEvent: event,
-        source: "live",
-      }));
+      return Option.map(current, (projection) => {
+        const settings = reuseUnchanged(projection.config.settings, event.payload.settings);
+        const textToSpeech =
+          event.payload.textToSpeech === undefined
+            ? projection.config.textToSpeech
+            : reuseUnchanged(projection.config.textToSpeech, event.payload.textToSpeech);
+        return {
+          config:
+            settings === projection.config.settings &&
+            textToSpeech === projection.config.textToSpeech
+              ? projection.config
+              : {
+                  ...projection.config,
+                  settings,
+                  ...(textToSpeech === undefined ? {} : { textToSpeech }),
+                },
+          latestEvent: event,
+          source: "live",
+        };
+      });
     case "environmentThemesUpdated":
       return Option.map(current, (projection) => ({
         config: {

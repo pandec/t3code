@@ -1,5 +1,4 @@
 import { useAtomValue } from "@effect/atom-react";
-import { needsCursorKeychainAccess, refreshUsage } from "@t3tools/client-runtime/state/usage";
 import {
   AuthDiagnosticsReadScope,
   USAGE_CONTRACT_VERSION,
@@ -9,6 +8,11 @@ import {
   type UsageProviderKind,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
+import {
+  needsCursorKeychainAccess,
+  refreshUsage,
+  usageSummaryInput,
+} from "@t3tools/client-runtime/state/usage";
 import { resolveUsageAccess } from "@t3tools/client-runtime/state/usage-access";
 import {
   attributeGatewayBucket,
@@ -89,7 +93,15 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
         });
         continue;
       }
-      const result = get(serverEnvironment.usageSummary({ environmentId, input }));
+      const result = get(
+        serverEnvironment.usageSummary({
+          environmentId,
+          input: usageSummaryInput(
+            input,
+            get(serverEnvironment.usageModelFilterAtom(environmentId)),
+          ),
+        }),
+      );
       const summary = AsyncResult.getOrElse(result, () => null);
       const state = classifyEnvironmentUsage({
         phase: presentation.connection.phase,

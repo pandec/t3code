@@ -4,7 +4,7 @@ import {
   matchesActiveWorkFilter,
   nextActiveWorkThreadKeys,
 } from "@t3tools/client-runtime/state/thread-active-work";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 
 import { updateMobilePreferencesAtom } from "../../state/preferences";
 import { liveShellEnvironmentIdsAtom } from "../../state/presentation";
@@ -21,7 +21,7 @@ export function useActiveWorkThreadFilter(input: {
   /** False while the threads are a held snapshot, which must not overwrite live membership. */
   readonly persists: boolean;
 }): ((thread: EnvironmentThreadShell) => boolean) | null {
-  const { threads, now } = input;
+  const { threads, now, openThreadKey } = input;
   const { enabled, includeDone } = useActiveWorkFilter();
   const { preferences, hydrated } = useMobilePreferences();
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
@@ -61,14 +61,17 @@ export function useActiveWorkThreadFilter(input: {
     stored,
     threads,
   ]);
-  if (!enabled) return null;
-  const retainedKeys = new Set(next);
-  return (thread) =>
-    matchesActiveWorkFilter(thread, {
-      retainedKeys,
-      openThreadKey: input.openThreadKey,
-      now,
-      status: resolveThreadListV2Status,
-      includesDone: includeDone ? threadHasUnseenCompletion : undefined,
-    });
+  // The thread list memoizes its layout on this predicate, so keep it stable between renders.
+  return useMemo(() => {
+    if (!enabled) return null;
+    const retainedKeys = new Set(next);
+    return (thread: EnvironmentThreadShell) =>
+      matchesActiveWorkFilter(thread, {
+        retainedKeys,
+        openThreadKey,
+        now,
+        status: resolveThreadListV2Status,
+        includesDone: includeDone ? threadHasUnseenCompletion : undefined,
+      });
+  }, [enabled, next, openThreadKey, now, includeDone]);
 }

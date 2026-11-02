@@ -31,7 +31,8 @@ import type { RpcSession } from "../rpc/session.ts";
 import * as ShellSnapshotLoader from "./shellSnapshotHttp.ts";
 import type { DeferredShellSnapshot } from "./shellPullRequests.ts";
 import {
-  applyShellStreamEvent,
+  applyShellStreamEvents,
+  type ShellStreamEvent,
   mergeShellSnapshotProjects,
   reuseUnchangedThreadShells,
   sameThreadPullRequests,
@@ -217,10 +218,60 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   ) {
     const initial = yield* SubscriptionRef.get(state);
     let waiting = yield* Ref.get(awaitingCompletion);
-    /* oxlint-disable oxc/no-accumulating-spread -- This copies a fixed-shape state record, not a growing collection. */
     let next = initial;
     let receivedSnapshot = false;
+    let deltas: Array<ShellStreamEvent> = [];
+    const flushDeltas = () => {
+      if (deltas.length > 0 && Option.isSome(next.snapshot)) {
+        let sequence = next.snapshot.value.snapshotSequence;
+        let removedAt: Map<ThreadId, number> | undefined;
+        let archiveInvalidationSequence = next.archiveInvalidationSequence;
+        // Fork: membership evolves through the batch, so a delta for a thread an
+        // earlier one re-added does not invalidate the archive shelf again.
+        let activeIds: Set<ThreadId> | undefined;
+        const snapshotThreads = next.snapshot.value.threads;
+        const active = () => (activeIds ??= new Set(snapshotThreads.map((thread) => thread.id)));
+        for (const delta of deltas) {
+          if (delta.sequence <= sequence) continue;
+          if (shellEventInvalidatesArchivedThreads((id) => active().has(id), delta)) {
+            archiveInvalidationSequence = delta.sequence;
+          }
+          switch (delta.kind) {
+            case "thread.removed":
+              removedAt ??= new Map(next.removedAt);
+              removedAt.set(delta.threadId, delta.sequence);
+              active().delete(delta.threadId);
+              break;
+            case "thread.updated":
+              if (delta.location === "active") active().add(delta.thread.id);
+              else active().delete(delta.thread.id);
+              break;
+            case "project.updated":
+            case "project.removed":
+              break;
+            default:
+              continue;
+          }
+          sequence = delta.sequence;
+        }
+        next = {
+          ...next,
+          removedAt: removedAt ?? next.removedAt,
+          ...(archiveInvalidationSequence === undefined ? {} : { archiveInvalidationSequence }),
+          snapshot: Option.some(applyShellStreamEvents(next.snapshot.value, deltas)),
+          status: waiting ? "synchronizing" : "live",
+          error: Option.none(),
+        };
+      }
+      deltas = [];
+    };
     for (const item of items) {
+      if (item.kind !== "snapshot" && item.kind !== "synchronized") {
+        deltas.push(item);
+        continue;
+      }
+      // Snapshots can reset the cursor; completion markers change the sync status.
+      flushDeltas();
       if (item.kind === "synchronized") {
         waiting = false;
         if (Option.isSome(next.snapshot)) {
@@ -228,57 +279,28 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         }
         continue;
       }
-      const authoritative =
-        item.kind === "snapshot" && item.resolvedRepositoryIdentityRoots === undefined;
-      const nextSnapshot =
-        item.kind === "snapshot"
-          ? mergeShellSnapshotProjects(
-              Option.getOrNull(next.snapshot),
-              item.snapshot,
-              item.resolvedRepositoryIdentityRoots === undefined
-                ? undefined
-                : {
-                    resolvedRepositoryIdentityRoots: item.resolvedRepositoryIdentityRoots,
-                  },
-            )
-          : Option.match(next.snapshot, {
-              onNone: () => null,
-              onSome: (snapshot) =>
-                item.sequence > snapshot.snapshotSequence
-                  ? applyShellStreamEvent(snapshot, item)
-                  : snapshot,
-            });
-      if (nextSnapshot === null) continue;
-      receivedSnapshot ||= item.kind === "snapshot";
-      // Judged against the snapshot this event lands on, not the batch's
-      // first one, so a later delta for a thread an earlier one re-added
-      // does not invalidate again.
-      const archiveInvalidationSequence =
-        item.kind !== "snapshot" &&
-        Option.isSome(next.snapshot) &&
-        item.sequence > next.snapshot.value.snapshotSequence &&
-        shellEventInvalidatesArchivedThreads(next.snapshot.value, item)
-          ? item.sequence
-          : next.archiveInvalidationSequence;
-      const removal =
-        item.kind === "thread.removed" &&
-        Option.exists(next.snapshot, (snapshot) => item.sequence > snapshot.snapshotSequence)
-          ? item
-          : null;
+      const authoritative = item.resolvedRepositoryIdentityRoots === undefined;
+      const nextSnapshot = mergeShellSnapshotProjects(
+        Option.getOrNull(next.snapshot),
+        item.snapshot,
+        item.resolvedRepositoryIdentityRoots === undefined
+          ? undefined
+          : { resolvedRepositoryIdentityRoots: item.resolvedRepositoryIdentityRoots },
+      );
+      receivedSnapshot = true;
       next = {
         snapshot: Option.some(nextSnapshot),
         status: waiting ? "synchronizing" : "live",
         error: Option.none(),
         generation: authoritative ? ++lastShellGeneration : next.generation,
-        removedAt: authoritative
-          ? EMPTY_REMOVALS
-          : removal === null
-            ? next.removedAt
-            : new Map(next.removedAt).set(removal.threadId, removal.sequence),
-        ...(archiveInvalidationSequence === undefined ? {} : { archiveInvalidationSequence }),
+        removedAt: authoritative ? EMPTY_REMOVALS : next.removedAt,
+        // Snapshots never reset it: the shelf only refetches when it moves.
+        ...(next.archiveInvalidationSequence === undefined
+          ? {}
+          : { archiveInvalidationSequence: next.archiveInvalidationSequence }),
       };
     }
-    /* oxlint-enable oxc/no-accumulating-spread */
+    flushDeltas();
     yield* Ref.set(awaitingCompletion, waiting);
     if (next === initial) return;
     if (pendingLinkIds !== undefined && Option.isSome(next.snapshot)) {

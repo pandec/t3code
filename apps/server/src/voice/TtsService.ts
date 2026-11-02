@@ -8,6 +8,7 @@ import type {
 } from "@t3tools/contracts";
 import { TtsRpcError, TTS_PROVIDER_LABELS } from "@t3tools/contracts";
 import * as Config from "effect/Config";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Base64 from "effect/encoding/Base64";
@@ -52,8 +53,9 @@ const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
 export interface TtsServiceShape {
-  /** Environment fallbacks for model and voice, read once at startup. */
+  /** Environment fallbacks for model and voice, refreshed after desktop shell discovery. */
   readonly environmentDefaults: TtsEnvironmentDefaults;
+  readonly refreshEnvironment: Effect.Effect<void>;
   /** Whether the named provider currently has a usable key. */
   readonly isConfigured: (provider: TtsProvider) => Effect.Effect<boolean>;
   /** Re-emits after a key is stored or removed, so config snapshots can refresh. */
@@ -129,13 +131,22 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const httpClient = yield* HttpClient.HttpClient;
     const secretStore = yield* ServerSecretStore.ServerSecretStore;
-    const environmentDefaults = yield* readTtsEnvironmentDefaults;
-    const elevenLabsKey = yield* Config.Redacted("ELEVENLABS_API_KEY").pipe(
-      Config.option,
-      Effect.map(Option.filter((key) => Redacted.value(key).trim().length > 0)),
-      Effect.orDie,
-    );
-    const configuredChanges = yield* PubSub.unbounded<void>();
+    const configProvider = yield* ConfigProvider.ConfigProvider;
+    const readEnvironment = Effect.all([
+      readTtsEnvironmentDefaults,
+      Config.Redacted("ELEVENLABS_API_KEY").pipe(
+        Config.option,
+        Effect.map(Option.filter((key) => Redacted.value(key).trim().length > 0)),
+        Effect.orDie,
+      ),
+    ]).pipe(Effect.provideService(ConfigProvider.ConfigProvider, configProvider));
+    let [environmentDefaults, elevenLabsKey] = yield* readEnvironment;
+    // Shell discovery can finish between a client's config read and stream subscription.
+    const configuredChanges = yield* PubSub.unbounded<void>({ replay: 1 });
+    const refreshEnvironment = Effect.gen(function* () {
+      [environmentDefaults, elevenLabsKey] = yield* readEnvironment;
+      yield* PubSub.publish(configuredChanges, undefined);
+    });
 
     const readOpenRouterKey: Effect.Effect<
       Option.Option<Redacted.Redacted<string>>,
@@ -325,7 +336,10 @@ export const layer = Layer.effect(
     });
 
     return TtsService.of({
-      environmentDefaults,
+      get environmentDefaults() {
+        return environmentDefaults;
+      },
+      refreshEnvironment,
       isConfigured,
       configuredChanges: Stream.fromPubSub(configuredChanges),
       status,

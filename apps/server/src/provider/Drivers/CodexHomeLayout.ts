@@ -50,15 +50,15 @@ export const resolveCodexHomeLayout = Effect.fn("resolveCodexHomeLayout")(functi
 ): Effect.fn.Return<CodexHomeLayout, never, Path.Path> {
   const path = yield* Path.Path;
   const home = yield* HostProcess.HomeDirectory;
-  const configuredHomePath = config.homePath.trim();
-  const environmentCodexHome = environment.CODEX_HOME?.trim() ?? "";
-  const environmentHome = environment.HOME?.trim() ?? "";
+  const configuredHomePath = config.homePath.trim() ? config.homePath : "";
+  const environmentCodexHome = environment.CODEX_HOME?.trim() ? environment.CODEX_HOME : "";
+  const environmentHome = environment.HOME?.trim() ? environment.HOME : "";
   const selectedHomePath =
     configuredHomePath ||
     environmentCodexHome ||
     (environmentHome ? path.join(environmentHome, ".codex") : path.join(home, ".codex"));
   const sharedHomePath = resolveHomePath(path, home, selectedHomePath);
-  const shadowHomePath = config.shadowHomePath.trim();
+  const shadowHomePath = config.shadowHomePath.trim() ? config.shadowHomePath : "";
   if (shadowHomePath.length === 0) {
     const relativeEnvironmentKey =
       configuredHomePath.length === 0 &&

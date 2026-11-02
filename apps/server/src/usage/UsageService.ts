@@ -46,7 +46,7 @@ import type {
   TranscriptUsageFormat,
   UsageRecord,
 } from "@t3tools/provider-core/server/usage";
-import { resolveModelAliases, UsageAggregator } from "./usageAggregation.ts";
+import { canonicalModelFilter, resolveModelAliases, UsageAggregator } from "./usageAggregation.ts";
 import { createOverrideRateTable, parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
   listTranscriptFiles,
@@ -996,6 +996,7 @@ export const make = Effect.gen(function* () {
       rates,
       priceOverrides: createOverrideRateTable(settings.usagePriceOverrides),
       modelAliases: resolveModelAliases(settings.usageModelAliases),
+      ...(input.modelFilter === undefined ? {} : { modelFilter: input.modelFilter }),
       // The aggregator matches winners by identity, so pick them among corrected records.
       dedupeWinners: selectDedupeWinners(
         allFiles.map((file) => ({ records: correctedBatch(file.records) })),
@@ -1122,6 +1123,7 @@ export const make = Effect.gen(function* () {
       sources,
       pricing: pricing(),
       scanDurationMs: Math.max(0, finishedAtMs - startedAtMs),
+      ...(input.modelFilter === undefined ? {} : { modelFilter: input.modelFilter }),
     } satisfies UsageSummary;
   });
 
@@ -1141,9 +1143,15 @@ export const make = Effect.gen(function* () {
       input.untilTime ?? null,
       settings,
       input.awaitRefresh === true,
+      input.modelFilter ?? null,
     ]);
 
-  const readSummary = Effect.fn("UsageService.readSummary")(function* (input: UsageSummaryInput) {
+  const readSummary = Effect.fn("UsageService.readSummary")(function* (
+    requested: UsageSummaryInput,
+  ) {
+    const { modelFilter: requestedFilter, ...unfiltered } = requested;
+    const modelFilter = canonicalModelFilter(requestedFilter);
+    const input = modelFilter === undefined ? unfiltered : { ...unfiltered, modelFilter };
     const settings = yield* readSettings;
     const key = scanKey(input, settings);
     const deferred = yield* Effect.uninterruptible(

@@ -67,7 +67,10 @@ import {
   waitForThreadShell,
 } from "../state/entities";
 import { useUiStateStore } from "../uiStateStore";
+import { useDiffPanelStore } from "../diffPanelStore";
+import { usePreviewMiniPlayerStore } from "../previewMiniPlayerStore";
 import { clearThreadPreviewState } from "../previewStateStore";
+import { useRightPanelStore } from "../rightPanelStore";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 import { resolveVisitTargetAfterPark } from "../threadVisitTargets";
@@ -338,6 +341,13 @@ const LIST_PLACEMENT_UNDO_KINDS = ["settle", "snooze", "pin"];
 
 function expireThreadUndos(target: ScopedThreadRef, kinds: readonly string[]) {
   for (const kind of kinds) ThreadUndo.invalidate(kind, scopedThreadKey(target));
+}
+
+function clearDeletedThreadPanelState(ref: ScopedThreadRef) {
+  clearThreadPreviewState(ref);
+  useRightPanelStore.getState().removeThread(ref);
+  useDiffPanelStore.getState().removeThread(ref);
+  usePreviewMiniPlayerStore.getState().removeThread(ref);
 }
 
 /** A No project thread that already has its own folder, on a server that can promote it. */
@@ -621,7 +631,7 @@ export function useThreadActions() {
         // Audio owned by a deleted thread must not keep playing with no
         // control anywhere.
         stopListeningForThread(target.environmentId, target.threadId);
-        clearThreadPreviewState(target);
+        clearDeletedThreadPanelState(target);
       }
       return result;
     }
@@ -748,7 +758,7 @@ export function useThreadActions() {
       threadRef,
     );
     clearTerminalUiState(threadRef);
-    clearThreadPreviewState(threadRef);
+    clearDeletedThreadPanelState(threadRef);
 
     if (shouldNavigateToFallback) {
       const fallbackThread = fallbackThreadId

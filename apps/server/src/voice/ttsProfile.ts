@@ -26,7 +26,7 @@ const DEFAULT_TTS_VOICE_BY_PROVIDER: Record<TtsProvider, string> = {
 };
 
 /**
- * Environment fallbacks, read once at layer build. `ELEVENLABS_TTS_*` are the
+ * Environment fallbacks. `ELEVENLABS_TTS_*` are the
  * pre-OpenRouter names and keep working; the OpenRouter pair mirrors them.
  */
 export interface TtsEnvironmentDefaults {

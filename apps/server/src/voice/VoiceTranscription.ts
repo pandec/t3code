@@ -5,6 +5,7 @@ import {
   type VoiceTranscriptionResult,
 } from "@t3tools/contracts";
 import * as Config from "effect/Config";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -33,6 +34,7 @@ export class VoiceTranscription extends Context.Service<
   VoiceTranscription,
   {
     readonly available: boolean;
+    readonly refreshEnvironment: Effect.Effect<void>;
     readonly transcribe: (
       request: VoiceTranscriptionRequest,
     ) => Effect.Effect<VoiceTranscriptionResult, VoiceTranscriptionError>;
@@ -104,18 +106,23 @@ export function buildElevenLabsTranscriptionFormData(options: {
 export const layer = Layer.effect(
   VoiceTranscription,
   Effect.gen(function* () {
-    const apiKey = yield* Config.Redacted("ELEVENLABS_API_KEY").pipe(Config.option);
-    const model = yield* Config.String("ELEVENLABS_STT_MODEL").pipe(
-      Config.withDefault("scribe_v2"),
-    );
-    const language = yield* Config.String("ELEVENLABS_STT_LANGUAGE").pipe(Config.option);
+    const configProvider = yield* ConfigProvider.ConfigProvider;
+    const readEnvironment = Effect.all({
+      apiKey: Config.Redacted("ELEVENLABS_API_KEY").pipe(Config.option),
+      model: Config.String("ELEVENLABS_STT_MODEL").pipe(Config.withDefault("scribe_v2")),
+      language: Config.String("ELEVENLABS_STT_LANGUAGE").pipe(Config.option),
+    }).pipe(Effect.provideService(ConfigProvider.ConfigProvider, configProvider));
+    let environment = yield* readEnvironment;
+    const refreshEnvironment = Effect.gen(function* () {
+      environment = yield* readEnvironment.pipe(Effect.orDie);
+    });
     const httpClient = yield* HttpClient.HttpClient;
-    const available = Option.isSome(apiKey) && Redacted.value(apiKey.value).trim().length > 0;
 
     const transcribe = Effect.fn("VoiceTranscription.transcribe")(function* (
       request: VoiceTranscriptionRequest,
     ) {
-      if (!available || Option.isNone(apiKey)) {
+      const { apiKey, model, language } = environment;
+      if (Option.isNone(apiKey) || Redacted.value(apiKey.value).trim().length === 0) {
         return yield* new VoiceTranscriptionError({ reason: "unavailable" });
       }
 
@@ -156,7 +163,13 @@ export const layer = Layer.effect(
     });
 
     return VoiceTranscription.of({
-      available,
+      get available() {
+        return (
+          Option.isSome(environment.apiKey) &&
+          Redacted.value(environment.apiKey.value).trim().length > 0
+        );
+      },
+      refreshEnvironment,
       transcribe,
     });
   }),

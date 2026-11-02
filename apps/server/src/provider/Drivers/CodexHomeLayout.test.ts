@@ -43,16 +43,15 @@ it.layer(NodeServices.layer)("CodexHomeLayout", (it) => {
     it.effect("uses the shared home for continuation and the shadow home for runtime", () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
-        const sharedHome = yield* makeTempDir("t3code-codex-shared-");
+        const sharedHome = `${yield* makeTempDir("t3code-codex-shared-")} `;
         const shadowRoot = yield* makeTempDir("t3code-codex-shadow-root-");
-        const shadowHome = path.join(shadowRoot, "shadow");
+        const shadowHome = path.join(shadowRoot, "shadow ");
 
-        const layout = yield* resolveCodexHomeLayout(
-          decodeCodexSettings({
-            homePath: sharedHome,
-            shadowHomePath: shadowHome,
-          }),
-        );
+        const layout = yield* resolveCodexHomeLayout({
+          ...decodeCodexSettings({}),
+          homePath: sharedHome,
+          shadowHomePath: shadowHome,
+        });
 
         expect(layout).toMatchObject({
           mode: "authOverlay",
@@ -65,7 +64,7 @@ it.layer(NodeServices.layer)("CodexHomeLayout", (it) => {
 
     it.effect("uses inherited absolute CODEX_HOME for import and continuation identity", () =>
       Effect.gen(function* () {
-        const homePath = yield* makeTempDir("t3code-codex-environment-home-");
+        const homePath = `${yield* makeTempDir("t3code-codex-environment-home-")} `;
         const layout = yield* resolveCodexHomeLayout(decodeCodexSettings({}), {
           CODEX_HOME: homePath,
           HOME: "/ignored",
@@ -83,10 +82,10 @@ it.layer(NodeServices.layer)("CodexHomeLayout", (it) => {
     it.effect("groups relative CODEX_HOME without advertising it as a static home", () =>
       Effect.gen(function* () {
         const layout = yield* resolveCodexHomeLayout(decodeCodexSettings({}), {
-          CODEX_HOME: ".codex-instance",
+          CODEX_HOME: ".codex-instance ",
         });
 
-        expect(layout.continuationKey).toBe("codex:relative-home:.codex-instance");
+        expect(layout.continuationKey).toBe("codex:relative-home:.codex-instance ");
         expect(layout.effectiveHomePath).toBeUndefined();
       }),
     );
@@ -94,9 +93,12 @@ it.layer(NodeServices.layer)("CodexHomeLayout", (it) => {
     it.effect("falls back to the instance HOME/.codex without CODEX_HOME", () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
-        const userHome = yield* makeTempDir("t3code-codex-user-home-");
+        const userHome = `${yield* makeTempDir("t3code-codex-user-home-")} `;
         const homePath = path.join(userHome, ".codex");
-        const layout = yield* resolveCodexHomeLayout(decodeCodexSettings({}), { HOME: userHome });
+        const layout = yield* resolveCodexHomeLayout(decodeCodexSettings({ homePath: " " }), {
+          HOME: userHome,
+          CODEX_HOME: " ",
+        });
 
         expect(layout).toMatchObject({
           mode: "direct",
@@ -125,9 +127,9 @@ it.layer(NodeServices.layer)("CodexHomeLayout", (it) => {
         const path = yield* Path.Path;
         const sharedHome = yield* makeTempDir("t3code-codex-environment-shared-");
         const shadowRoot = yield* makeTempDir("t3code-codex-environment-shadow-");
-        const shadowHome = path.join(shadowRoot, "shadow");
+        const shadowHome = path.join(shadowRoot, "shadow ");
         const layout = yield* resolveCodexHomeLayout(
-          decodeCodexSettings({ shadowHomePath: shadowHome }),
+          { ...decodeCodexSettings({}), shadowHomePath: shadowHome },
           { CODEX_HOME: sharedHome, HOME: "/ignored" },
         );
 

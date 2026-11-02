@@ -58,7 +58,7 @@ import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewG
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as DelegatedTaskAnalytics from "./telemetry/DelegatedTaskAnalytics.ts";
-import * as ProviderEventIngestor from "./orchestration-v2/ProviderEventIngestor.ts";
+import * as ProviderUsageAnalytics from "./telemetry/ProviderUsageAnalytics.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
 import * as ResetCreditCoordinator from "./provider/resetCreditCoordinator.ts";
 import * as EventNdjsonLogger from "./provider/EventNdjsonLogger.ts";
@@ -105,6 +105,8 @@ import * as ServerOwnership from "./serverOwnership.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import * as ServerSettings from "./serverSettings.ts";
+import * as ManagedLimits from "./policy/managedLimits.ts";
+import * as ManagedPolicy from "./policy/ManagedPolicy.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as ProjectRepositoryIdentityStore from "./project/ProjectRepositoryIdentityStore.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
@@ -163,6 +165,7 @@ import {
   RELAY_URL_SECRET,
 } from "./cloud/config.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as EnvironmentAuthPolicy from "./auth/EnvironmentAuthPolicy.ts";
 import * as CloudHttp from "./cloud/http.ts";
 import * as GuestHttp from "./guest/http.ts";
 import * as CloudLink from "./cloud/CloudLink.ts";
@@ -231,7 +234,12 @@ import * as OrchestratorV2 from "./orchestration-v2/Orchestrator.ts";
 import { messageArtifactsHttpApiLayer } from "./messageArtifacts/http.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
-import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
+import {
+  disableTailscaleServe,
+  ensureTailscaleServe,
+  readTailscaleServeRoutesTo,
+  readTailscaleStatus,
+} from "@t3tools/tailscale";
 import * as ServerActivation from "./serverActivation.ts";
 
 // Escaped MCP handoff provenance can exceed find-my-way's 100-character segment default.
@@ -291,13 +299,17 @@ const layerPtyAdapter = NodePtyAdapter.layer;
 
 const layerServerSettings = ServerSettings.layer.pipe(
   Layer.provide(ServerSecretStore.layer),
+  Layer.provideMerge(ManagedPolicy.layer),
   Layer.provideMerge(SqlitePersistence.layerConfig),
 );
 
 const layerNativeTelemetry = NativeTelemetryClient.layer.pipe(
   Layer.provide(ResourceMonitorBinary.layer),
 );
+const layerTts = TtsService.layer.pipe(Layer.provide(ServerSecretStore.layer));
 const layerDesktopTelemetryReceiver = DesktopTelemetryReceiver.layer.pipe(
+  Layer.provide(layerTts),
+  Layer.provide(VoiceTranscription.layer),
   Layer.provideMerge(layerServerSettings),
 );
 
@@ -345,13 +357,42 @@ const layerResourceDiagnostics = Layer.mergeAll(
 const layerRelayClient = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
-    return RelayClient.layerCloudflared({ baseDir: config.baseDir });
+    const policy = yield* ManagedPolicy.ManagedPolicy;
+    const layerCloudflared = RelayClient.layerCloudflared({ baseDir: config.baseDir });
+    if (ManagedLimits.allowsConnect(policy)) return layerCloudflared;
+    // The connector only carries T3 Connect, so a policy without Connect never installs one.
+    const refused = Effect.fn("RelayClient.installRefusedByPolicy")(function* () {
+      return yield* new RelayClient.RelayClientInstallError({
+        reason: "managed_by_policy",
+        message: ManagedLimits.refuseConnect(policy).message,
+      });
+    });
+    return Layer.effect(
+      RelayClient.RelayClient,
+      Effect.gen(function* () {
+        const relayClient = yield* RelayClient.RelayClient;
+        return RelayClient.RelayClient.of({
+          ...relayClient,
+          install: refused(),
+          installWithProgress: refused,
+        });
+      }),
+    ).pipe(Layer.provide(layerCloudflared));
   }),
-);
+).pipe(Layer.provide(ManagedPolicy.layer));
 
 const layerHttpServer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
+    // Before binding: a host the policy does not allow must never listen, not even briefly.
+    const policy = yield* ManagedPolicy.ManagedPolicy;
+    const bindHost = yield* ManagedLimits.checkServerReachability(policy, {
+      authPolicy: EnvironmentAuthPolicy.resolveServerAuthPolicy(config),
+      host: config.host,
+      tailscaleServeEnabled: config.tailscaleServeEnabled,
+      privateNetworkOnly: config.privateNetworkOnly,
+    });
+    yield* ManagedLimits.closeTailscaleServeTo(policy, { host: bindHost, port: config.port });
     return NodeHttpServer.layer(
       () => {
         const server = rejectRequestsUntilServing(
@@ -367,7 +408,7 @@ const layerHttpServer = Layer.unwrap(
         return server;
       },
       {
-        host: config.host ?? "127.0.0.1",
+        host: bindHost,
         port: config.port,
         gracefulShutdownTimeout: HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS,
         // Context takeover stays enabled (ws default) so the compression
@@ -378,7 +419,7 @@ const layerHttpServer = Layer.unwrap(
       },
     );
   }),
-);
+).pipe(Layer.provide(ManagedPolicy.layer));
 
 const layerPlatformServices = DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer));
 
@@ -571,7 +612,7 @@ const layerScheduledTaskWebhookOrigin = Layer.effect(
 
 const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   Layer.provide(layerScheduledTaskWebhookOrigin),
-  Layer.provide(ProviderEventIngestor.layerAnalytics),
+  Layer.provide(ProviderUsageAnalytics.layer),
   Layer.provide(layerCheckpointStore),
   Layer.provide(layerGitWorkflow),
   Layer.provide(
@@ -738,7 +779,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   // state stream, so every client sees the same pending jobs.
   Layer.provideMerge(MessageSpeech.layer.pipe(Layer.provide(MessageSpeechScript.layer))),
   // Share the speech client across listening, voice replies, and settings RPCs.
-  Layer.provideMerge(TtsService.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+  Layer.provideMerge(layerTts),
   Layer.provideMerge(SecretResolver.layer),
   Layer.provideMerge(layerServerSettings),
   Layer.provideMerge(layerSourceControlProviderRegistry),
@@ -818,7 +859,8 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   Layer.provideMerge(layerResourceDiagnostics),
   Layer.provideMerge(TraceDiagnostics.layer),
   Layer.provideMerge(TriageService.layer.pipe(Layer.provide(GitVcsDriver.layer))),
-  Layer.provideMerge(AnalyticsService.layer),
+  // Layers memoize by reference, so this is the same policy the settings layer reads.
+  Layer.provideMerge(AnalyticsService.layer.pipe(Layer.provide(ManagedPolicy.layer))),
   Layer.provideMerge(ExternalLauncher.layer),
   Layer.provideMerge(RemoteOpenTargets.layer),
   Layer.provideMerge(DirectEndpoints.layer),
@@ -935,6 +977,7 @@ const layerMakeServer = Layer.unwrap(
           config,
           port: address.port,
           serviceManaged: launcher.managed,
+          managedPolicy: yield* ManagedPolicy.loadedPolicy(yield* ManagedPolicy.ManagedPolicy),
         });
         yield* ownership
           .publish(state)
@@ -958,12 +1001,17 @@ const layerMakeServer = Layer.unwrap(
               }
 
               const localPort = address.port;
+              const localHost = loopbackUrlHostForAddress(address);
               return yield* ensureTailscaleServe({
                 localPort,
                 servePort: config.tailscaleServePort,
-                localHost: loopbackUrlHostForAddress(address),
+                localHost,
               }).pipe(
-                Effect.as({ localPort, servePort: config.tailscaleServePort }),
+                Effect.as({
+                  localPort,
+                  localHost: localHost.replace(/^\[|\]$/gu, ""),
+                  servePort: config.tailscaleServePort,
+                }),
                 Effect.tap(() =>
                   Effect.logInfo("Tailscale Serve configured", {
                     localPort,
@@ -981,11 +1029,44 @@ const layerMakeServer = Layer.unwrap(
             }),
             (configured) =>
               configured
-                ? disableTailscaleServe({ servePort: configured.servePort }).pipe(
-                    Effect.tap(() =>
-                      Effect.logInfo("Tailscale Serve disabled", {
-                        servePort: configured.servePort,
+                ? Effect.all(
+                    [
+                      readTailscaleServeRoutesTo({
+                        host: configured.localHost,
+                        port: configured.localPort,
                       }),
+                      readTailscaleStatus,
+                    ],
+                    { concurrency: 2 },
+                  ).pipe(
+                    // Another service may hold the root route by now, or it may sit under a
+                    // former name, where `off` would act on the current one; only ours goes.
+                    Effect.map(([routes, status]) =>
+                      routes.some(
+                        (route) =>
+                          route.servePort === configured.servePort &&
+                          route.mount === "/" &&
+                          route.owner === undefined &&
+                          route.ambiguous === undefined &&
+                          route.host?.toLowerCase() === status.magicDnsName?.toLowerCase(),
+                      ),
+                    ),
+                    Effect.orElseSucceed(() => false),
+                    Effect.flatMap((ours) =>
+                      ours
+                        ? disableTailscaleServe({ servePort: configured.servePort }).pipe(
+                            Effect.tap(() =>
+                              Effect.logInfo("Tailscale Serve disabled", {
+                                servePort: configured.servePort,
+                              }),
+                            ),
+                          )
+                        : Effect.logInfo(
+                            "Tailscale Serve left on; its root route is not known to be ours",
+                            {
+                              servePort: configured.servePort,
+                            },
+                          ),
                     ),
                     Effect.catch((cause) =>
                       Effect.logWarning("Failed to disable Tailscale Serve", {
@@ -1001,6 +1082,11 @@ const layerMakeServer = Layer.unwrap(
     const layerCloudDesiredLinkReconcile = Layer.effectDiscard(
       Effect.gen(function* () {
         const cloudLink = yield* CloudLink.CloudLink;
+        // CloudLink unlinks on startup when the policy turns Connect off; nothing to restore.
+        if (!ManagedLimits.allowsConnect(yield* ManagedPolicy.ManagedPolicy)) {
+          yield* Deferred.succeed(cloudLinkParked, undefined).pipe(Effect.orDie);
+          return;
+        }
         const releaseManagedTunnel = cloudLink.releaseManagedTunnelOnShutdown().pipe(
           Effect.timeout("10 seconds"),
           Effect.tap((released) =>
@@ -1219,7 +1305,9 @@ const layerMakeServer = Layer.unwrap(
         ),
       ),
       Layer.provide(layerActivation),
-      Layer.provideMerge(RelayTracing.layerServerRelayBroker),
+      Layer.provideMerge(
+        RelayTracing.layerServerRelayBroker.pipe(Layer.provide(ManagedPolicy.layer)),
+      ),
       Layer.provideMerge(layerHttpServer),
       Layer.provide(layerApplicationObservability),
       Layer.provideMerge(FetchHttpClient.layer),

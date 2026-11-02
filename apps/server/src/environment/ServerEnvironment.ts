@@ -287,6 +287,7 @@ export const make = Effect.gen(function* () {
       projectOrganization: true,
       ignoredFileListing: true,
       triage: true,
+      oneTimeSchedules: true,
       npmReleaseLookup: true,
       ...(advertisedServerSelfUpdate === null
         ? {}
