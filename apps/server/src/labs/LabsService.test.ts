@@ -438,7 +438,7 @@ describe("LabsService", () => {
             assert.deepEqual(continued.args.slice(-2), ["--branch", "feature/x"]);
             assert.include(yield* launch({ threadId: other, kind: "full" }), {
               reason: "not_found",
-              detail: "No full lab is free.",
+              detail: "No full lab is free. Free labs: lite sp-lab-7.",
             });
 
             // A free lab taken between the pick and the acquire is skipped for the next one;
@@ -455,6 +455,10 @@ describe("LabsService", () => {
             yield* fake.setLab("sp-lab-7", (lab) => ({ ...lab, lease: null }));
             assert.include(yield* launch({ threadId: third, kind: "lite" }), {
               labId: "sp-lab-8",
+            });
+            assert.include(yield* launch({ kind: "lite" }), {
+              reason: "not_found",
+              detail: "No lite lab is free. Free labs: none.",
             });
           }),
         );

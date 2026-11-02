@@ -39,6 +39,8 @@ interface Fixture {
     worktreePath: string | null;
     worktreeSwitch?: { status: "pending"; targetPath: string };
     archived?: boolean;
+    title?: string;
+    status?: string;
   }>;
   /** False once a message or unarchive reopened the thread. */
   archived: boolean;
@@ -80,7 +82,12 @@ const TestLayer = archiveWorktreeRemovalLayer.pipe(
           const archive = options?.location === "archive";
           const rows = fixture.otherThreads
             .filter((thread) => (thread.archived === true) === archive)
-            .map((thread) => ({ ...thread, deletedAt: null }));
+            .map((thread) => ({
+              title: "Test thread",
+              status: "idle",
+              ...thread,
+              deletedAt: null,
+            }));
           return {
             threads: archive ? [] : rows,
             archivedThreads: archive ? rows : [],
@@ -199,9 +206,25 @@ it.layer(TestLayer)("archive worktree removal", (it) => {
     Effect.gen(function* () {
       const removal = yield* ArchiveWorktreeRemoval;
       const { repository, worktreePath } = yield* setup("feature/shared");
-      fixture.otherThreads = [{ id: ThreadId.make("other-thread"), projectId, worktreePath }];
-      assert.equal(yield* removal.blocker(threadId), WORKTREE_KEPT_DETAIL.shared);
-      assert.equal(yield* removal.remove({ threadId, worktreePath }), WORKTREE_KEPT_DETAIL.shared);
+      fixture.otherThreads = [
+        {
+          id: ThreadId.make("other-thread"),
+          projectId,
+          worktreePath,
+          title: "Reviewer",
+          status: "completed",
+        },
+        {
+          id: ThreadId.make("running-thread"),
+          projectId,
+          worktreePath,
+          title: "Worker",
+          status: "running",
+        },
+      ];
+      const shared = `${WORKTREE_KEPT_DETAIL.shared} other-thread ("Reviewer", completed); running-thread ("Worker", running).`;
+      assert.equal(yield* removal.blocker(threadId), shared);
+      assert.equal(yield* removal.remove({ threadId, worktreePath }), shared);
 
       fixture.otherThreads = [];
       fixture.projects.push({ id: ProjectId.make("nested-project"), workspaceRoot: worktreePath });
@@ -240,10 +263,13 @@ it.layer(TestLayer)("archive worktree removal", (it) => {
           worktreeSwitch: { status: "pending", targetPath: alias },
         },
       ];
-      assert.equal(yield* removal.blocker(threadId), WORKTREE_KEPT_DETAIL.pendingMove);
+      assert.equal(
+        yield* removal.blocker(threadId),
+        `${WORKTREE_KEPT_DETAIL.pendingMove} moving-thread ("Test thread", idle).`,
+      );
       assert.equal(
         yield* removal.remove({ threadId, worktreePath }),
-        WORKTREE_KEPT_DETAIL.pendingMove,
+        `${WORKTREE_KEPT_DETAIL.pendingMove} moving-thread ("Test thread", idle).`,
       );
       assert.isTrue(yield* fs.exists(worktreePath));
     }).pipe(Effect.scoped),

@@ -27,3 +27,29 @@ it("refuses a t3_thread_update whose fields do not fit its action", () => {
     true,
   );
 });
+
+const parseExample = Schema.decodeSync(Schema.fromJsonString(Schema.Unknown));
+const exampleTools = [
+  {
+    tool: OrchestratorToolkit.tools.delegate_task,
+    decode: Schema.decodeUnknownExit(OrchestratorToolkit.tools.delegate_task.parametersSchema),
+  },
+  {
+    tool: OrchestratorToolkit.tools.t3_background_wait,
+    decode: Schema.decodeUnknownExit(OrchestratorToolkit.tools.t3_background_wait.parametersSchema),
+  },
+];
+
+it("publishes schema-valid delegation and background-wait examples", () => {
+  for (const { tool, decode } of exampleTools) {
+    const example = tool.description?.match(/Example: `([^`]+)`/u)?.[1];
+    expect(example).toBeDefined();
+    const args = parseExample(example!);
+    expect(decode(args)._tag).toBe("Success");
+    if (tool.name === "delegate_task") {
+      expect(args).toMatchObject({ target: { options: { reasoningEffort: "high" } } });
+    } else {
+      expect(args).toMatchObject({ taskIds: ["task-123"] });
+    }
+  }
+});

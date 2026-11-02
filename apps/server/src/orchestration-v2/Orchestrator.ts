@@ -13620,11 +13620,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ?.pendingBackgroundTasks ?? [];
 
       if (command.type === "thread.archive.schedule") {
+        if (
+          command.onlyIfIdle === true &&
+          (yield* restartContinuationPending(effectOutbox, runs).pipe(mapDispatchError(command)))
+        ) {
+          return yield* reject("A restart continuation is pending.");
+        }
         const plan = planArchiveSchedule({
           thread,
           runs,
           pendingBackgroundTasks,
           afterTurn: command.afterTurn,
+          ...(command.onlyIfIdle === undefined ? {} : { onlyIfIdle: command.onlyIfIdle }),
           ...(command.removeWorktree === undefined
             ? {}
             : { removeWorktree: command.removeWorktree }),

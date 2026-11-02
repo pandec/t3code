@@ -223,6 +223,7 @@ export function planArchiveSchedule(input: {
     Pick<OrchestrationV2PendingBackgroundTask, "kind" | "awaited">
   >;
   readonly afterTurn: boolean;
+  readonly onlyIfIdle?: boolean;
   readonly removeWorktree?: boolean;
   readonly requestId: CommandId;
   readonly now: DateTime.Utc;
@@ -247,6 +248,14 @@ export function planArchiveSchedule(input: {
   const run = activeRun(input.runs);
   if (run !== null && !input.afterTurn) {
     return { type: "reject", detail: "The thread is running. Archive it after the turn instead." };
+  }
+  if (
+    input.onlyIfIdle === true &&
+    (run !== null ||
+      input.pendingBackgroundTasks.length > 0 ||
+      undeliveredCompletionPending(input.runs))
+  ) {
+    return { type: "reject", detail: "The thread still has active or pending background work." };
   }
   const request: OrchestrationV2ThreadArchiveRequest = {
     requestId: input.requestId,

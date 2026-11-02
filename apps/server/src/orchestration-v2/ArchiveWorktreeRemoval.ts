@@ -11,6 +11,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -41,6 +42,7 @@ export const WORKTREE_KEPT_DETAIL = {
 } as const;
 
 /** How often and how long removal waits for the archive's queued session and terminal stops. */
+const encodeTitle = Schema.encodeEffect(Schema.fromJsonString(Schema.String));
 const STOP_POLL_INTERVAL = "250 millis";
 const STOP_WAIT_TIMEOUT = "30 seconds";
 
@@ -96,20 +98,28 @@ const make = Effect.gen(function* () {
       }
     }
     const active = yield* threads.getShellSnapshot({ location: "active" });
+    const sharing: Array<string> = [];
+    const moving: Array<string> = [];
     for (const thread of active.threads) {
       if (thread.id === threadId || thread.deletedAt !== null) continue;
       const cwd =
         thread.worktreePath ??
         projectShells.find((project) => project.id === thread.projectId)?.workspaceRoot;
       if (cwd !== undefined && contains(root, yield* canonicalWorkspacePath(cwd))) {
-        return WORKTREE_KEPT_DETAIL.shared;
+        sharing.push(`${thread.id} (${yield* encodeTitle(thread.title)}, ${thread.status})`);
       }
       if (
         thread.worktreeSwitch?.status === "pending" &&
         contains(root, yield* canonicalWorkspacePath(thread.worktreeSwitch.targetPath))
       ) {
-        return WORKTREE_KEPT_DETAIL.pendingMove;
+        moving.push(`${thread.id} (${yield* encodeTitle(thread.title)}, ${thread.status})`);
       }
+    }
+    if (sharing.length > 0 || moving.length > 0) {
+      return [
+        ...(sharing.length > 0 ? [`${WORKTREE_KEPT_DETAIL.shared} ${sharing.join("; ")}.`] : []),
+        ...(moving.length > 0 ? [`${WORKTREE_KEPT_DETAIL.pendingMove} ${moving.join("; ")}.`] : []),
+      ].join(" ");
     }
     // Read the live checkout: thread metadata does not track a detached HEAD.
     const status = yield* git.statusDetailsLocal(root, { includeDivergence: false });
