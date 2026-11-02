@@ -7,6 +7,8 @@ description: Synchronize this T3 Code private fork by fast-forwarding mirror-onl
 
 Synchronize this private fork while making deliberate choices about fork behavior that upstream overlaps or supersedes. Explicit invocation authorizes fetching both remotes, updating and pushing `main`, merging into and pushing `dev`, and running required checks. Read the current `AGENTS.md` first.
 
+**Codex only:** before presenting semantic decisions or the final sync report, read [CODEX-PRESENTATION.md](CODEX-PRESENTATION.md). This presentation supplement does not apply to Claude Code; the shared workflow below is unchanged.
+
 ## Fixed topology
 
 - `origin`: `pandec/t3code`, the writable private fork
