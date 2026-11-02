@@ -3,7 +3,7 @@
  * no other unarchived thread uses. Never forced (Git also keeps locked worktrees); the branch is
  * always kept. Callers get the reason a worktree was kept instead of an error.
  */
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId, OrchestrationV2ThreadShell } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -11,7 +11,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
-import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -20,7 +19,7 @@ import {
   reserveWorkspace,
   withWorkspaceLease,
 } from "../workspace/workspaceLease.ts";
-import { worktreeRemovalRequest } from "./DeferredArchive.ts";
+import { formatArchiveThreadDetails, worktreeRemovalRequest } from "./DeferredArchive.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
@@ -42,7 +41,6 @@ export const WORKTREE_KEPT_DETAIL = {
 } as const;
 
 /** How often and how long removal waits for the archive's queued session and terminal stops. */
-const encodeTitle = Schema.encodeEffect(Schema.fromJsonString(Schema.String));
 const STOP_POLL_INTERVAL = "250 millis";
 const STOP_WAIT_TIMEOUT = "30 seconds";
 
@@ -98,27 +96,31 @@ const make = Effect.gen(function* () {
       }
     }
     const active = yield* threads.getShellSnapshot({ location: "active" });
-    const sharing: Array<string> = [];
-    const moving: Array<string> = [];
+    const sharing: Array<OrchestrationV2ThreadShell> = [];
+    const moving: Array<OrchestrationV2ThreadShell> = [];
     for (const thread of active.threads) {
       if (thread.id === threadId || thread.deletedAt !== null) continue;
       const cwd =
         thread.worktreePath ??
         projectShells.find((project) => project.id === thread.projectId)?.workspaceRoot;
       if (cwd !== undefined && contains(root, yield* canonicalWorkspacePath(cwd))) {
-        sharing.push(`${thread.id} (${yield* encodeTitle(thread.title)}, ${thread.status})`);
+        sharing.push(thread);
       }
       if (
         thread.worktreeSwitch?.status === "pending" &&
         contains(root, yield* canonicalWorkspacePath(thread.worktreeSwitch.targetPath))
       ) {
-        moving.push(`${thread.id} (${yield* encodeTitle(thread.title)}, ${thread.status})`);
+        moving.push(thread);
       }
     }
     if (sharing.length > 0 || moving.length > 0) {
       return [
-        ...(sharing.length > 0 ? [`${WORKTREE_KEPT_DETAIL.shared} ${sharing.join("; ")}.`] : []),
-        ...(moving.length > 0 ? [`${WORKTREE_KEPT_DETAIL.pendingMove} ${moving.join("; ")}.`] : []),
+        ...(sharing.length > 0
+          ? [`${WORKTREE_KEPT_DETAIL.shared} ${formatArchiveThreadDetails(sharing)}.`]
+          : []),
+        ...(moving.length > 0
+          ? [`${WORKTREE_KEPT_DETAIL.pendingMove} ${formatArchiveThreadDetails(moving)}.`]
+          : []),
       ].join(" ");
     }
     // Read the live checkout: thread metadata does not track a detached HEAD.

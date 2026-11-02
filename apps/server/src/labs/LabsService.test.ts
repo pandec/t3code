@@ -90,6 +90,7 @@ const makeFakeCli = Effect.gen(function* () {
   const statusFails = yield* Ref.make(false);
   /** A lab someone else reserves just before this acquire reaches it. */
   const stolenOnAcquire = yield* Ref.make<string | null>(null);
+  const releaseAfterStatus = yield* Ref.make<string | null>(null);
   /** A reservation someone else takes while `down` runs. */
   const leaseAfterDown = yield* Ref.make<LabLease | null | undefined>(undefined);
   const setLab = (id: string, update: (lab: FakeLab) => FakeLab) =>
@@ -104,6 +105,10 @@ const makeFakeCli = Effect.gen(function* () {
             return yield* new LabsError({ reason: "cli_failed", detail: "status broke" });
           }
           const all = yield* Ref.get(labs);
+          const release = yield* Ref.get(releaseAfterStatus);
+          if (release !== null && all[release]?.lease?.threadId === "someone-else") {
+            yield* setLab(release, (lab) => ({ ...lab, lease: null }));
+          }
           return {
             checkedAt: "2026-10-14T00:00:00.000Z",
             environments: [
@@ -158,6 +163,7 @@ const makeFakeCli = Effect.gen(function* () {
     statusFails,
     leaseAfterDown,
     stolenOnAcquire,
+    releaseAfterStatus,
     labs,
     setLab,
     layer: Layer.succeed(LabsCli.LabsCli, LabsCli.LabsCli.of({ run })),
@@ -459,6 +465,12 @@ describe("LabsService", () => {
             assert.include(yield* launch({ kind: "lite" }), {
               reason: "not_found",
               detail: "No lite lab is free. Free labs: none.",
+            });
+            yield* fake.setLab("sp-lab-7", (lab) => ({ ...lab, lease: null }));
+            yield* Ref.set(fake.releaseAfterStatus, "sp-lab-7");
+            assert.include(yield* launch({ kind: "lite" }), {
+              reason: "not_found",
+              detail: "No lite lab could be reserved. Free labs: lite sp-lab-7.",
             });
           }),
         );

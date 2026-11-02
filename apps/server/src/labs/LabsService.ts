@@ -660,13 +660,11 @@ const make = Effect.gen(function* () {
       if (labId === undefined) {
         const free = state.environments.filter((lab) => {
           const labKind = resolveLabKind(lab);
-          return (
-            !taken.has(lab.id) && labKind !== null && findFreeLab([lab], labKind) !== undefined
-          );
+          return labKind !== null && findFreeLab([lab], labKind) !== undefined;
         });
         return yield* new LabsError({
           reason: "not_found",
-          detail: `No ${kind} lab is free. Free labs: ${free.length === 0 ? "none" : free.map((lab) => `${resolveLabKind(lab)} ${lab.id}`).join(", ")}.`,
+          detail: `No ${kind} lab ${taken.size === 0 ? "is free" : "could be reserved"}. Free labs: ${free.length === 0 ? "none" : free.map((lab) => `${resolveLabKind(lab)} ${lab.id}`).join(", ")}.`,
         });
       }
       const prepared = yield* prepareThread({

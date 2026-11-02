@@ -222,9 +222,22 @@ it.layer(TestLayer)("archive worktree removal", (it) => {
           status: "running",
         },
       ];
-      const shared = `${WORKTREE_KEPT_DETAIL.shared} other-thread ("Reviewer", completed); running-thread ("Worker", running).`;
+      const shared = `${WORKTREE_KEPT_DETAIL.shared} 2 threads: other-thread ("Reviewer", completed); running-thread ("Worker", running).`;
       assert.equal(yield* removal.blocker(threadId), shared);
       assert.equal(yield* removal.remove({ threadId, worktreePath }), shared);
+
+      fixture.otherThreads = Array.from({ length: 12 }, (_, index) => ({
+        id: ThreadId.make(`blocker-${index}`),
+        projectId,
+        worktreePath,
+        title: "x".repeat(5000),
+        status: "running",
+      }));
+      const crowded = yield* removal.blocker(threadId);
+      assert.isBelow(crowded!.length, 2000);
+      assert.include(crowded!, "12 threads");
+      assert.include(crowded!, "and 2 more");
+      assert.notInclude(crowded!, "blocker-10");
 
       fixture.otherThreads = [];
       fixture.projects.push({ id: ProjectId.make("nested-project"), workspaceRoot: worktreePath });
@@ -265,11 +278,11 @@ it.layer(TestLayer)("archive worktree removal", (it) => {
       ];
       assert.equal(
         yield* removal.blocker(threadId),
-        `${WORKTREE_KEPT_DETAIL.pendingMove} moving-thread ("Test thread", idle).`,
+        `${WORKTREE_KEPT_DETAIL.pendingMove} 1 thread: moving-thread ("Test thread", idle).`,
       );
       assert.equal(
         yield* removal.remove({ threadId, worktreePath }),
-        `${WORKTREE_KEPT_DETAIL.pendingMove} moving-thread ("Test thread", idle).`,
+        `${WORKTREE_KEPT_DETAIL.pendingMove} 1 thread: moving-thread ("Test thread", idle).`,
       );
       assert.isTrue(yield* fs.exists(worktreePath));
     }).pipe(Effect.scoped),

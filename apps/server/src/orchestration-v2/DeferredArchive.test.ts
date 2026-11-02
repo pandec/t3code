@@ -1009,11 +1009,14 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
             includeDescendants: true,
             removeWorktree: true,
             authorizeDescendant: (thread) =>
-              thread.id === denied ? Effect.fail({ message: "Outside caller modes" }) : Effect.void,
+              thread.id === denied
+                ? Effect.fail({ message: `Outside caller modes${"x".repeat(5000)}` })
+                : Effect.void,
           })
           .pipe(Effect.flip);
-        assert.include(refused.detail, `${running} (tree-running, starting)`);
-        assert.include(refused.detail, `${denied} (tree-denied, idle): Outside caller modes`);
+        assert.include(refused.detail, `${running} ("tree-running", starting)`);
+        assert.include(refused.detail, `${denied} ("tree-denied", idle): Outside caller modes`);
+        assert.isBelow(refused.detail.length, 2000);
         assert.isNull((yield* scheduler.status(running)).request);
       }),
   );

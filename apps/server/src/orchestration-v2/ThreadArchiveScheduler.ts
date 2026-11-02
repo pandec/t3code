@@ -29,6 +29,7 @@ import { forkParked } from "../serverActivation.ts";
 import * as ArchiveWorktreeRemoval from "./ArchiveWorktreeRemoval.ts";
 import {
   evaluateDeferredArchive,
+  formatArchiveThreadDetails,
   isThreadPayloadEvent,
   pendingArchiveRequest,
   restartContinuationPending,
@@ -402,7 +403,7 @@ export const make = Effect.gen(function* () {
           return new ThreadArchiveSchedulerError({
             operation: error.operation,
             threadId: error.threadId,
-            detail: `${error.detail} Archived ${archived} descendants. Skipped descendants: ${skipped.length === 0 ? "none" : skipped.map((entry) => `${entry.threadId} (${entry.title}, ${entry.state}): ${entry.detail}`).join("; ")}.`,
+            detail: `${error.detail} Archived ${archived} descendants. Skipped descendants: ${formatArchiveThreadDetails(skipped.map((entry) => ({ id: entry.threadId, title: entry.title, status: entry.state, detail: entry.detail })))}.`,
           });
         }),
       );
