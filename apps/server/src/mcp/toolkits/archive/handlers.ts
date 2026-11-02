@@ -30,9 +30,12 @@ const resolveTarget = (threadId: ThreadId | undefined) =>
     ? readOwnedCaller().pipe(Effect.map((thread) => thread.id))
     : readThread(threadId).pipe(Effect.map((context) => context.projection.thread.id));
 
-/** Its own thread needs only ownership; another thread must be writable within the caller's modes. */
-const archiveAccess = (input: { readonly threadId?: ThreadId | undefined }) =>
-  input.threadId === undefined
+/** Only self-archive can outlive the caller's run; changing descendants needs a live caller. */
+const archiveAccess = (input: {
+  readonly threadId?: ThreadId | undefined;
+  readonly includeDescendants?: boolean | undefined;
+}) =>
+  input.threadId === undefined && input.includeDescendants !== true
     ? ({ _tag: "actsOnOwnThread" } as const)
     : ({ _tag: "writesThreads", threads: [input.threadId] } as const);
 

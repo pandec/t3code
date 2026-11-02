@@ -951,6 +951,13 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
         const finished = yield* child("tree-finished", root, "subagent");
         const bridge = yield* child("tree-bridge", root, "fork");
         const nested = yield* child("tree-nested", bridge, "subagent");
+        const deletedBridge = yield* child("tree-deleted", root, "fork");
+        const surviving = yield* child("tree-surviving", deletedBridge, "fork");
+        yield* orchestrator.dispatch({
+          type: "thread.delete",
+          commandId: CommandId.make("tree-delete-bridge"),
+          threadId: deletedBridge,
+        });
         const running = yield* child("tree-running", root, "fork");
         const denied = yield* child("tree-denied", root, "fork");
         const racing = yield* child("tree-racing", root, "fork");
@@ -972,7 +979,7 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
                 : Effect.void,
         });
         assert.isNotNull(result.archivedAt);
-        for (const id of [finished, nested])
+        for (const id of [finished, nested, surviving])
           assert.isNotNull((yield* scheduler.status(id)).archivedAt);
         for (const id of [running, denied, racing, unrelated]) {
           const status = yield* scheduler.status(id);
@@ -984,6 +991,7 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
           [
             { threadId: finished, outcome: "archived" },
             { threadId: nested, outcome: "archived" },
+            { threadId: surviving, outcome: "archived" },
             { threadId: running, outcome: "skipped" },
             { threadId: denied, outcome: "skipped" },
             { threadId: racing, outcome: "skipped" },

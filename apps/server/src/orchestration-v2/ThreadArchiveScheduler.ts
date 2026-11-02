@@ -269,7 +269,18 @@ export const make = Effect.gen(function* () {
   const archiveDescendants = Effect.fn("ThreadArchiveScheduler.archiveDescendants")(function* (
     input: Parameters<ThreadArchiveScheduler["Service"]["schedule"]>[0],
   ) {
-    const snapshot = yield* threads.getShellSnapshot({ familyOf: input.threadId }).pipe(
+    // Deleted parents retain lineage, but shell snapshots intentionally omit them.
+    const family = yield* sql<{
+      readonly thread_id: ThreadId;
+      readonly parent_thread_id: ThreadId | null;
+    }>`
+      SELECT thread_id, json_extract(payload_json, '$.lineage.parentThreadId') AS parent_thread_id
+      FROM orchestration_v2_projection_threads
+      WHERE json_extract(payload_json, '$.lineage.rootThreadId') = (
+        SELECT json_extract(payload_json, '$.lineage.rootThreadId')
+        FROM orchestration_v2_projection_threads WHERE thread_id = ${input.threadId}
+      )
+    `.pipe(
       Effect.mapError(
         (cause) =>
           new ThreadArchiveSchedulerError({
@@ -279,29 +290,43 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
-    const children = new Map<ThreadId, Array<OrchestrationV2ThreadShell>>();
-    for (const thread of [...snapshot.threads, ...snapshot.archivedThreads]) {
-      const parent = thread.lineage.parentThreadId;
-      if (parent === null || thread.deletedAt !== null) continue;
+    const children = new Map<ThreadId, Array<ThreadId>>();
+    for (const thread of family) {
+      const parent = thread.parent_thread_id;
+      if (parent === null) continue;
       const siblings = children.get(parent) ?? [];
-      siblings.push(thread);
+      siblings.push(thread.thread_id);
       children.set(parent, siblings);
     }
-    const descendants: Array<OrchestrationV2ThreadShell> = [];
+    const descendants: Array<ThreadId> = [];
     const visited = new Set<ThreadId>([input.threadId]);
     const pending = [input.threadId];
     for (let index = 0; index < pending.length; index++) {
-      for (const thread of children.get(pending[index]!) ?? []) {
-        if (visited.has(thread.id)) continue;
-        visited.add(thread.id);
-        pending.push(thread.id);
-        descendants.push(thread);
+      for (const threadId of children.get(pending[index]!) ?? []) {
+        if (visited.has(threadId)) continue;
+        visited.add(threadId);
+        pending.push(threadId);
+        descendants.push(threadId);
       }
     }
+    const snapshot = yield* threads
+      .getShellSnapshot({ threadIds: descendants, location: "active" })
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new ThreadArchiveSchedulerError({
+              operation: "schedule",
+              threadId: input.threadId,
+              detail: errorDetail(cause),
+            }),
+        ),
+      );
+    const active = new Map(snapshot.threads.map((thread) => [thread.id, thread]));
     const results: Array<NonNullable<ThreadArchiveStatus["descendants"]>[number]> = [];
     // Deepest first, so finished children no longer block their parent's cleanup.
-    for (const thread of descendants.reverse()) {
-      if (thread.archivedAt !== null) continue;
+    for (const threadId of descendants.reverse()) {
+      const thread = active.get(threadId);
+      if (thread === undefined) continue;
       const result = yield* (input.authorizeDescendant?.(thread) ?? Effect.void).pipe(
         Effect.andThen(
           dispatch("schedule", thread.id, {
