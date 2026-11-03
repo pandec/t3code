@@ -1758,9 +1758,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           : undefined;
       const worktreeMissing =
         failedRun?.id === options?.endedRunId &&
-        (failedRun?.workspacePreparation?.type === "lab" ||
-          (failedRun?.workspacePreparation?.type === "worktree" &&
-            projection.thread.worktreePath === null));
+        failedRun?.workspacePreparation?.type === "worktree" &&
+        projection.thread.worktreePath === null;
       const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
       const instanceDisabledForProject = (instanceId: ProviderInstanceId) => {
         const projectOverride =
@@ -1790,6 +1789,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         );
       });
       if (
+        projection.runs.some((run) => run.workspacePreparation?.type === "lab") ||
         worktreeMissing ||
         instanceDisabledForProject(queueHeadInstanceId) ||
         (failureClass !== undefined &&
@@ -14337,6 +14337,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             commandId: command.commandId,
             commandType: command.type,
             cause: `Thread ${command.threadId} is not active.`,
+          });
+        }
+        if (projection.runs.some((run) => run.workspacePreparation?.type === "lab")) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Retry lab preparation before resuming queued messages.",
           });
         }
         const selectedRunId = command.type === "queued-run.start" ? command.runId : undefined;

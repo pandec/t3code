@@ -2803,6 +2803,17 @@ it.effect.each(["failed", "cancelled"] as const)(
         const late = (yield* threads.getThreadProjection(launched.threadId)).runs.at(-1)!;
         assert.equal(late.status, "queued");
         assert.isTrue(late.queueHeld);
+        for (const action of ["queue.resume", "queued-run.start"] as const) {
+          const request = {
+            commandId: CommandId.make(`lab:explicit-queue:${ending}:${action}`),
+            threadId: launched.threadId,
+          };
+          const command =
+            action === "queue.resume"
+              ? { ...request, type: action }
+              : { ...request, type: action, runId: late.id };
+          assert.isTrue(Exit.isFailure(yield* threads.dispatch(command).pipe(Effect.exit)));
+        }
         yield* Ref.set(fail, false);
         yield* Deferred.succeed(proceed, undefined);
         yield* launches.retryPreparation({
