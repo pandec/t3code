@@ -55,7 +55,7 @@ const makeLayer = (
 ) =>
   McpHttpServer.toolkitRegistration(ProjectActionsToolkit, ProjectActionsHandlers.layer).pipe(
     Layer.provide(ProjectActions.layer),
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provide(
       Layer.mock(ProjectService.ProjectService)({
         getById: () =>

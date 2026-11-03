@@ -1,4 +1,5 @@
 // Fork (DECISIONS 5.8): threads and Claude sessions follow each other's worktree moves.
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -423,7 +424,7 @@ it.effect("follows only into existing checkouts of the project's repository", ()
     assert.isTrue(Option.isNone(yield* follow(path.join(root, "src"))));
     assert.isTrue(Option.isNone(yield* follow(other)));
     assert.isTrue(Option.isNone(yield* follow(path.join(scratch, "removed"))));
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("follows only for the process that moved, while the thread is open", () =>
@@ -488,7 +489,7 @@ it.effect("follows only for the process that moved, while the thread is open", (
         yield* plan({ thread: { ...thread, worktreePath: worktree, branch: "feature" } }),
       ),
     );
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.live("the follow worker moves the thread for the live process only", () =>
@@ -631,7 +632,7 @@ it.live("the follow worker moves the thread for the live process only", () =>
 
       assert.deepEqual((yield* Ref.get(state)).openedCwds, [root]);
     }),
-  ).pipe(Effect.provide(NodeServices.layer)),
+  ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 // Fork (DECISIONS 2.5 x 5.8): a completed agent-requested switch is a T3 move,
@@ -805,5 +806,5 @@ it.live("a completed worktree switch restarts the session in the new worktree", 
       assert.deepEqual(captured.openedCwds, [root, worktree]);
       assert.deepEqual(captured.startedCwds, [root, worktree]);
     }),
-  ).pipe(Effect.provide(NodeServices.layer)),
+  ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

@@ -9,19 +9,18 @@ import * as Schema from "effect/Schema";
 import { CLAUDE_SYNTHETIC_MODEL } from "../provider/Drivers/claudeUsage.ts";
 import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptReader.ts";
 
-// v3-v10 were each used by both the fork and upstream with incompatible layouts; v11 carries all of
-// the fork's changes. Fork entries always carry malformed counts (`x`, `tx`) and upstream's never
-// do, which tells the shared versions apart. `decodeScanCache` migrates every v4-v10 cache.
-const USAGE_SCAN_CACHE_VERSION = 11 as const;
+// Fork and upstream v4-v11 share versions with different layouts, identified by `x`/`tx`.
+const USAGE_SCAN_CACHE_VERSION = 12 as const;
 const OLDEST_MIGRATED_VERSION = 4;
 
 /**
  * Each cache version writes its own file, so an older server sharing the state dir cannot replace a
  * newer cache and drop saved usage. Without its own file, this server migrates older builds' files:
- * fork v4/v5 and upstream v4 share the unversioned name, upstream v5 has its own, v6-v10 share theirs.
+ * fork v4/v5 and upstream v4 share the unversioned name, upstream v5 has its own, v6-v11 share theirs.
  */
-export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v11.json";
+export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v12.json";
 export const LEGACY_SCAN_CACHE_FILE_NAMES = [
+  "usage-scan-cache-v11.json",
   "usage-scan-cache.json",
   "usage-scan-cache-v5.json",
   "usage-scan-cache-v6.json",
@@ -203,6 +202,7 @@ function isCount(value: unknown): value is number {
  */
 type EntryLayout =
   | "current"
+  | "forkV11"
   | "forkV10"
   | "forkV9"
   | "forkV8"
@@ -210,6 +210,7 @@ type EntryLayout =
   | "forkV6"
   | "forkV5"
   | "forkV4"
+  | "upstreamV11"
   | "upstreamV10"
   | "upstreamV9"
   | "upstreamV8"
@@ -221,6 +222,7 @@ type EntryLayout =
 function entryLayout(version: number, entry: Partial<SerializedFile>): EntryLayout | null {
   if (version === USAGE_SCAN_CACHE_VERSION) return "current";
   const fork = entry.x !== undefined || entry.tx !== undefined;
+  if (version === 11) return fork ? "forkV11" : "upstreamV11";
   if (version === 10) return fork ? "forkV10" : "upstreamV10";
   if (version === 9) return fork ? "forkV9" : "upstreamV9";
   if (version === 8) return fork ? "forkV8" : "upstreamV8";
@@ -234,6 +236,7 @@ function entryLayout(version: number, entry: Partial<SerializedFile>): EntryLayo
 /** Shortest row each layout writes; the columns after it are absent. */
 const ROW_LENGTH: Record<EntryLayout, number> = {
   current: 12,
+  forkV11: 12,
   forkV10: 12,
   forkV9: 12,
   forkV8: 12,
@@ -241,6 +244,7 @@ const ROW_LENGTH: Record<EntryLayout, number> = {
   forkV6: 12,
   forkV5: 12,
   forkV4: 10,
+  upstreamV11: 11,
   upstreamV10: 11,
   upstreamV9: 11,
   upstreamV8: 11,
@@ -253,11 +257,13 @@ const ROW_LENGTH: Record<EntryLayout, number> = {
 /** Layouts whose speed column may hold ultrafast, not just the legacy `fast` flag. */
 const ULTRAFAST_LAYOUTS: ReadonlySet<EntryLayout> = new Set([
   "current",
+  "forkV11",
   "forkV10",
   "forkV9",
   "forkV8",
   "forkV7",
   "forkV6",
+  "upstreamV11",
   "upstreamV10",
   "upstreamV9",
   "upstreamV8",
@@ -269,6 +275,7 @@ const ULTRAFAST_LAYOUTS: ReadonlySet<EntryLayout> = new Set([
 /** Layouts whose rows always carry `rateModel`; upstream's may append it. */
 const RATE_MODEL_LAYOUTS: ReadonlySet<EntryLayout> = new Set([
   "current",
+  "forkV11",
   "forkV10",
   "forkV9",
   "forkV8",
@@ -279,8 +286,8 @@ const RATE_MODEL_LAYOUTS: ReadonlySet<EntryLayout> = new Set([
 
 /**
  * Rebuilds the cache, migrating older layouts. Migrated entries keep their records (the transcript
- * may be gone) but carry `requiresReparse` while it exists: upstream layouts, fork v4, pre-v9 fork
- * Codex (v9 only with malformed lines) and older fork Claude entries (no advisor records).
+ * may be gone) but mark incompatible entries for reparsing. Clean pre-v12 Codex scans retain their
+ * records unchanged and reparse on growth, because their state lacks interrupted requests.
  */
 export function decodeScanCache(
   document: unknown,
@@ -331,15 +338,20 @@ export function decodeScanCache(
         rateModelIndex,
       ] = row as SerializedRecord;
       // Fork v7+ layouts append provisional and one-hour columns; upstream
-      // v7–v10 put their tier turn where the fork's provisional flag sits.
+      // v7–v11 put their tier turn where the fork's provisional flag sits.
       const forkTurnColumn =
-        layout === "current" || layout === "forkV10" || layout === "forkV9" || layout === "forkV8";
+        layout === "current" ||
+        layout === "forkV11" ||
+        layout === "forkV10" ||
+        layout === "forkV9" ||
+        layout === "forkV8";
       const forkColumns = forkTurnColumn || layout === "forkV7";
       const provisional = forkColumns ? row[12] : undefined;
       const oneHourCacheCreationTokens = forkColumns ? row[13] : undefined;
       const unresolvedServiceTierTurnId = forkTurnColumn
         ? row[14]
-        : layout === "upstreamV10" ||
+        : layout === "upstreamV11" ||
+            layout === "upstreamV10" ||
             layout === "upstreamV9" ||
             layout === "upstreamV8" ||
             layout === "upstreamV7"
@@ -437,27 +449,24 @@ export function decodeScanCache(
     ) {
       continue;
     }
-
     const requiresReparse =
       entry.reparse === true ||
       !countsMalformed ||
       layout === "forkV4" ||
-      // Only fork v9+ Codex state reconciles cumulative counters, keeps tier
-      // provenance, and skips compaction and resume markers; fork v9 still
-      // rejected initial requests with inherited totals as malformed, so only
-      // its clean entries resume.
+      // Malformed old Codex scans may have discarded interrupted requests; older reducers
+      // also lack cumulative reconciliation and tier provenance.
       (entry.p === "codex" &&
         layout !== "current" &&
-        layout !== "forkV10" &&
-        !(layout === "forkV9" && entry.x === 0 && entry.tx === 0)) ||
-      // Claude entries before fork v11 lack advisor records (and before v7 kept
-      // each message's first record).
-      (entry.p === "claude" && layout !== "current");
-    // A migrated position is never resumed: a full parse replaces the entry.
+        ((layout !== "forkV11" && layout !== "forkV10" && layout !== "forkV9") ||
+          entry.x !== 0 ||
+          entry.tx !== 0)) ||
+      // Fork v11 added Claude advisor records.
+      (entry.p === "claude" && layout !== "current" && layout !== "forkV11");
     const migrated = layout !== "current" && requiresReparse;
-    // A corrupt state disqualifies the entry: resuming with it would attach
-    // appended usage to the wrong model or tier, or replay fork-copied history.
+    // A corrupt state must not attribute appended usage to another model or replay copied history.
     if (!migrated && !isValidState(entry.p, entry.cs)) continue;
+    // Clean old Codex records remain useful unchanged, but lack buffered interrupted requests.
+    const resumable = !requiresReparse && !(entry.p === "codex" && layout !== "current");
 
     const provider = entry.p;
     const records = decodeRecords(entry.r, provider, layout);
@@ -473,14 +482,14 @@ export function decodeScanCache(
       malformedRecords: countsMalformed ? (entry.x ?? 0) : (entry.mr ?? 0),
       tailRecords,
       tailMalformedRecords: countsMalformed ? (entry.tx ?? 0) : 0,
-      position: migrated
-        ? { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null }
-        : {
+      position: resumable
+        ? {
             resumeOffset: entry.o,
             guardLength: entry.gl,
             guardHash: entry.gh,
             state: entry.cs,
-          },
+          }
+        : { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
     });
   }
 

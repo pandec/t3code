@@ -30,7 +30,7 @@ import {
 import { formatForkedThreadTitle } from "@t3tools/shared/composerTrigger";
 import { validateProviderOptionSelectionsStrict } from "@t3tools/shared/model";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -145,7 +145,7 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const strictResume = yield* StrictResume.StrictResume;
   const processRunner = yield* ProcessRunner.make();
   const importSemaphore = yield* Semaphore.make(1);
@@ -480,13 +480,7 @@ const make = Effect.gen(function* () {
       });
     }
     // Taken by a deleted import of the same session.
-    const uuid = yield* crypto
-      .randomUUIDv4()
-      .pipe(
-        Effect.mapError((cause) =>
-          failure("import-failed", "Failed to allocate an id for the imported thread.", cause),
-        ),
-      );
+    const uuid = yield* random.uuidV4();
     return ThreadId.make(uuid);
   });
 

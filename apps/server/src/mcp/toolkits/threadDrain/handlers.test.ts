@@ -62,7 +62,7 @@ const makeLayer = (target: TargetState | null, scopes: Array<string>) => {
       deletedAt: null,
     }) as unknown as OrchestrationV2ThreadShell;
   return McpHttpServer.toolkitRegistration(ThreadDrainToolkit, ThreadDrainToolkitHandlersLive).pipe(
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provideMerge(
       Layer.mock(ThreadManagementService.ThreadManagementService)({
         getThreadShell: (threadId) =>

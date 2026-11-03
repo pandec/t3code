@@ -14,7 +14,7 @@ import {
 } from "@t3tools/shared/threadGroups";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Semaphore from "effect/Semaphore";
@@ -83,7 +83,7 @@ const newGroupOrderKey = (groups: ReadonlyArray<ThreadGroup>) =>
   ) ?? "n";
 
 const make = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const settings = yield* ServerSettings.ServerSettingsService;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   // Serializes the exact-name check with the write so concurrent creates of
@@ -94,7 +94,7 @@ const make = Effect.gen(function* () {
     Effect.map((current) => current.threadGroups),
     Effect.mapError(unavailable),
   );
-  const randomId = crypto.randomUUIDv4().pipe(Effect.orDie);
+  const randomId = random.uuidV4();
   const findGroup = Effect.fn("ThreadGroupsMcpService.findGroup")(function* (
     groups: ReadonlyArray<ThreadGroup>,
     groupId: string,

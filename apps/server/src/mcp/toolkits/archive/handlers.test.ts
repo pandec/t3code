@@ -58,7 +58,7 @@ const makeLayer = (
   } = {},
 ) =>
   McpHttpServer.toolkitRegistration(ArchiveToolkit, ArchiveToolkitHandlersLive).pipe(
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provideMerge(
       Layer.mock(ThreadManagementService.ThreadManagementService)({
         // Archived on purpose: status must stay readable after the archive ran.
@@ -193,7 +193,7 @@ const makeTargetLayer = (calls: Array<string>, options: { readonly callerLive?: 
     return Effect.succeed({ archivedAt: null, request });
   };
   return McpHttpServer.toolkitRegistration(ArchiveToolkit, ArchiveToolkitHandlersLive).pipe(
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provideMerge(
       Layer.mock(ThreadManagementService.ThreadManagementService)({
         getThreadShell: (id) => Effect.succeed(shell(id)),

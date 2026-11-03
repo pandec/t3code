@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import { NodeHttpServer } from "@effect/platform-node";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -184,7 +185,10 @@ it.effect("t3_thread_groups and t3_thread_drain_status are listed on every islan
           Layer.provide(NodeServices.layer),
         ),
         NodeServices.layer,
-        DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer)),
+        NodeCrypto.layer,
+        DocumentText.layer.pipe(
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        ),
       ),
     ),
   ),

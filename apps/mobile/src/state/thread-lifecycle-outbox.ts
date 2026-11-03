@@ -1,15 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { useMemo } from "react";
 
 import { appAtomRegistry } from "./atom-registry";
 import { createThreadLifecycleOutboxManager } from "./thread-lifecycle-outbox-manager";
-import {
-  deriveThreadLifecyclePresentation,
-  type ThreadLifecycleIntent,
-  type ThreadLifecyclePresentation,
-} from "./thread-lifecycle-outbox-model";
+import type { ThreadLifecycleIntent } from "./thread-lifecycle-outbox-model";
 import {
   expoThreadLifecycleOutboxStorage,
   flushThreadLifecycleOutboxWrites,
@@ -42,15 +36,4 @@ export function useThreadLifecycleIntents(): Readonly<Record<string, ThreadLifec
 
 export function useThreadLifecycleOutboxLoadState() {
   return useAtomValue(threadLifecycleOutboxManager.loadStateAtom);
-}
-
-/** Canonical unarchived shells with pending archive/unarchive intents applied. */
-export function useThreadLifecyclePresentation(
-  canonicalThreads: ReadonlyArray<EnvironmentThreadShell>,
-): ThreadLifecyclePresentation {
-  const intents = useThreadLifecycleIntents();
-  return useMemo(
-    () => deriveThreadLifecyclePresentation(canonicalThreads, intents),
-    [canonicalThreads, intents],
-  );
 }

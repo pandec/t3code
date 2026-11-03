@@ -145,7 +145,7 @@ describe("scan cache round trip", () => {
     );
     expect(migrated).toEqual(expected);
     expect(migrated.get("/deleted/session.jsonl")?.records[0]?.speed).toBe("standard");
-    expect(encodeScanCache(migrated).version).toBe(11);
+    expect(encodeScanCache(migrated).version).toBe(12);
     expect(decodeScanCache(encodeScanCache(migrated), TEST_FORMAT_MAP)).toEqual(expected);
   });
 
@@ -338,7 +338,10 @@ describe("scan cache round trip", () => {
 
     const migrated = decodeScanCache(JSON.parse(JSON.stringify(forkV9)), TEST_FORMAT_MAP);
 
-    expect(migrated.get("/clean/codex.jsonl")).toEqual(original.get("/clean/codex.jsonl"));
+    expect(migrated.get("/clean/codex.jsonl")).toEqual({
+      ...original.get("/clean/codex.jsonl")!,
+      position: MIGRATED_POSITION,
+    });
     for (const path of ["/claude.jsonl", "/malformed/codex.jsonl", "/tail-malformed/codex.jsonl"]) {
       expect(migrated.get(path)).toEqual({
         ...original.get(path)!,
@@ -573,11 +576,11 @@ describe("scan cache round trip", () => {
     expect(restored).toEqual(original);
   });
 
-  it.each([6, 7, 8, 9, 10])(
+  it.each([6, 7, 8, 9, 10, 11])(
     "migrates upstream v%s by shape, keeping history and diagnostics but re-parsing",
     (version) => {
-      // Upstream v6–v10 share the fork's file names and versions. Its entries
-      // carry a whole-file `mr` instead of `x`/`tx`, and its v7–v10 rows put the
+      // Upstream v6–v11 share the fork's file names and versions. Its entries
+      // carry a whole-file `mr` instead of `x`/`tx`, and its v7–v11 rows put the
       // tier turn at index 12, where the fork marks provisional records.
       const pending = record({
         provider: "codex",
@@ -637,9 +640,9 @@ describe("scan cache round trip", () => {
     },
   );
 
-  it("migrates fork v10 in place, re-parsing only Claude entries for advisor calls", () => {
+  it.each([10, 11])("migrates fork v%s without resuming pre-recovery Codex scans", (version) => {
     const original = cacheWith([["/claude.jsonl", 100, [record()], 2, 1]]);
-    // Fork v10 Codex entries resume even with malformed lines.
+    // Malformed Codex entries re-parse immediately; clean entries retain their records until growth.
     original.set("/codex.jsonl", {
       ...original.get("/claude.jsonl")!,
       provider: "codex",
@@ -659,16 +662,29 @@ describe("scan cache round trip", () => {
       records: [record({ provider: "pi", model: "anthropic/claude-fable-5" })],
       position: position({ state: { sessionId: "session-a" } }),
     });
-    const forkV10 = { ...encodeScanCache(original), version: 10 };
+    original.set("/clean-codex.jsonl", {
+      ...original.get("/codex.jsonl")!,
+      malformedRecords: 0,
+      tailMalformedRecords: 0,
+    });
+    const legacy = { ...encodeScanCache(original), version };
 
-    const migrated = decodeScanCache(JSON.parse(JSON.stringify(forkV10)), TEST_FORMAT_MAP);
+    const migrated = decodeScanCache(JSON.parse(JSON.stringify(legacy)), TEST_FORMAT_MAP);
 
-    expect(migrated.get("/claude.jsonl")).toEqual({
-      ...original.get("/claude.jsonl")!,
+    expect(migrated.get("/claude.jsonl")).toEqual(
+      version === 11
+        ? original.get("/claude.jsonl")
+        : { ...original.get("/claude.jsonl")!, requiresReparse: true, position: MIGRATED_POSITION },
+    );
+    expect(migrated.get("/codex.jsonl")).toEqual({
+      ...original.get("/codex.jsonl")!,
       requiresReparse: true,
       position: MIGRATED_POSITION,
     });
-    expect(migrated.get("/codex.jsonl")).toEqual(original.get("/codex.jsonl"));
+    expect(migrated.get("/clean-codex.jsonl")).toEqual({
+      ...original.get("/clean-codex.jsonl")!,
+      position: MIGRATED_POSITION,
+    });
     expect(migrated.get("/pi.jsonl")).toEqual(original.get("/pi.jsonl"));
   });
 

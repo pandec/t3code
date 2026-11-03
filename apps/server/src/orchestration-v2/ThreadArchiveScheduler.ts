@@ -14,7 +14,7 @@ import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { turnItemUpdateCanEndBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import type * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -121,12 +121,11 @@ export const make = Effect.gen(function* () {
   const worktreeRemoval = yield* ArchiveWorktreeRemoval.ArchiveWorktreeRemoval;
   const outbox = yield* EffectOutbox.EffectOutboxV2;
   const sql = yield* SqlClient.SqlClient;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const newCommandId = (prefix: string, threadId: ThreadId) =>
-    crypto.randomUUIDv4().pipe(
-      Effect.orDie,
-      Effect.map((uuid) => CommandId.make(`server:${prefix}:${threadId}:${uuid}`)),
-    );
+    random
+      .uuidV4()
+      .pipe(Effect.map((uuid) => CommandId.make(`server:${prefix}:${threadId}:${uuid}`)));
 
   const status = (threadId: ThreadId, operation: ThreadArchiveSchedulerError["operation"]) =>
     threads.getThreadRecords(threadId, []).pipe(

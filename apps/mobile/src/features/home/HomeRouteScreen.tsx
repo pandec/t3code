@@ -17,7 +17,7 @@ import {
 
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { useProjects } from "../../state/entities";
-import { useThreadLifecyclePresentation } from "../../state/thread-lifecycle-outbox";
+import { useThreadLifecyclePresentation } from "../archive/useArchivedThreadSnapshots";
 import { environmentThreadShells } from "../../state/threads";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";

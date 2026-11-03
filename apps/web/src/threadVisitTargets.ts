@@ -1,4 +1,5 @@
 /** Resolves remembered thread visits against live state (see threadLastVisited). */
+import { threadKey } from "@t3tools/client-runtime/state/entities";
 import { isListedThreadLineage, type ScopedThreadRef } from "@t3tools/contracts";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
@@ -24,6 +25,9 @@ function isThreadOpenable(ref: ScopedThreadRef): boolean {
   ) {
     return false;
   }
+  if (appAtomRegistry.get(environmentThreadShells.hiddenThreadKeysAtom).has(threadKey(ref))) {
+    return false;
+  }
   const shell = readThreadShell(ref);
   const state = Option.getOrNull(
     AsyncResult.value(appAtomRegistry.get(environmentShell.stateAtom(ref.environmentId))),
@@ -38,6 +42,7 @@ function isThreadOpenable(ref: ScopedThreadRef): boolean {
   // the snapshot it was seen in, only a streamed removal proves it gone; a newer snapshot cleared
   // those, so it no longer can.
   return (
+    !appAtomRegistry.get(environmentThreadShells.anyEnvironmentHidingAtom) &&
     state !== null &&
     shellSeenAtGeneration.get(key) === state.generation &&
     Option.exists(state.snapshot, (snapshot) => snapshot.olderSettled !== undefined) &&

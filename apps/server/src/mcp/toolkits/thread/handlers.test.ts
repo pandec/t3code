@@ -47,7 +47,7 @@ const makeLayer = (
   calls: { scheduled: Array<ThreadId>; dispatched: Array<OrchestrationV2Command> },
 ) =>
   McpHttpServer.layerThreadToolkit.pipe(
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provide(NodeCrypto.layer),
     // Registration asks for every service the thread tools declare; these cases call neither.
     Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),

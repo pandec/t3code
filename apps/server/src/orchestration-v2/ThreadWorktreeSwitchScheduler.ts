@@ -13,7 +13,7 @@ import {
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -81,7 +81,7 @@ export const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const sql = yield* SqlClient.SqlClient;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const providePlatform = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -90,10 +90,9 @@ export const make = Effect.gen(function* () {
       Effect.provideService(Path.Path, path),
     );
   const newCommandId = (prefix: string, threadId: ThreadId) =>
-    crypto.randomUUIDv4().pipe(
-      Effect.orDie,
-      Effect.map((uuid) => CommandId.make(`server:${prefix}:${threadId}:${uuid}`)),
-    );
+    random
+      .uuidV4()
+      .pipe(Effect.map((uuid) => CommandId.make(`server:${prefix}:${threadId}:${uuid}`)));
 
   const status = (threadId: ThreadId) =>
     threads.getThreadRecords(threadId, []).pipe(

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ProviderInstanceId,
@@ -279,7 +280,9 @@ const makeReplayAdapter = (
     );
   });
 
-const layerReplayHost = TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer));
+const layerReplayHost = TestProviderHost.layer().pipe(
+  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+);
 
 const layerReplayHostWithAttachments = (
   attachmentsDir: string,
@@ -307,7 +310,11 @@ function layerRegistry(
     makeReplayAdapter(transcript, { external: true, ...options }).pipe(
       Effect.map((adapter) => ProviderAdapterRegistry.layerFromAdapters([adapter])),
     ),
-  ).pipe(Layer.provide(Layer.mergeAll(layerReplayHost, IdAllocator.layer, NodeServices.layer)));
+  ).pipe(
+    Layer.provide(
+      Layer.mergeAll(layerReplayHost, IdAllocator.layer, NodeServices.layer, NodeCrypto.layer),
+    ),
+  );
 }
 
 export const openCode2ReplayRuntime = (
@@ -361,6 +368,7 @@ export const openCode2ReplayRuntime = (
             ),
         IdAllocator.layer,
         NodeServices.layer,
+        NodeCrypto.layer,
       ),
     ),
   );

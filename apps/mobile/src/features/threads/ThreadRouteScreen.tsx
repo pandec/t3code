@@ -252,7 +252,7 @@ function LiveThreadRouteController(props: ThreadRouteScreenProps) {
   useAndroidWorkspaceBack("threads");
   const connectionsReady = useConnectionsReady();
   const { connectionState } = useRemoteConnectionStatus();
-  const { selectedThread } = useThreadSelection();
+  const { selectedThread, isThreadHidden } = useThreadSelection();
   const params = props.route.params ?? {};
   const environmentIdRaw = firstRouteParam(params.environmentId);
   const threadIdRaw = firstRouteParam(params.threadId);
@@ -261,6 +261,7 @@ function LiveThreadRouteController(props: ThreadRouteScreenProps) {
   const routeEnvironmentShellState = useEnvironmentShellReadiness(environmentId);
   const { onReconnectEnvironment } = useRemoteConnections();
   const navigation = useNavigation();
+  const goBack = useWorkspaceBackNavigation("threads");
   const routeName = useRoute().name;
   const routeConnectionState =
     routeEnvironmentRuntime?.connectionState ?? (environmentId ? "available" : connectionState);
@@ -294,6 +295,12 @@ function LiveThreadRouteController(props: ThreadRouteScreenProps) {
 
   if (environmentId === null || threadIdRaw === null) {
     return withInspectorHeader(<OpeningThreadLoadingScreen />);
+  }
+
+  if (isThreadHidden) {
+    return withInspectorHeader(
+      <ThreadUnavailableScreen actionLabel="Back to threads" onAction={goBack} />,
+    );
   }
 
   if (selectedThread !== null && selectedThreadKey === routeThreadKey) {

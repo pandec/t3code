@@ -2949,6 +2949,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     buildConfig.toolsets = { appimage: "1.0.3" };
     const path = yield* Path.Path;
     const repoRoot = yield* RepoRoot;
+    buildConfig.afterPack = path.join(repoRoot, "scripts/linux-after-pack.ts");
     buildConfig.linux = {
       // The .deb is built after the AppImage; electron-builder writes resources/package-type into
       // the .deb only, so electron-updater updates each install in its own format. Dev ships the

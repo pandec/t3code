@@ -2,6 +2,7 @@
 // and their races with Stop, sends, feedback, native compaction and the
 // replaced session's late exit.
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -31,7 +32,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Path from "effect/Path";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -1067,7 +1068,7 @@ const CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
 const makeClaudeRegistry = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const opened: Array<{
     readonly instanceId: ProviderInstanceId;
@@ -1111,7 +1112,7 @@ const makeClaudeRegistry = Effect.gen(function* () {
         attachmentsDir,
         fileSystem,
         path,
-        crypto,
+        random,
         idAllocator,
         queryRunner: {
           allocateSessionId: Effect.sync(
@@ -1225,7 +1226,12 @@ describe("queued account switch through the Claude adapter", () => {
         );
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            NodeServices.layer,
+            NodeCrypto.layer,
+          ),
         ),
       ),
     ),

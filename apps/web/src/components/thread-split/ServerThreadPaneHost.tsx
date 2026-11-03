@@ -4,7 +4,12 @@ import type { ScopedThreadRef } from "@t3tools/contracts";
 import ChatView from "../ChatView";
 import { Button } from "~/components/ui/button";
 import { openCommandPalette } from "../../commandPaletteBus";
-import { useThreadProjection, useThreadShell, useThreadStatus } from "../../state/entities";
+import {
+  useThreadProjection,
+  useThreadShell,
+  useThreadStatus,
+  useThreadHiddenByTags,
+} from "../../state/entities";
 import { useEnvironment, useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { environmentShell } from "../../state/shell";
@@ -23,6 +28,11 @@ export function ServerThreadPaneHost({ threadRef }: { threadRef: ScopedThreadRef
   const archivedLookupRef = bootstrapComplete && serverThreadShell === null ? threadRef : null;
   const archivedLookupThread = useThreadProjection(archivedLookupRef)?.projection.thread ?? null;
   const archivedLookupStatus = useThreadStatus(archivedLookupRef);
+  const hiddenByTags = useThreadHiddenByTags(
+    threadRef,
+    serverThreadShell !== null,
+    archivedLookupThread,
+  );
   const renderState = resolveThreadRouteRenderState({
     bootstrapComplete,
     serverThreadExists: serverThreadShell !== null,
@@ -46,6 +56,15 @@ export function ServerThreadPaneHost({ threadRef }: { threadRef: ScopedThreadRef
 
   const { isReady: environmentCatalogReady } = useEnvironments();
   const environment = useEnvironment(threadRef.environmentId);
+
+  if (hiddenByTags) {
+    return (
+      <ThreadPaneNotice
+        title="Thread hidden"
+        description="Turn off hiding tagged threads to open this conversation."
+      />
+    );
+  }
 
   if (renderState === "missing" || (environmentCatalogReady && environment === null)) {
     return (

@@ -144,7 +144,7 @@ it.effect.each([
               "--verbose=2",
               "-R",
             ]);
-            const requirement = command.args[5] ?? "";
+            const requirement = String(command.args[5] ?? "");
             assert.isTrue(requirement.startsWith("="));
             assert.include(requirement, 'identifier "com.t3tools.t3code.dev"');
             assert.include(requirement, "anchor apple generic");

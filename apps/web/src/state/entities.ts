@@ -13,6 +13,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-fork";
 import {
   EMPTY_THREAD_HISTORY_META,
+  visibilityParentKey,
   type EnvironmentThreadStatus,
   type ThreadHistoryMeta,
 } from "@t3tools/client-runtime/state/threads";
@@ -108,6 +109,44 @@ export function useServerConfigs() {
 export function useThreadShells(enabled = true): ReadonlyArray<EnvironmentThreadShell> {
   return useAtomValue(
     enabled ? environmentThreadShells.threadShellsAtom : EMPTY_THREAD_SHELLS_ATOM,
+  );
+}
+
+/** Whether any connected environment is hiding tagged threads right now. */
+export function useAnyEnvironmentHiding(): boolean {
+  return useAtomValue(environmentThreadShells.anyEnvironmentHidingAtom);
+}
+
+/** Keys of threads the tag filter hides from display, by `threadKey`. */
+export function useHiddenThreadKeys(): ReadonlySet<string> {
+  return useAtomValue(environmentThreadShells.hiddenThreadKeysAtom);
+}
+
+/** Thread shells minus those the tag filter hides, for lists that show threads to the user. */
+export function useVisibleThreadShells(enabled = true): ReadonlyArray<EnvironmentThreadShell> {
+  return useAtomValue(
+    enabled ? environmentThreadShells.visibleThreadShellsAtom : EMPTY_THREAD_SHELLS_ATOM,
+  );
+}
+
+export function useThreadHiddenByTags(
+  threadRef: ScopedThreadRef | null,
+  shellPresent: boolean,
+  unlistedThread: Pick<OrchestrationV2ThreadShell, "lineage" | "delegatedFrom"> | null,
+): boolean {
+  const hidden = useHiddenThreadKeys();
+  const hidingAnywhere = useAnyEnvironmentHiding();
+  const parentKey =
+    threadRef === null || unlistedThread === null
+      ? null
+      : visibilityParentKey(threadRef.environmentId, unlistedThread);
+  const parent = useQuietThreadShell(parentKey === null ? null : parseThreadKey(parentKey));
+  return (
+    threadRef !== null &&
+    (hidden.has(threadKey(threadRef)) ||
+      (hidingAnywhere &&
+        !shellPresent &&
+        !(parentKey !== null && parent !== null && !hidden.has(parentKey))))
   );
 }
 

@@ -1,7 +1,9 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -14,31 +16,34 @@ import {
   selectIosWorkspace,
 } from "./mobile-native-client.ts";
 
-effectIt.layer(NodeServices.layer)("mobile native client identity", (it) => {
-  it.effect("probes the configured iOS bundle identifier", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const app = yield* fs.makeTempDirectoryScoped({ prefix: "t3-native-client-test-" });
-      const calls: string[][] = [];
-      const run = (_program: string, args: string[]) => {
-        calls.push(args);
-        if (args[1] === "listapps") return Effect.succeed('{ "com.example.personal.t3": {} }');
-        if (args[1] === "get_app_container") return Effect.succeed(app);
-        return Effect.die(`Unexpected command: ${args.join(" ")}`);
-      };
+effectIt.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+  "mobile native client identity",
+  (it) => {
+    it.effect("probes the configured iOS bundle identifier", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const app = yield* fs.makeTempDirectoryScoped({ prefix: "t3-native-client-test-" });
+        const calls: string[][] = [];
+        const run = (_program: string, args: string[]) => {
+          calls.push(args);
+          if (args[1] === "listapps") return Effect.succeed('{ "com.example.personal.t3": {} }');
+          if (args[1] === "get_app_container") return Effect.succeed(app);
+          return Effect.die(`Unexpected command: ${args.join(" ")}`);
+        };
 
-      yield* installedBinary("ios", "SIMULATOR", "com.example.personal.t3", run);
+        yield* installedBinary("ios", "SIMULATOR", "com.example.personal.t3", run);
 
-      assert.deepStrictEqual(calls[1], [
-        "simctl",
-        "get_app_container",
-        "SIMULATOR",
-        "com.example.personal.t3",
-        "app",
-      ]);
-    }).pipe(Effect.scoped),
-  );
-});
+        assert.deepStrictEqual(calls[1], [
+          "simctl",
+          "get_app_container",
+          "SIMULATOR",
+          "com.example.personal.t3",
+          "app",
+        ]);
+      }).pipe(Effect.scoped),
+    );
+  },
+);
 
 describe("generated iOS build target discovery", () => {
   it("selects the generated workspace and its matching scheme", () => {
@@ -104,7 +109,7 @@ const fixture = Effect.gen(function* () {
   return { fs, path, mobile, android, cleanPrebuild, assertCachesRestored };
 });
 
-effectIt.layer(NodeServices.layer)("prebuildAndroid", (it) => {
+effectIt.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("prebuildAndroid", (it) => {
   it.effect("keeps Gradle and native caches through a clean prebuild", () =>
     Effect.gen(function* () {
       const { fs, path, mobile, android, cleanPrebuild, assertCachesRestored } = yield* fixture;

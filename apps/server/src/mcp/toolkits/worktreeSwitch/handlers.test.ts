@@ -60,7 +60,7 @@ const makeLayer = (
   } = {},
 ) =>
   McpHttpServer.toolkitRegistration(WorktreeSwitchToolkit, WorktreeSwitchToolkitHandlersLive).pipe(
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provideMerge(
       Layer.mock(ThreadManagementService.ThreadManagementService)({
         getThreadShell: () =>

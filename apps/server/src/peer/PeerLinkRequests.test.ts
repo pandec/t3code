@@ -153,7 +153,7 @@ const makeLaptop = Effect.gen(function* () {
     Layer.provideMerge(Layer.merge(layerOrchestrator, ServerSettings.layerTest())),
   );
   const layerHere = McpHttpServer.layerOrchestratorToolkit.pipe(
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provideMerge(PeerLinkRequests.layer),
     Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
     Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
@@ -770,6 +770,7 @@ it.live("a slow machine holds up only its own card's answer", () =>
             Effect.as(HttpServerResponse.empty({ status: 404 })),
           ),
         );
+        yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
         if (server.address._tag === "UnixPathAddress") return yield* Effect.die("expected TCP");
         const slowUrl = `http://127.0.0.1:${server.address.port}`;
 
@@ -799,7 +800,13 @@ it.live("a slow machine holds up only its own card's answer", () =>
             answer: { type: "link", urls: [slowUrl], access: "auto", pairingCode: "code" },
           })
           .pipe(Effect.forkChild);
-        yield* Deferred.await(reached);
+        yield* Deferred.await(reached).pipe(
+          Effect.raceFirst(
+            Fiber.join(slowAnswer).pipe(
+              Effect.andThen(Effect.die("slow answer completed before descriptor request")),
+            ),
+          ),
+        );
 
         // While the slow machine holds its card, the user answers the other one.
         yield* a.requests.answer({ threadId, turnItemId: boxCard.id, answer: { type: "decline" } });
@@ -949,6 +956,35 @@ it.live("naming a machine that is already linked returns the link at once, with 
       // Not both: the address could name another machine than the id.
       const both = yield* a.call({ environmentId: box.environmentId, url: b.url });
       expect(errorOf(both)).toMatchObject({ code: "invalid_request" });
+    }),
+  ),
+);
+
+it.live("a retry naming a machine linked meanwhile closes the card it left as linked", () =>
+  withBoth((a, b) =>
+    Effect.gen(function* () {
+      yield* seedThread(a);
+      yield* a.call({ url: b.url, clientRequestId: "link-box" });
+      yield* pendingCard(a);
+      // Linked from Settings meanwhile, not through the card.
+      const pairing = yield* b.auth.issuePairingCredential();
+      yield* a.links.link({ url: b.url, pairingCode: pairing.credential, access: "auto" });
+
+      const retried = yield* a.call({
+        environmentId: box.environmentId,
+        clientRequestId: "link-box",
+      });
+      expect(retried.structuredContent).toEqual({
+        status: "linked",
+        environmentId: box.environmentId,
+        label: "Box",
+        access: "auto",
+      });
+      expect(yield* cardOf(a)).toMatchObject({
+        linkStatus: "linked",
+        linkedEnvironmentId: box.environmentId,
+      });
+      expect((yield* a.orchestrator.getThreadShell(threadId))?.pendingRuntimeRequest).toBeNull();
     }),
   ),
 );

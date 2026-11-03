@@ -6,6 +6,7 @@ import {
   type OrchestrationV2ArchivedShellSnapshot,
   type OrchestrationV2ThreadShell,
   type ServerConfig,
+  type ScopedThreadRef,
 } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
@@ -18,6 +19,8 @@ import { scopedThreadKey, scopeThreadRef } from "../environment/scoped.ts";
 import { presentThreadShell, type EnvironmentThreadShell } from "./models.ts";
 import { createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
 import type { EnvironmentShellState } from "./shell.ts";
+import { threadKey } from "./entities.ts";
+import { hiddenThreadKeys, type TagFilteredEnvironment } from "./threadTagFilter.ts";
 
 export interface ArchivedSnapshotEntry {
   readonly environmentId: EnvironmentId;
@@ -55,11 +58,21 @@ export function createArchivedThreadSnapshotsAtomFamily<E>(options: {
   readonly getSnapshotAtom: (
     environmentId: EnvironmentId,
   ) => Atom.Atom<AsyncResult.AsyncResult<OrchestrationV2ArchivedShellSnapshot, E>>;
+  readonly hiddenThreadTagsAtom: (
+    environmentId: EnvironmentId,
+  ) => Atom.Atom<ReadonlyArray<string> | null>;
+  /** Live threads the tag filter hides, so archived children of hidden parents stay hidden. */
+  readonly hiddenThreadKeysAtom: Atom.Atom<ReadonlySet<string>>;
+  /** Live threads, so archived children of loaded, visible parents stay visible. */
+  readonly liveThreadRefsAtom: Atom.Atom<ReadonlyArray<ScopedThreadRef>>;
+  /** Whether any connected environment hides tags, including ones outside this archive's scope. */
+  readonly anyEnvironmentHidingAtom: Atom.Atom<boolean>;
   readonly labelPrefix: string;
 }) {
   return Atom.family((environmentKey: string) =>
     Atom.make((get): ArchivedThreadSnapshotsState => {
       const snapshots: ArchivedSnapshotEntry[] = [];
+      const environments: TagFilteredEnvironment[] = [];
       let error: string | null = null;
       let isLoading = false;
 
@@ -71,13 +84,41 @@ export function createArchivedThreadSnapshotsAtomFamily<E>(options: {
         if (snapshot !== null) {
           snapshots.push({ environmentId, snapshot });
         }
+        // A page that has not arrived still counts, so its tags apply to children elsewhere.
+        environments.push({
+          environmentId,
+          threads: snapshot?.threads ?? [],
+          hiddenTags: get(options.hiddenThreadTagsAtom(environmentId)),
+        });
 
         if (error === null && result._tag === "Failure") {
           error = "Failed to load archived threads.";
         }
       }
 
-      return { snapshots, error, isLoading };
+      // One pass over every environment's page, so archived tasks follow parents archived elsewhere.
+      // Any connected machine may hide an unloaded parent, so the global flag decides, not the scope.
+      const hidingAnywhere = get(options.anyEnvironmentHidingAtom);
+      const hidden = hiddenThreadKeys(
+        environments,
+        get(options.hiddenThreadKeysAtom),
+        hidingAnywhere ? new Set(get(options.liveThreadRefsAtom).map(threadKey)) : undefined,
+        hidingAnywhere,
+      );
+      if (hidden.size === 0) return { snapshots, error, isLoading };
+      return {
+        snapshots: snapshots.map(({ environmentId, snapshot }) => ({
+          environmentId,
+          snapshot: {
+            ...snapshot,
+            threads: snapshot.threads.filter(
+              (thread) => !hidden.has(threadKey({ environmentId, threadId: thread.id })),
+            ),
+          },
+        })),
+        error,
+        isLoading,
+      };
     }).pipe(Atom.withLabel(`${options.labelPrefix}:${environmentKey}`)),
   );
 }
@@ -88,6 +129,7 @@ export interface RecentArchivedSnapshotEntry {
   readonly environmentId: EnvironmentId;
   /** Newest archive first, already presented for list rows. */
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
+  /** Unloaded rows remain counted until their tag visibility is known. */
   readonly totalArchivedCount: number;
 }
 
@@ -172,6 +214,12 @@ function presentArchived(
 export function createRecentArchivedThreadsAtoms<R, E, FE>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
   options: {
+    readonly hiddenThreadTagsAtom: (
+      environmentId: EnvironmentId,
+    ) => Atom.Atom<ReadonlyArray<string> | null>;
+    readonly hiddenThreadKeysAtom: Atom.Atom<ReadonlySet<string>>;
+    readonly liveThreadRefsAtom: Atom.Atom<ReadonlyArray<ScopedThreadRef>>;
+    readonly anyEnvironmentHidingAtom: Atom.Atom<boolean>;
     readonly labelPrefix: string;
     readonly shellStateValueAtom: (
       environmentId: EnvironmentId,
@@ -268,7 +316,36 @@ export function createRecentArchivedThreadsAtoms<R, E, FE>(
         }
       }
 
-      return { snapshots, error, isLoading };
+      const hidingAnywhere = get(options.anyEnvironmentHidingAtom);
+      const hidden = hiddenThreadKeys(
+        snapshots.map(({ environmentId, threads }) => ({
+          environmentId,
+          threads: threads.map((thread) => thread.source),
+          hiddenTags: get(options.hiddenThreadTagsAtom(environmentId)),
+        })),
+        get(options.hiddenThreadKeysAtom),
+        hidingAnywhere ? new Set(get(options.liveThreadRefsAtom).map(threadKey)) : undefined,
+        hidingAnywhere,
+      );
+      if (hidden.size === 0) return { snapshots, error, isLoading };
+      return {
+        snapshots: snapshots.map((snapshot) => {
+          const threads = snapshot.threads.filter(
+            (thread) =>
+              !hidden.has(
+                threadKey({ environmentId: snapshot.environmentId, threadId: thread.id }),
+              ),
+          );
+          return {
+            ...snapshot,
+            threads,
+            totalArchivedCount:
+              snapshot.totalArchivedCount - (snapshot.threads.length - threads.length),
+          };
+        }),
+        error,
+        isLoading,
+      };
     }).pipe(Atom.withLabel(`${options.labelPrefix}:${key}`));
   });
 

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -628,7 +629,7 @@ const providerInstance = {
   textGeneration: {} as ProviderInstance["textGeneration"],
 } satisfies ProviderInstance;
 const PlatformTestLayer = Layer.merge(
-  NodeServices.layer,
+  Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
   Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
     resolveLink: () => Effect.die("unused title link"),
   }),
@@ -960,7 +961,7 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
       // the projection alone and runs it.
       yield* Effect.scoped(
         Effect.flatMap(ThreadArchiveScheduler.make, (restarted) => restarted.reconcilePending),
-      ).pipe(Effect.provide(NodeServices.layer));
+      ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
       const thread = yield* threadState(threadId);
       assert.isNotNull(thread.archivedAt);
       assert.equal(thread.archiveRequest?.status, "completed");
@@ -1315,7 +1316,7 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
           getThreadRecords: (threadId) =>
             Effect.fail(new OrchestratorProjectionError({ threadId })),
         }),
-        Effect.provide(NodeServices.layer),
+        Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       );
       const threadId = yield* createThread("status-read-fails");
       const failed = yield* scheduler.schedule({ threadId, afterTurn: false }).pipe(Effect.flip);
@@ -1391,7 +1392,7 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
           assert.isNotNull(thread.archivedAt);
           assert.equal(thread.archiveRequest?.status, "pending");
         }),
-      ).pipe(Effect.provide(NodeServices.layer));
+      ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
       // Released: the same commands now go through.
       yield* unarchive;
@@ -1513,7 +1514,7 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
     }).pipe(
       Effect.provide(
         McpHttpServer.toolkitRegistration(ArchiveToolkit, ArchiveToolkitHandlersLive).pipe(
-          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         ),
       ),
       Effect.scoped,

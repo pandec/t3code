@@ -8,11 +8,13 @@ import {
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { presentThreadShellFromProjection } from "@t3tools/client-runtime/state/thread-execution";
+import { parseThreadKey, threadKey } from "@t3tools/client-runtime/state/entities";
+import { visibilityParentKey } from "@t3tools/client-runtime/state/threads";
 import * as Option from "effect/Option";
 
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { useProject, useQuietThreadShell } from "../state/entities";
-import { useEnvironmentThread } from "../state/threads";
+import { environmentThreadShells, useEnvironmentThread } from "../state/threads";
 import {
   resolvePendingThreadCreation,
   pendingThreadCreationOutcomesAtom,
@@ -83,13 +85,31 @@ function useResolvedThreadSelection(params: ThreadSelectionRouteParams | undefin
     needsDetail ? (selectedThreadDetailRef?.threadId ?? null) : null,
   );
   const selectedThreadDetail = Option.getOrNull(selectedThreadDetailState.data);
-  const selectedThread =
+  const resolvedThread =
     selectedThreadShell ??
     (selectedThreadRef !== null && selectedThreadDetail !== null
       ? presentThreadShellFromProjection(selectedThreadRef.environmentId, selectedThreadDetail)
       : pendingCreation !== null
         ? pendingThreadCreationShell(pendingCreation.message)
         : null);
+  const hiddenKeys = useAtomValue(environmentThreadShells.hiddenThreadKeysAtom);
+  const hidingAnywhere = useAtomValue(environmentThreadShells.anyEnvironmentHidingAtom);
+  const parentKey =
+    resolvedThread === null
+      ? null
+      : visibilityParentKey(resolvedThread.environmentId, {
+          lineage: resolvedThread.lineage,
+          delegatedFrom: resolvedThread.delegatedFrom ?? undefined,
+        });
+  const parentShell = useQuietThreadShell(parentKey === null ? null : parseThreadKey(parentKey));
+  const isThreadHidden =
+    selectedThreadRef !== null &&
+    (hiddenKeys.has(threadKey(selectedThreadRef)) ||
+      (hidingAnywhere &&
+        selectedThreadDetailRef !== null &&
+        selectedThreadShell === null &&
+        !(parentKey !== null && parentShell !== null && !hiddenKeys.has(parentKey))));
+  const selectedThread = isThreadHidden ? null : resolvedThread;
   const resolvedCreation = resolvePendingThreadCreation({
     threadKey: selectedThreadKey,
     pending: pendingCreation,
@@ -122,8 +142,9 @@ function useResolvedThreadSelection(params: ThreadSelectionRouteParams | undefin
   return {
     selectedThreadRef,
     selectedThread,
-    selectedThreadCreation,
-    selectedThreadDetailRef,
+    isThreadHidden,
+    selectedThreadCreation: isThreadHidden ? null : selectedThreadCreation,
+    selectedThreadDetailRef: isThreadHidden ? null : selectedThreadDetailRef,
     selectedThreadProject,
     selectedEnvironmentConnection,
     selectedEnvironmentRuntime,

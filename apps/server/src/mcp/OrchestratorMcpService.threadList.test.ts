@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -105,6 +106,7 @@ const layer = OrchestratorMcpService.layer.pipe(
       ServerSettings.layerTest(),
     ),
   ),
+  Layer.provide(NodeCrypto.layer),
 );
 
 // A client signed in from outside a thread, so no calling thread is loaded.

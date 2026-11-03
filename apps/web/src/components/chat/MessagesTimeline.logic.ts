@@ -577,8 +577,6 @@ type MessagesTimelineRowContent =
       showAssistantMeta: boolean;
       /** Fork: terminal assistant message of a completed run (final-response rail). */
       isFinalAssistantResponse: boolean;
-      /** The latest finished reply of a still-running response shows only its timestamp. */
-      showAssistantTimestamp: boolean;
       showAssistantCopyButton: boolean;
       assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
@@ -2043,10 +2041,10 @@ export function deriveMessagesTimelineRows(input: {
       timelineEntry.message.role === "assistant" &&
       runIdIsActiveResponse(timelineEntry.message.runId);
 
-    const isTerminalAssistantMessage =
+    const showAssistantMeta =
       timelineEntry.message.role === "assistant" &&
-      terminalAssistantMessageIds.has(timelineEntry.message.id);
-    const showAssistantMeta = isTerminalAssistantMessage && !assistantResponseStillInProgress;
+      terminalAssistantMessageIds.has(timelineEntry.message.id) &&
+      !assistantResponseStillInProgress;
 
     nextRows.push({
       kind: "message",
@@ -2061,10 +2059,6 @@ export function deriveMessagesTimelineRows(input: {
         showAssistantMeta &&
         timelineEntry.message.runId != null &&
         input.completedRunIds?.has(timelineEntry.message.runId) === true,
-      showAssistantTimestamp:
-        isTerminalAssistantMessage &&
-        assistantResponseStillInProgress &&
-        !timelineEntry.message.streaming,
       showAssistantCopyButton: showAssistantMeta,
       assistantCopyStreaming: timelineEntry.message.streaming || assistantResponseStillInProgress,
       assistantTurnDiffSummary:
@@ -2530,7 +2524,6 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.projectedItem === bm.projectedItem &&
         a.showAssistantMeta === bm.showAssistantMeta &&
         a.isFinalAssistantResponse === bm.isFinalAssistantResponse &&
-        a.showAssistantTimestamp === bm.showAssistantTimestamp &&
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&

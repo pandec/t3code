@@ -1,3 +1,4 @@
+import { threadKey } from "@t3tools/client-runtime/state/entities";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import * as Option from "effect/Option";
@@ -25,6 +26,8 @@ const shellState = vi.hoisted(() => ({
   generation: 1,
   olderSettledCut: true,
   removed: new Set<string>(),
+  hidden: new Set<string>(),
+  hiding: false,
 }));
 vi.mock("./rpc/atomRegistry", () => ({
   appAtomRegistry: { get: (atom: { read: () => unknown }) => atom.read() },
@@ -48,7 +51,12 @@ vi.mock("./state/shell", () => ({
     }),
   },
 }));
-vi.mock("./state/threads", () => ({ environmentThreadShells: {} }));
+vi.mock("./state/threads", () => ({
+  environmentThreadShells: {
+    hiddenThreadKeysAtom: { read: () => shellState.hidden },
+    anyEnvironmentHidingAtom: { read: () => shellState.hiding },
+  },
+}));
 vi.mock("./composerDraftStore", () => ({
   useComposerDraftStore: { getState: () => ({ getDraftSession: () => null }) },
 }));
@@ -63,6 +71,8 @@ beforeEach(() => {
   shellState.generation = 1;
   shellState.olderSettledCut = true;
   shellState.removed.clear();
+  shellState.hidden.clear();
+  shellState.hiding = false;
   for (const id of ["previous", "snoozed"]) {
     shells.set(id, { archivedAt: null, snoozedUntil: null, lineage: listed });
   }
@@ -91,7 +101,10 @@ describe("resolveVisitTargetAfterPark", () => {
     ).toBeNull();
   });
 
-  it("skips a previous side chat, which the thread list hides", () => {
+  it("skips a previous hidden thread or side chat", () => {
+    shellState.hidden.add(threadKey(ref("previous")));
+    expect(resolveVisitTargetAfterPark(ref("snoozed"))).toBeNull();
+    shellState.hidden.clear();
     shells.set("previous", {
       archivedAt: null,
       snoozedUntil: null,
@@ -122,6 +135,9 @@ describe("older settled threads without a loaded shell", () => {
 
   it("are rejected once removed, after a new snapshot, or when the shell keeps every settled thread", () => {
     leave("previous");
+    shellState.hiding = true;
+    expect(resolveVisitTargetAfterPark(ref("snoozed"))).toBeNull();
+    shellState.hiding = false;
     shellState.removed.add("previous");
     expect(resolveVisitTargetAfterPark(ref("snoozed"))).toBeNull();
     shellState.removed.clear();

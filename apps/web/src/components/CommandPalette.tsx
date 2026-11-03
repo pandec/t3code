@@ -1,3 +1,4 @@
+import { threadKey } from "@t3tools/client-runtime/state/entities";
 import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-request-compatibility";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 
@@ -177,11 +178,16 @@ import {
   useProjects,
   useServerConfigs,
   useThreadShell,
+  useAnyEnvironmentHiding,
+  useHiddenThreadKeys,
+  useEnvironmentThreadRefs,
+  useVisibleThreadShells,
   useThreadShells,
   waitForProject,
 } from "../state/entities";
 import { useIsLabsPanelProject } from "../state/labs";
 import { openLabsPanel } from "./labs/labsPanelStore";
+import { visibleLinkedThreads } from "@t3tools/client-runtime/state/threads";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
   appendBrowsePathSegment,
@@ -564,6 +570,11 @@ function OpenCommandPaletteDialog(props: {
       },
   );
   const linkedThreadSearch = initialSearch.linkedThreadSearch;
+  // Rows were captured when the palette opened; drop any hidden since then.
+  const hiddenKeys = useHiddenThreadKeys();
+  const linkedEnvironmentId = linkedThreadSearch?.linkedThreads?.environmentId ?? null;
+  const hidingAnywhere = useAnyEnvironmentHiding();
+  const linkedThreadRefs = useEnvironmentThreadRefs(linkedEnvironmentId);
   const [searchState, dispatchSearch] = useReducer(reduceCommandPaletteSearchState, null, () => {
     const view = props.initialContext ? null : openIntentView(props.openIntent);
     return view
@@ -648,9 +659,15 @@ function OpenCommandPaletteDialog(props: {
   const [threadActionPane] = useState(() => useThreadSplitStore.getState().activePaneId);
   const splitSecondaryRef = useThreadSplitStore((state) => state.secondaryRef);
   const splitMounted = useThreadSplitStore((state) => state.splitMounted);
-  const currentThreadRef =
+  const paneThreadRef =
     splitMounted && threadActionPane === "secondary" ? splitSecondaryRef : routeThreadRef;
-  const currentThread = useThreadShell(currentThreadRef);
+  const paneThread = useThreadShell(paneThreadRef);
+  const currentThreadRef =
+    paneThreadRef !== null &&
+    (hiddenKeys.has(threadKey(paneThreadRef)) || (hidingAnywhere && paneThread === null))
+      ? null
+      : paneThreadRef;
+  const currentThread = currentThreadRef === null ? null : paneThread;
   // Fork (SP Labs): "Open Labs panel" is offered in threads of the labs and sp-labs projects.
   const currentThreadInLabsProject = useIsLabsPanelProject(
     currentThread?.environmentId ?? null,
@@ -686,7 +703,8 @@ function OpenCommandPaletteDialog(props: {
     if (target === null) return;
     await copyThreadReference(target);
   };
-  const threads = useThreadShells();
+  const threads = useVisibleThreadShells();
+  const allThreads = useThreadShells();
   const serverConfigs = useServerConfigs();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const providersByEnvironment = useEnvironmentProviders();
@@ -1808,7 +1826,7 @@ function OpenCommandPaletteDialog(props: {
   // shelf so search, filters and folded groups cannot change what "top" is.
   const canReorderSection = (environmentId: EnvironmentId) => serverConfigs.has(environmentId);
   const moveToTopPlan = planThreadMoveToTop({
-    threads,
+    threads: allThreads,
     threadRef: currentThreadRef,
     groups: customGroupCatalog.groups,
     now: renderNow.toISOString(),
@@ -2578,6 +2596,13 @@ function OpenCommandPaletteDialog(props: {
       isLinkedThreadSearch && linkedThreadSearch?.linkedThreads
         ? buildLinkedThreadActionItems({
             ...linkedThreadSearch.linkedThreads,
+            threads: visibleLinkedThreads(
+              linkedThreadSearch.linkedThreads.threads,
+              linkedThreadSearch.linkedThreads.environmentId,
+              linkedThreadRefs,
+              hiddenKeys,
+              hidingAnywhere,
+            ),
             query: linkedThreadSearch.query,
             icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
             runThread: async (thread) => {

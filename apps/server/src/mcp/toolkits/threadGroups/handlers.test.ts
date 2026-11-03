@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -132,9 +133,15 @@ const makeLayer = (options: {
     ThreadGroupsToolkitHandlersLive,
   ).pipe(
     Layer.provide(ThreadGroupsMcpService.layer),
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provideMerge(
-      Layer.mergeAll(threads, settings, ThreadCommandExecutor.layer, NodeServices.layer),
+      Layer.mergeAll(
+        threads,
+        settings,
+        ThreadCommandExecutor.layer,
+        NodeServices.layer,
+        NodeCrypto.layer,
+      ),
     ),
   );
 };
