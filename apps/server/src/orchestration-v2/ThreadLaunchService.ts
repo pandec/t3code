@@ -1043,6 +1043,16 @@ const make = Effect.gen(function* () {
           input.initialMessage === undefined &&
           Option.isNone(launchReceipt)
         ) {
+          const existing = yield* threads
+            .getThreadShell(candidateThreadId)
+            .pipe(Effect.mapError(mapError(input, "create-thread", candidateThreadId)));
+          if (existing !== null) {
+            return yield* mapError(
+              input,
+              "create-thread",
+              candidateThreadId,
+            )("An idle lab launch requires a new thread.");
+          }
           idleLab = yield* labs
             .prepareAgentThread({
               ...workspaceStrategy,
@@ -1103,7 +1113,9 @@ const make = Effect.gen(function* () {
               ? Effect.void
               : threads.getThreadShell(candidateThreadId).pipe(
                   Effect.flatMap((shell) =>
-                    shell === null ? labs.abandonThread(reserved) : Effect.void,
+                    shell?.worktreePath !== reserved.worktreePath
+                      ? labs.abandonThread(reserved)
+                      : Effect.void,
                   ),
                   Effect.ignore,
                   Effect.forkIn(preparationScope),

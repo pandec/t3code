@@ -738,7 +738,13 @@ export const OrchestrationV2WorkspacePreparation = Schema.Union([
     branch: Schema.optional(TrimmedNonEmptyString),
     baseRef: Schema.optional(TrimmedNonEmptyString),
     purpose: TrimmedNonEmptyString,
-  }),
+  }).check(
+    Schema.makeFilter(
+      (lab) =>
+        (lab.kind === undefined) !== (lab.labId === undefined) ||
+        "Pass exactly one of kind or labId.",
+    ),
+  ),
 ]);
 export type OrchestrationV2WorkspacePreparation = typeof OrchestrationV2WorkspacePreparation.Type;
 

@@ -2715,7 +2715,7 @@ it.effect("keeps a lab run preparing until readiness succeeds", () =>
   }),
 );
 
-it.effect.each(["failed", "cancelled"] as const)(
+it.effect.each(["failed", "cancelled", "interrupted"] as const)(
   "holds lab follow-ups after $0 startup and retries in its lab",
   (ending) =>
     Effect.gen(function* () {
@@ -2758,9 +2758,19 @@ it.effect.each(["failed", "cancelled"] as const)(
         });
         if (ending === "cancelled") assert.isTrue(yield* tracker.cancel(launched.threadId));
         else {
-          yield* Deferred.succeed(proceed, undefined);
+          if (ending === "interrupted") {
+            yield* threads.dispatch({
+              type: "run.interrupt",
+              commandId: CommandId.make("lab:stop-during-preparation"),
+              threadId: launched.threadId,
+              runId: launched.projection.runs[0]!.id,
+              holdQueue: true,
+            });
+          } else yield* Deferred.succeed(proceed, undefined);
           yield* tracker.stream(launched.threadId).pipe(
-            Stream.filter((snapshot) => snapshot?.phase === "failed"),
+            Stream.filter(
+              (snapshot) => snapshot?.phase === (ending === "interrupted" ? "cancelled" : "failed"),
+            ),
             Stream.runHead,
           );
           yield* threads
@@ -2858,3 +2868,29 @@ it.effect("publishes an idle lab thread only after its lab is ready", () =>
     }).pipe(Effect.provide(harness.layer));
   }),
 );
+
+it.effect("rejects an idle lab launch for an existing thread before reserving a lab", () => {
+  const harness = makeHarness({
+    prepareLab: () =>
+      Effect.fail(
+        new LabsError({
+          reason: "cli_failed",
+          detail: "Must reject the duplicate before reservation",
+        }),
+      ),
+  });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const input = launchInput({ command: "lab:existing-root", thread: "thread:lab-existing-root" });
+    yield* launches.launch(input);
+    const error = yield* launches
+      .launch({
+        ...input,
+        commandId: CommandId.make("lab:duplicate-idle"),
+        workspaceStrategy: { type: "lab", kind: "full", purpose: "Idle" },
+      })
+      .pipe(Effect.flip);
+    assert.equal(error._tag, "ThreadLaunchError");
+    if (error._tag === "ThreadLaunchError") assert.equal(error.operation, "create-thread");
+  }).pipe(Effect.provide(harness.layer));
+});

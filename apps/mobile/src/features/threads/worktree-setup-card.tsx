@@ -211,6 +211,7 @@ function SetupDetailsSheet({
   const insets = useSafeAreaInsets();
   const [bodyHeight, setBodyHeight] = useState(0);
   const canCancel = snapshot.phase === "running" && !turnStarted;
+  const lab = snapshot.stages.some((stage) => stage.id === "lab-reservation");
   return (
     <WorktreeSetupSheet height={bodyHeight} onClose={onClose}>
       <ScrollView
@@ -244,7 +245,7 @@ function SetupDetailsSheet({
             <Button
               label="Cancel setup"
               tone="danger"
-              accessibilityLabel="Cancel worktree setup"
+              accessibilityLabel={lab ? "Cancel lab preparation" : "Cancel worktree setup"}
               onPress={() => {
                 onClose();
                 onCancel();

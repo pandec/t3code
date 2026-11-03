@@ -560,10 +560,17 @@ const make = Effect.gen(function* () {
         const { directory, environment } = yield* findLab(input.labId);
         // A retried launch finds the lab already reserved for this thread.
         if (environment.lease !== null && environment.lease.threadId === input.threadId) {
+          const branch = environment.runtime.git?.branch ?? input.branch;
+          if (branch === null || branch.trim() === "") {
+            return yield* new LabsError({
+              reason: "cli_failed",
+              detail: `Could not read the branch of reserved lab ${input.labId}; refresh its status and retry.`,
+            });
+          }
           return {
             labId: input.labId,
             worktreePath: environment.worktree,
-            branch: environment.runtime.git?.branch ?? input.branch ?? "",
+            branch,
             leaseId: environment.lease.id,
             autoBranch: false,
             lite: resolveLabKind(environment) === "lite",

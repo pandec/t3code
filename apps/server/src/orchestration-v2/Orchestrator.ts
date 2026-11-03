@@ -10498,8 +10498,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         candidate.type === "command_execution" &&
         candidate.input === WORKSPACE_PREPARATION_INPUT,
     );
+    const interruptedLab =
+      command.type === "prepared-run.fail" &&
+      run?.status === "interrupted" &&
+      run.workspacePreparation?.type === "lab";
     if (
-      run?.status !== (command.type === "prepared-run.retry" ? "failed" : "preparing") ||
+      (!interruptedLab &&
+        run?.status !== (command.type === "prepared-run.retry" ? "failed" : "preparing")) ||
       attempt === undefined ||
       rootNode === undefined ||
       providerThread === undefined ||

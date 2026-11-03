@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 import { NodeId, RunAttemptId, TrimmedNonEmptyString } from "./index.ts";
 import {
   latestProviderTurnForAttempt,
+  OrchestrationV2WorkspacePreparation,
   OrchestrationV2ProviderCapabilities,
   OrchestrationV2ProviderThread,
   OrchestrationV2ProviderThreadJson,
@@ -35,6 +36,16 @@ const decodeOrchestrationV2ProviderCapabilities = Schema.decodeUnknownSync(
 );
 
 describe("orchestration V2 contracts", () => {
+  it("requires exactly one lab selector at the workspace preparation boundary", () => {
+    const valid = Schema.is(OrchestrationV2WorkspacePreparation);
+    for (const selector of [{}, { kind: "lite", labId: "sp-lab-1" }]) {
+      expect(valid({ type: "lab", purpose: "Fix", ...selector })).toBe(false);
+    }
+    for (const selector of [{ kind: "lite" }, { labId: "sp-lab-1" }]) {
+      expect(valid({ type: "lab", purpose: "Fix", ...selector })).toBe(true);
+    }
+  });
+
   it("decodes thread event types from a newer server as skippable items", () => {
     const decodeWireItems = Schema.decodeUnknownSync(
       Schema.toCodecJson(Schema.Array(OrchestrationV2RpcSchemas.subscribeThread.output)),

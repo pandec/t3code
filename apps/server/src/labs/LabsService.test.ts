@@ -44,6 +44,7 @@ interface FakeLab {
   readonly running: boolean;
   readonly dirty: boolean;
   readonly branch: string;
+  readonly gitReadable?: boolean;
   /** A lite lab's WorkOS lender; absent for a full lab. */
   readonly lender?: string;
 }
@@ -74,7 +75,10 @@ const environment = (id: string, lab: FakeLab | null): LabEnvironment => ({
     wxt: { state: lab?.running === true ? "up" : "down", detail: "" },
     backend: { state: "unknown", detail: "" },
     extension: { state: "unverified", detail: "" },
-    git: lab === null ? null : { branch: lab.branch, commit: "abc", dirty: lab.dirty },
+    git:
+      lab === null || lab.gitReadable === false
+        ? null
+        : { branch: lab.branch, commit: "abc", dirty: lab.dirty },
     session: lab?.running === true,
     diagnosis: [],
     operation: null,
@@ -319,6 +323,11 @@ describe("LabsService", () => {
           yield* notes.acknowledge(pending.map((note) => note.id));
           yield* labs.prepareAgentThread(input);
           assert.deepEqual(yield* notes.pending(THREAD, labTurn), []);
+
+          yield* fake.setLab(prepared.labId, (lab) => ({ ...lab, gitReadable: false }));
+          const unreadable = yield* labs.prepareAgentThread(input).pipe(Effect.flip);
+          assert.equal(unreadable.reason, "cli_failed");
+          yield* fake.setLab(prepared.labId, (lab) => ({ ...lab, gitReadable: true }));
 
           // Never act on cached state: a failed status read fails the mutation.
           yield* Ref.set(fake.statusFails, true);
