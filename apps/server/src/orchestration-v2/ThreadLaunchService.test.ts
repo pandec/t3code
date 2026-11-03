@@ -1,3 +1,4 @@
+import * as LabsService from "../labs/LabsService.ts";
 import * as DocumentText from "../provider/DocumentText.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
@@ -5,6 +6,7 @@ import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as ServerConfig from "../config.ts";
 import { createPendingAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
 import * as ThreadMessageIntake from "./ThreadMessageIntake.ts";
@@ -12,6 +14,7 @@ import { assert, it, vi } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
   ChatAttachmentId,
+  LabsError,
   ComposerContextId,
   type ChatAttachment,
   CommandId,
@@ -123,6 +126,8 @@ const claudeAdapter = {
 } as ProviderAdapter.ProviderAdapterV2["Service"];
 
 interface HarnessOptions {
+  readonly prepareLab?: LabsService.LabsService["Service"]["prepareAgentThread"];
+  readonly startLab?: LabsService.LabsService["Service"]["startThread"];
   readonly liveTerminals?: ReadonlyArray<TerminalSummary>;
   readonly closeTerminal?: TerminalManager.TerminalManager["Service"]["close"];
   readonly adapters?: ReadonlyArray<ProviderAdapter.ProviderAdapterV2["Service"]>;
@@ -221,6 +226,18 @@ function makeHarness(options: HarnessOptions = {}) {
       remoteBranchExists: () => Effect.succeed(true),
       removeWorktree,
       ...options.git,
+    }),
+    Layer.mock(LabsService.LabsService)({
+      prepareAgentThread:
+        options.prepareLab ??
+        (() =>
+          Effect.succeed({
+            labId: "sp-lab-1",
+            worktreePath: "/labs/sp-lab-1",
+            branch: "feature/lab",
+            leaseId: "lease-1",
+          })),
+      startThread: options.startLab ?? (() => Effect.void),
     }),
     Layer.succeed(ProjectSetupScriptRunner.ProjectSetupScriptRunner, {
       runForThread: runSetup,
@@ -2627,4 +2644,253 @@ it.effect("replays an accepted send after the project disables the instance", ()
       assert.fail(`expected ThreadManagementProviderInstanceDisabledError, got ${fresh._tag}`);
     }
   }).pipe(Effect.provide(Layer.mergeAll(harness.layer, layerFiles)));
+});
+
+it.effect("keeps a lab run preparing until readiness succeeds", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const ready = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      startLab: () =>
+        Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(ready))),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const input = launchInput({
+        command: "launch:lab-ready",
+        thread: "thread:lab-ready",
+        message: "Fix the lab",
+        workspace: { type: "lab", kind: "lite", purpose: "Fix the lab" },
+      });
+      const launched = yield* launches.launch(input);
+      yield* Deferred.await(entered);
+      const waiting = yield* threads.getThreadProjection(launched.threadId);
+      assert.equal(waiting.runs[0]?.status, "preparing");
+      assert.equal(waiting.runs[0]?.workspacePreparation?.type, "lab");
+      assert.equal(waiting.thread.worktreePath, "/labs/sp-lab-1");
+      assert.equal(
+        (yield* tracker.get(launched.threadId))?.stages.find((stage) => stage.id === "lab-startup")
+          ?.status,
+        "running",
+      );
+      assert.isEmpty(yield* outbox.listByCommandId(CommandId.make(`${input.commandId}:release`)));
+      yield* Deferred.succeed(ready, undefined);
+      yield* tracker.stream(launched.threadId).pipe(
+        Stream.filter((snapshot) => snapshot?.phase === "done"),
+        Stream.runHead,
+      );
+      const started = yield* threads.getThreadProjection(launched.threadId);
+      assert.equal(started.runs[0]?.status, "starting");
+      assert.isUndefined(started.runs[0]?.workspacePreparation);
+      yield* threads.dispatch({
+        type: "run.interrupt",
+        commandId: CommandId.make("lab:stop-after-ready"),
+        threadId: launched.threadId,
+        runId: started.runs[0]!.id,
+      });
+      yield* threads.sendToThread({
+        projectId,
+        commandId: CommandId.make("lab:send-after-stop"),
+        threadId: launched.threadId,
+        messageId: MessageId.make("lab:send-after-stop"),
+        text: "Continue in the ready lab",
+        attachments: [],
+        mode: "auto",
+        createdBy: "user",
+        creationSource: "web",
+      });
+      assert.equal(
+        (yield* threads.getThreadProjection(launched.threadId)).runs.at(-1)?.status,
+        "starting",
+      );
+      assert.equal(harness.runSetup.mock.calls.length, 0);
+      assert.equal(harness.createWorktree.mock.calls.length, 0);
+      assert.isNotEmpty(
+        yield* outbox.listByCommandId(CommandId.make(`${input.commandId}:release`)),
+      );
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect.each(["failed", "cancelled", "interrupted"] as const)(
+  "holds lab follow-ups after $0 startup and retries in its lab",
+  (ending) =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const proceed = yield* Deferred.make<void>();
+      const fail = yield* Ref.make(true);
+      const startLab = () =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(entered, undefined);
+          yield* Deferred.await(proceed);
+          if (yield* Ref.get(fail))
+            return yield* new LabsError({
+              reason: "cli_failed",
+              detail: "Lab did not become ready",
+            });
+        });
+      const harness = makeHarness({ startLab });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+        const input = launchInput({
+          command: `launch:lab-${ending}`,
+          thread: `thread:lab-${ending}`,
+          message: "Fix the lab",
+          workspace: { type: "lab", kind: "full", purpose: "Fix" },
+        });
+        const launched = yield* launches.launch(input);
+        yield* Deferred.await(entered);
+        yield* threads.sendToThread({
+          projectId,
+          commandId: CommandId.make(`lab:follow-up:${ending}`),
+          threadId: launched.threadId,
+          messageId: MessageId.make(`lab:follow-up:${ending}`),
+          text: "Also check login",
+          attachments: [],
+          mode: "queue",
+          createdBy: "user",
+          creationSource: "web",
+        });
+        if (ending === "cancelled") assert.isTrue(yield* tracker.cancel(launched.threadId));
+        else {
+          if (ending === "interrupted") {
+            yield* threads.dispatch({
+              type: "run.interrupt",
+              commandId: CommandId.make("lab:stop-during-preparation"),
+              threadId: launched.threadId,
+              runId: launched.projection.runs[0]!.id,
+              holdQueue: true,
+            });
+          } else yield* Deferred.succeed(proceed, undefined);
+          yield* tracker.stream(launched.threadId).pipe(
+            Stream.filter(
+              (snapshot) => snapshot?.phase === (ending === "interrupted" ? "cancelled" : "failed"),
+            ),
+            Stream.runHead,
+          );
+          yield* threads
+            .streamStoredEventsFrom({
+              threadId: launched.threadId,
+              afterSequence: 0,
+              eventType: "run.updated",
+            })
+            .pipe(
+              Stream.filter(
+                (stored) =>
+                  stored.event.type === "run.updated" && stored.event.payload.status === "failed",
+              ),
+              Stream.runHead,
+            );
+        }
+        yield* threads.streamStoredEventsFrom({ threadId: launched.threadId }).pipe(
+          Stream.filter(
+            (stored) =>
+              stored.event.type === "run.updated" && stored.event.payload.queueHeld === true,
+          ),
+          Stream.runHead,
+        );
+        const stopped = yield* threads.getThreadProjection(launched.threadId);
+        assert.equal(stopped.runs[0]?.status, "failed");
+        assert.equal(stopped.runs[1]?.status, "queued");
+        assert.isTrue(stopped.runs[1]?.queueHeld);
+        assert.equal(harness.removeWorktree.mock.calls.length, 0);
+        yield* threads.sendToThread({
+          projectId,
+          commandId: CommandId.make(`lab:auto-after-failure:${ending}`),
+          threadId: launched.threadId,
+          messageId: MessageId.make(`lab:auto-after-failure:${ending}`),
+          text: "Sent normally after startup failed",
+          attachments: [],
+          mode: "auto",
+          createdBy: "user",
+          creationSource: "web",
+        });
+        const late = (yield* threads.getThreadProjection(launched.threadId)).runs.at(-1)!;
+        assert.equal(late.status, "queued");
+        assert.isTrue(late.queueHeld);
+        for (const action of ["queue.resume", "queued-run.start"] as const) {
+          const request = {
+            commandId: CommandId.make(`lab:explicit-queue:${ending}:${action}`),
+            threadId: launched.threadId,
+          };
+          const command =
+            action === "queue.resume"
+              ? { ...request, type: action }
+              : { ...request, type: action, runId: late.id };
+          assert.isTrue(Exit.isFailure(yield* threads.dispatch(command).pipe(Effect.exit)));
+        }
+        yield* Ref.set(fail, false);
+        yield* Deferred.succeed(proceed, undefined);
+        yield* launches.retryPreparation({
+          commandId: CommandId.make(`lab:retry:${ending}`),
+          threadId: launched.threadId,
+          runId: stopped.runs[0]!.id,
+        });
+        yield* tracker.stream(launched.threadId).pipe(
+          Stream.filter((snapshot) => snapshot?.phase === "done"),
+          Stream.runHead,
+        );
+        const retried = yield* threads.getThreadProjection(launched.threadId);
+        assert.equal(retried.runs[0]?.status, "starting");
+        assert.equal(retried.thread.worktreePath, "/labs/sp-lab-1");
+      }).pipe(Effect.provide(harness.layer));
+    }),
+);
+
+it.effect("publishes an idle lab thread only after its lab is ready", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const ready = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      startLab: () =>
+        Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(ready))),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const input = launchInput({
+        command: "lab:idle",
+        thread: "thread:lab-idle",
+        workspace: { type: "lab", kind: "full", purpose: "Idle lab" },
+      });
+      const preparing = yield* launches.launch(input).pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      assert.isNull(yield* threads.getThreadShell(input.threadId));
+      yield* Deferred.succeed(ready, undefined);
+      const launched = yield* Fiber.join(preparing);
+      assert.equal(launched.projection.thread.worktreePath, "/labs/sp-lab-1");
+      assert.isEmpty(launched.projection.runs);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("rejects an idle lab launch for an existing thread before reserving a lab", () => {
+  const harness = makeHarness({
+    prepareLab: () =>
+      Effect.fail(
+        new LabsError({
+          reason: "cli_failed",
+          detail: "Must reject the duplicate before reservation",
+        }),
+      ),
+  });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const input = launchInput({ command: "lab:existing-root", thread: "thread:lab-existing-root" });
+    yield* launches.launch(input);
+    const error = yield* launches
+      .launch({
+        ...input,
+        commandId: CommandId.make("lab:duplicate-idle"),
+        workspaceStrategy: { type: "lab", kind: "full", purpose: "Idle" },
+      })
+      .pipe(Effect.flip);
+    assert.equal(error._tag, "ThreadLaunchError");
+    if (error._tag === "ThreadLaunchError") assert.equal(error.operation, "create-thread");
+  }).pipe(Effect.provide(harness.layer));
 });

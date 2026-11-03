@@ -113,6 +113,7 @@ export interface TimelineRowActivityState {
   isRevertingCheckpoint: boolean;
   awaitingUser: boolean;
   isPreparingWorktree: boolean;
+  isPreparingLab?: boolean;
   latestRunId: RunId | null;
   /** User messages steered into the running turn that the agent has not read yet. */
   steerPendingMessageIds: ReadonlySet<MessageId>;

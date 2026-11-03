@@ -842,17 +842,15 @@ function delegatedTaskTerminalStatus(
   }
 }
 
-/** Failed worktree setup keeps the queue held so queued messages cannot start in the project checkout. */
+/** Failed preparation holds the queue until the worktree exists or the lab is verified. */
 function worktreeSetupPending(
   projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs">,
 ): boolean {
-  return (
-    projection.thread.worktreePath === null &&
-    projection.runs.some(
-      (run) =>
-        (run.status === "failed" || run.status === "interrupted") &&
-        run.workspacePreparation?.type === "worktree",
-    )
+  return projection.runs.some(
+    (run) =>
+      (run.status === "failed" || run.status === "interrupted") &&
+      (run.workspacePreparation?.type === "lab" ||
+        (run.workspacePreparation?.type === "worktree" && projection.thread.worktreePath === null)),
   );
 }
 
@@ -1791,6 +1789,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         );
       });
       if (
+        projection.runs.some((run) => run.workspacePreparation?.type === "lab") ||
         worktreeMissing ||
         instanceDisabledForProject(queueHeadInstanceId) ||
         (failureClass !== undefined &&
@@ -6301,16 +6300,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       (candidate) => candidate.id === projection.thread.activeProviderThreadId,
     );
     const activeRun = projection.runs.find(isActiveRun);
-    // A message queued during worktree setup can arrive after that setup failed
-    // without a worktree. It waits, held, like the messages queued before the
-    // failure, instead of starting in the project checkout.
+    // Failed lab startup blocks every send; missing worktrees retain their explicit queue guard.
     const latestRun = latestExecutedRun(projection.runs);
     const worktreeMissingRun =
       activeRun === undefined &&
-      dispatchMode.type === "queue_after_active" &&
       (latestRun?.status === "failed" || latestRun?.status === "interrupted") &&
-      latestRun.workspacePreparation?.type === "worktree" &&
-      projection.thread.worktreePath === null
+      (latestRun.workspacePreparation?.type === "lab" ||
+        (dispatchMode.type === "queue_after_active" &&
+          latestRun.workspacePreparation?.type === "worktree" &&
+          projection.thread.worktreePath === null))
         ? latestRun
         : undefined;
     const queueBehindRun = activeRun ?? worktreeMissingRun;
@@ -10500,8 +10498,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         candidate.type === "command_execution" &&
         candidate.input === WORKSPACE_PREPARATION_INPUT,
     );
+    const interruptedLab =
+      command.type === "prepared-run.fail" &&
+      run?.status === "interrupted" &&
+      run.workspacePreparation?.type === "lab";
     if (
-      run?.status !== (command.type === "prepared-run.retry" ? "failed" : "preparing") ||
+      (!interruptedLab &&
+        run?.status !== (command.type === "prepared-run.retry" ? "failed" : "preparing")) ||
       attempt === undefined ||
       rootNode === undefined ||
       providerThread === undefined ||
@@ -10619,6 +10622,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           updatedAt: now,
         },
       });
+      const { workspacePreparation: _preparation, ...preparedRun } = state.run;
       yield* emitEvent({
         type: "run.updated",
         threadId: command.threadId,
@@ -10626,7 +10630,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         nodeId: state.rootNode.id,
         providerInstanceId: state.run.providerInstanceId,
         occurredAt: now,
-        payload: { ...state.run, status: "starting" },
+        payload: {
+          ...(state.run.workspacePreparation?.type === "lab" ? preparedRun : state.run),
+          status: "starting",
+        },
       });
       yield* Ref.update(effects, (existing) => [
         ...existing,
@@ -14335,6 +14342,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             commandId: command.commandId,
             commandType: command.type,
             cause: `Thread ${command.threadId} is not active.`,
+          });
+        }
+        if (projection.runs.some((run) => run.workspacePreparation?.type === "lab")) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Retry lab preparation before resuming queued messages.",
           });
         }
         const selectedRunId = command.type === "queued-run.start" ? command.runId : undefined;

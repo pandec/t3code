@@ -49,23 +49,32 @@ export function WorktreeSetupCard(props: WorktreeSetupCardProps) {
   const now = useVisibleSecondClock(running || working);
   const failed =
     snapshot.phase === "failed" || snapshot.stages.some((stage) => stage.status === "failed");
+  const lab = snapshot.stages.some((stage) => stage.id === "lab-reservation");
   const label =
     handedOff && working
       ? `Working for ${elapsed(turnStartedAt, null, now) ?? "0s"}`
       : running
         ? handedOff
           ? "Setup continues…"
-          : "Setting up worktree…"
+          : lab
+            ? "Preparing lab…"
+            : "Setting up worktree…"
         : snapshot.phase === "cancelled"
-          ? "Worktree setup cancelled"
+          ? lab
+            ? "Lab preparation cancelled"
+            : "Worktree setup cancelled"
           : snapshot.phase === "failed"
-            ? "Worktree setup failed"
+            ? lab
+              ? "Lab preparation failed"
+              : "Worktree setup failed"
             : failed
               ? "Setup script failed"
-              : "Worktree ready";
+              : lab
+                ? "Lab ready"
+                : "Worktree ready";
 
   return (
-    <View accessibilityLabel="Worktree setup" className="py-1">
+    <View accessibilityLabel={lab ? "Lab preparation" : "Worktree setup"} className="py-1">
       <View className="min-h-11 flex-row items-center gap-2 border-b border-border px-1">
         <HeaderLabel
           label={label}
@@ -85,7 +94,9 @@ export function WorktreeSetupCard(props: WorktreeSetupCardProps) {
           accessibilityLabel={
             backgroundSetup
               ? `Background setup is still running: ${scriptName}. Show setup progress.`
-              : "Worktree setup details"
+              : lab
+                ? "Lab preparation details"
+                : "Worktree setup details"
           }
           accessibilityState={{ expanded: detailsOpen }}
           onPress={() => setDetailsOpen(true)}
@@ -200,6 +211,7 @@ function SetupDetailsSheet({
   const insets = useSafeAreaInsets();
   const [bodyHeight, setBodyHeight] = useState(0);
   const canCancel = snapshot.phase === "running" && !turnStarted;
+  const lab = snapshot.stages.some((stage) => stage.id === "lab-reservation");
   return (
     <WorktreeSetupSheet height={bodyHeight} onClose={onClose}>
       <ScrollView
@@ -233,7 +245,7 @@ function SetupDetailsSheet({
             <Button
               label="Cancel setup"
               tone="danger"
-              accessibilityLabel="Cancel worktree setup"
+              accessibilityLabel={lab ? "Cancel lab preparation" : "Cancel worktree setup"}
               onPress={() => {
                 onClose();
                 onCancel();

@@ -2,7 +2,6 @@ import * as ProviderRegistry from "../../../provider/ProviderRegistry.ts";
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
-  LabsError,
   OrchestratorMcpFailure,
   ProjectId,
   ProviderInstanceId,
@@ -55,7 +54,6 @@ const clientLaunchHarness = (input: {
   readonly launched: Array<ThreadLaunch.ThreadLaunchInput>;
   readonly workspaceRoot?: string;
   readonly checkWorktreeBase?: ThreadLaunch.ThreadLaunchService["Service"]["checkWorktreeBase"];
-  readonly prepareAgentThread?: LabsService.LabsService["Service"]["prepareAgentThread"];
   readonly abandoned?: Array<{ readonly labId: string; readonly leaseId: string }>;
   /** The launch is rejected before any thread exists. */
   readonly providerDisabled?: boolean;
@@ -177,9 +175,6 @@ const clientLaunchHarness = (input: {
     Layer.mock(PeerForwarding.PeerForwarding)({}),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
     Layer.mock(LabsService.LabsService)({
-      ...(input.prepareAgentThread === undefined
-        ? {}
-        : { prepareAgentThread: input.prepareAgentThread }),
       abandonThread: (abandoned) => Effect.sync(() => void input.abandoned?.push(abandoned)),
     }),
     Layer.mock(ThreadGroupsMcpService.ThreadGroupsMcpService)({
@@ -482,24 +477,12 @@ it.effect("a retried launch replays after the project loses its default model", 
   }),
 );
 
-it.effect("a lab launch reserves the lab for the new thread before binding its worktree", () =>
+it.effect("a lab launch persists its preparation before reserving a lab", () =>
   Effect.gen(function* () {
     const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
-    const prepared: Array<LabsService.LabsAgentThreadInput> = [];
     const { projectId, dependencies } = clientLaunchHarness({
       runtimeModeCeiling: "full-access",
       launched,
-      prepareAgentThread: (input) => {
-        prepared.push(input);
-        return input.kind === "full"
-          ? Effect.fail(new LabsError({ reason: "not_found", detail: "No full lab is free." }))
-          : Effect.succeed({
-              labId: "sp-lab-6",
-              worktreePath: "/labs/sp-lab-6",
-              branch: "t3/abc",
-              leaseId: "lease-1",
-            });
-      },
     });
     const toolkit = yield* ProjectToolkit.pipe(
       Effect.provide(
@@ -510,21 +493,8 @@ it.effect("a lab launch reserves the lab for the new thread before binding its w
       toolkit
         .handle("t3_thread_launch", params)
         .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
-
     yield* handle({ title: "Fix", projectId, lab: { kind: "lite" } });
-    expect(prepared[0]).toMatchObject({ projectId, kind: "lite", purpose: "Fix" });
-    expect(launched[0]?.threadId).toBe(prepared[0]?.threadId);
-    expect(launched[0]?.workspaceStrategy).toEqual({
-      type: "existing_worktree",
-      worktreePath: "/labs/sp-lab-6",
-      branch: "t3/abc",
-    });
-
-    const busy = yield* handle({ title: "Fix", projectId, lab: { kind: "full" } });
-    expect(busy.at(-1)?.result).toMatchObject({
-      code: "invalid_request",
-      message: "No full lab is free. No thread was created.",
-    });
+    expect(launched[0]?.workspaceStrategy).toEqual({ type: "lab", kind: "lite", purpose: "Fix" });
     const mixed = yield* handle({
       title: "Fix",
       projectId,
@@ -534,44 +504,6 @@ it.effect("a lab launch reserves the lab for the new thread before binding its w
     expect(mixed.at(-1)?.result).toMatchObject({ code: "invalid_request" });
     expect(launched).toHaveLength(1);
   }),
-);
-
-it.effect("a lab launch rejected before its thread exists gives the lab back", () =>
-  Effect.forEach([{ providerDisabled: true }, { refusedByCeiling: true as const }], (rejection) =>
-    Effect.gen(function* () {
-      const abandoned: Array<{ readonly labId: string; readonly leaseId: string }> = [];
-      const { projectId, dependencies } = clientLaunchHarness({
-        runtimeModeCeiling: "full-access",
-        launched: [],
-        abandoned,
-        ...rejection,
-        prepareAgentThread: () =>
-          Effect.succeed({
-            labId: "sp-lab-6",
-            worktreePath: "/labs/sp-lab-6",
-            branch: "t3/abc",
-            leaseId: "lease-1",
-          }),
-      });
-      const toolkit = yield* ProjectToolkit.pipe(
-        Effect.provide(
-          McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(
-            Layer.provide(dependencies),
-          ),
-        ),
-      );
-      const result = yield* toolkit
-        .handle("t3_thread_launch", { title: "Fix", projectId, lab: { kind: "lite" } })
-        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
-      expect(result.at(-1)?.result).toMatchObject({
-        code: "invalid_request",
-        ...("refusedByCeiling" in rejection
-          ? { message: "Example Corp limits threads to Supervised." }
-          : {}),
-      });
-      expect(abandoned).toEqual([{ labId: "sp-lab-6", leaseId: "lease-1" }]);
-    }),
-  ),
 );
 
 it.effect("a launch binds only an existing checkout that is one of the project's worktrees", () =>

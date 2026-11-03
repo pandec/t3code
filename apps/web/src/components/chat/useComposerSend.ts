@@ -72,13 +72,12 @@ import {
   useThreadOutboxStore,
   type PendingThreadSubmission,
 } from "../../state/threadOutbox";
-import { labsEnvironment, readLabsSnapshot } from "~/state/labs";
+import { readLabsSnapshot } from "~/state/labs";
 import {
   resolveLabBranchRequest,
   resolveLabPurpose,
   resolveLabSendTarget,
 } from "../labs/labs.logic";
-import { useAtomCommand } from "../../state/use-atom-command";
 import type { QueuedRunsControlHandle } from "./QueuedRunsControl";
 import { resolvePlanFollowUpSubmission } from "../../proposedPlan";
 import { type ChatMessage } from "../../types";
@@ -371,8 +370,6 @@ export function useComposerSend(input: ComposerSendInput) {
   const { attemptArchiveThread } = useThreadActions();
   const customGroupCatalog = useThreadGroupCatalog();
   const setKeepFullHistoryOverride = useKeepFullHistoryOverrideStore((state) => state.setOverride);
-  // Fork (SP Labs): a Lab-mode first send reserves its lab before launching.
-  const prepareLabThread = useAtomCommand(labsEnvironment.prepareThread, { reportFailure: false });
   const planModeEnabled = useEnvironmentSettings(environmentId, selectPlanModeEnabled);
   const startThreadTurn = useOrchestrationCommand(threadEnvironment.startTurn, {
     reportFailure: false,
@@ -1036,7 +1033,7 @@ export function useComposerSend(input: ComposerSendInput) {
       setThreadError(threadIdForSend, "Select a base branch before sending in New worktree mode.");
       return;
     }
-    // Fork (SP Labs): a Lab-mode first send reserves its lab, then launches into its worktree.
+    // Fork (SP Labs): persist lab preparation with the first message.
     let labSendRequest: {
       readonly labId: string;
       readonly branch: string | null;
@@ -1401,14 +1398,17 @@ export function useComposerSend(input: ComposerSendInput) {
       setSetupQueueSendThreadKey(activeThreadKey);
     } else {
       beginLocalDispatch({
-        preparingWorktree: multipleModelSelections !== null || Boolean(baseBranchForWorktree),
+        preparingWorktree:
+          multipleModelSelections !== null ||
+          Boolean(baseBranchForWorktree) ||
+          labSendRequest !== null,
         submissionIntent:
           submissionIntent === "background" && !isLocalDraftThread
             ? "foreground"
             : submissionIntent,
       });
       beginWorktreeSetup(
-        multipleModelSelections === null && baseBranchForWorktree
+        multipleModelSelections === null && (baseBranchForWorktree || labSendRequest !== null)
           ? { environmentId: activeThread.environmentId, threadId: threadIdForSend }
           : null,
       );
@@ -1571,29 +1571,11 @@ export function useComposerSend(input: ComposerSendInput) {
       }
     }
 
-    // Fork (SP Labs): reserve the lab only once everything else is ready. A failure keeps the
-    // composer content (the failure path below restores it) and launches nothing.
-    let labWorkspace: { readonly worktreePath: string; readonly branch: string } | null = null;
-    if (failure === null && labSendRequest !== null) {
-      const prepared = await prepareLabThread({
-        environmentId,
-        input: {
-          threadId: threadIdForSend,
-          labId: labSendRequest.labId,
-          branch: labSendRequest.branch,
-          baseRef: labSendRequest.baseRef,
-          purpose: resolveLabPurpose(trimmed, title),
-        },
-      });
-      if (prepared._tag === "Failure") failure = prepared;
-      else labWorkspace = prepared.value;
-    }
-
     let backgroundDraftOpened = false;
     let turnStartSucceeded = false;
     if (failure === null && turnAttachmentsResult._tag === "Success") {
       const bootstrap =
-        isLocalDraftThread || baseBranchForWorktree
+        isLocalDraftThread || baseBranchForWorktree || labSendRequest !== null
           ? {
               ...(isLocalDraftThread
                 ? {
@@ -1603,10 +1585,23 @@ export function useComposerSend(input: ComposerSendInput) {
                       modelSelection: threadCreateModelSelection,
                       runtimeMode,
                       interactionMode: sendInteractionMode,
-                      branch: labWorkspace?.branch ?? activeThreadBranch,
-                      worktreePath: labWorkspace?.worktreePath ?? activeThread.worktreePath,
+                      branch: activeThreadBranch,
+                      worktreePath: activeThread.worktreePath,
                       createdAt: activeThread.createdAt,
                       ...creationGroupFields,
+                    },
+                  }
+                : {}),
+              ...(labSendRequest !== null
+                ? {
+                    prepareLab: {
+                      type: "lab" as const,
+                      labId: labSendRequest.labId,
+                      ...(labSendRequest.branch === null ? {} : { branch: labSendRequest.branch }),
+                      ...(labSendRequest.baseRef === null
+                        ? {}
+                        : { baseRef: labSendRequest.baseRef }),
+                      purpose: resolveLabPurpose(trimmed, title),
                     },
                   }
                 : {}),

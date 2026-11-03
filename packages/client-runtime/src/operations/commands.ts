@@ -181,6 +181,10 @@ interface StartThreadBootstrap {
     readonly branch?: string;
     readonly startFromOrigin?: boolean;
   };
+  readonly prepareLab?: Extract<
+    import("@t3tools/contracts").OrchestrationV2WorkspacePreparation,
+    { readonly type: "lab" }
+  >;
   readonly runSetupScript?: boolean;
 }
 
@@ -761,12 +765,14 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
   );
   const bootstrap = input.bootstrap?.createThread;
   const prepareWorktree = input.bootstrap?.prepareWorktree;
-  if (bootstrap !== undefined || prepareWorktree !== undefined) {
+  const prepareLab = input.bootstrap?.prepareLab;
+  if (bootstrap !== undefined || prepareWorktree !== undefined || prepareLab !== undefined) {
     const existingProjection =
       bootstrap === undefined ? yield* getProjection(input.threadId) : null;
     const thread = bootstrap ?? existingProjection!.thread;
     const workspaceStrategy =
-      prepareWorktree !== undefined
+      prepareLab ??
+      (prepareWorktree !== undefined
         ? {
             type: "worktree" as const,
             baseRef: prepareWorktree.baseBranch,
@@ -786,7 +792,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
               ...(bootstrap?.branch === null || bootstrap?.branch === undefined
                 ? {}
                 : { branch: bootstrap.branch }),
-            };
+            });
     return yield* request(ORCHESTRATION_V2_WS_METHODS.launchThread, {
       commandId,
       creationSource: input.creationSource ?? "web",

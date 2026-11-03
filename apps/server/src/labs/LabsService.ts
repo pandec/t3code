@@ -69,6 +69,7 @@ const DEFAULT_SP_LABS_RELATIVE_DIRECTORY = "SynologyDrive/AIMac/repos/sp-labs";
 
 /** Hidden note kinds (see ThreadHiddenNotes). */
 const labNoteKind = (leaseId: string) => `sp-labs:lab:${leaseId}`;
+const readyNoteKind = (leaseId: string) => `sp-labs:ready:${leaseId}`;
 const UP_FAILED_NOTE_KIND = "sp-labs:up-failed";
 
 const TIMEOUTS = {
@@ -121,7 +122,12 @@ export class LabsService extends Context.Service<
     readonly prepareThread: (
       input: LabsPrepareThreadInput,
     ) => Effect.Effect<LabsPrepareThreadResult, LabsError>;
-    /** `prepareThread` for agent launches, which name a kind instead of reading the panel. */
+    readonly startThread: (input: {
+      readonly threadId: ThreadId;
+      readonly labId: string;
+      readonly leaseId: string;
+    }) => Effect.Effect<void, LabsError>;
+    /** Reserves a named lab or the first free lab of a kind; launch preparation starts it separately. */
     readonly prepareAgentThread: (
       input: LabsAgentThreadInput,
     ) => Effect.Effect<LabsPrepareThreadResult, LabsError>;
@@ -182,8 +188,8 @@ const labThreadNote = (input: {
   [
     [
       `This thread runs in ${input.labId} (worktree ${input.worktreePath}, branch ${input.branch}${input.autoBranch ? ", which T3 renames to match the task" : ""}), reserved for this thread by T3 Code.`,
+      `This is a ${input.lite ? "lite" : "full"} lab.`,
       "Do not run `sp-labs acquire`.",
-      "The lab's dev stack is starting and will be available shortly; you will be told if it fails.",
       `When done: commit, then \`sp-labs down ${input.labId}\` and \`sp-labs release ${input.labId}\` (pass --handoff only for surprising state).`,
       "Run `sp-labs status` for the lab's handoff note and persona-plan warnings.",
     ].join(" "),
@@ -437,12 +443,23 @@ const make = Effect.gen(function* () {
   const runUp = (
     labId: string,
     action: "up" | "restart-wxt",
+    expectedOwner?: { readonly threadId: ThreadId; readonly leaseId: string },
   ): Effect.Effect<LabsActionResult, LabsError> =>
     mutate(
       labId,
       action === "up" ? "starting" : "restarting-wxt",
       Effect.gen(function* () {
         const { directory, environment } = yield* findLab(labId);
+        if (
+          expectedOwner !== undefined &&
+          (environment.lease?.id !== expectedOwner.leaseId ||
+            environment.lease.threadId !== expectedOwner.threadId)
+        ) {
+          return yield* new LabsError({
+            reason: "invalid_input",
+            detail: `This thread no longer holds ${labId}.`,
+          });
+        }
         const outcome = yield* cli
           .run({
             directory,
@@ -527,8 +544,8 @@ const make = Effect.gen(function* () {
       ? runUp(input.envId, input.action)
       : runSimple(input.envId, input.action, input.note);
 
-  const prepareThread: LabsService["Service"]["prepareThread"] = Effect.fn(
-    "LabsService.prepareThread",
+  const reserveThread: LabsService["Service"]["prepareThread"] = Effect.fn(
+    "LabsService.reserveThread",
   )(function* (input) {
     if (input.branch === null && input.baseRef === null) {
       return yield* new LabsError({
@@ -543,15 +560,21 @@ const make = Effect.gen(function* () {
         const { directory, environment } = yield* findLab(input.labId);
         // A retried launch finds the lab already reserved for this thread.
         if (environment.lease !== null && environment.lease.threadId === input.threadId) {
+          const branch = environment.runtime.git?.branch ?? input.branch;
+          if (branch === null || branch.trim() === "") {
+            return yield* new LabsError({
+              reason: "cli_failed",
+              detail: `Could not read the branch of reserved lab ${input.labId}; refresh its status and retry.`,
+            });
+          }
           return {
             labId: input.labId,
             worktreePath: environment.worktree,
-            branch: environment.runtime.git?.branch ?? input.branch ?? "",
+            branch,
             leaseId: environment.lease.id,
             autoBranch: false,
             lite: resolveLabKind(environment) === "lite",
             lender: environment.lender,
-            stackStopped: isLabStackStopped(environment.runtime),
             handoff: environment.handoff,
             // `status --runtime` does not carry the plan check; the note points at `sp-labs status`.
             personaPlanWarnings: [],
@@ -585,7 +608,6 @@ const make = Effect.gen(function* () {
           autoBranch: input.branch === null,
           lite: resolveLabKind(environment) === "lite",
           lender: environment.lender,
-          stackStopped: true,
           handoff: acquired.handoff ?? null,
           personaPlanWarnings: acquired.personaPlans?.warnings ?? [],
         };
@@ -610,17 +632,63 @@ const make = Effect.gen(function* () {
           }),
         ),
       );
-    // The agent starts right away; `up` runs beside it and reports through the snapshot.
-    const operation = (yield* Ref.get(t3State))[input.labId]?.operation ?? null;
-    if (prepared.stackStopped && operation !== "starting") {
-      yield* runUp(input.labId, "up").pipe(Effect.ignore, Effect.forkIn(scope));
-    }
     return {
       labId: prepared.labId,
       worktreePath: prepared.worktreePath,
       branch: prepared.branch,
       leaseId: prepared.leaseId,
     };
+  });
+
+  const startThread: LabsService["Service"]["startThread"] = Effect.fn("LabsService.startThread")(
+    function* (input) {
+      const requireOwner = Effect.gen(function* () {
+        const { environment } = yield* findLab(input.labId);
+        if (
+          environment.lease?.id !== input.leaseId ||
+          environment.lease.threadId !== input.threadId
+        ) {
+          return yield* new LabsError({
+            reason: "invalid_input",
+            detail: `This thread no longer holds ${input.labId}.`,
+          });
+        }
+        return environment;
+      });
+      const result = yield* runUp(input.labId, "up", input);
+      if (!result.ok) {
+        return yield* new LabsError({
+          reason: "cli_failed",
+          detail: result.detail ?? "Lab startup failed.",
+        });
+      }
+      const environment = yield* requireOwner;
+      yield* hiddenNotes
+        .put({
+          threadId: input.threadId,
+          kind: readyNoteKind(input.leaseId),
+          text: `The ${resolveLabKind(environment)} lab ${input.labId} is ready: its dev stack is running and its browser extension passed the identity check.`,
+          worktreePath: environment.worktree,
+          once: true,
+        })
+        .pipe(
+          Effect.mapError(
+            () =>
+              new LabsError({
+                reason: "cli_failed",
+                detail: "Could not record the lab readiness note.",
+              }),
+          ),
+        );
+    },
+  );
+
+  const prepareThread: LabsService["Service"]["prepareThread"] = Effect.fn(
+    "LabsService.prepareThread",
+  )(function* (input) {
+    const prepared = yield* reserveThread(input);
+    yield* startThread({ threadId: input.threadId, ...prepared });
+    return prepared;
   });
 
   const prepareAgentThread: LabsService["Service"]["prepareAgentThread"] = Effect.fn(
@@ -651,6 +719,10 @@ const make = Effect.gen(function* () {
       }
       const labId =
         input.labId ??
+        state.environments.find(
+          (environment) =>
+            environment.lease?.threadId === input.threadId && resolveLabKind(environment) === kind,
+        )?.id ??
         (kind === undefined
           ? undefined
           : findFreeLab(
@@ -667,7 +739,7 @@ const make = Effect.gen(function* () {
           detail: `No ${kind} lab ${taken.size === 0 ? "is free" : "could be reserved"}. Free labs: ${free.length === 0 ? "none" : free.map((lab) => `${resolveLabKind(lab)} ${lab.id}`).join(", ")}.`,
         });
       }
-      const prepared = yield* prepareThread({
+      const prepared = yield* reserveThread({
         threadId: input.threadId,
         labId,
         branch: input.branch ?? null,
@@ -774,8 +846,9 @@ const make = Effect.gen(function* () {
         const owner = lease.threadId;
         if (owner !== null) {
           const threadId = ThreadId.make(owner);
-          yield* Effect.forEach([labNoteKind(lease.id), UP_FAILED_NOTE_KIND], (kind) =>
-            hiddenNotes.remove({ threadId, kind }),
+          yield* Effect.forEach(
+            [labNoteKind(lease.id), readyNoteKind(lease.id), UP_FAILED_NOTE_KIND],
+            (kind) => hiddenNotes.remove({ threadId, kind }),
           ).pipe(Effect.ignore);
         }
         return { status: "released" as const, labId: input.labId, handoff: released.handoff };
@@ -886,6 +959,7 @@ const make = Effect.gen(function* () {
   );
 
   return LabsService.of({
+    startThread,
     subscribe,
     getInventory,
     prepareThread,
