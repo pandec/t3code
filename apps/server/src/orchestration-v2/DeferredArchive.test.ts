@@ -123,6 +123,12 @@ describe("planArchiveSchedule", () => {
     const waiting = schedule({ pendingBackgroundTasks: [{ kind: "subagent" }] });
     assert.equal(waiting.type, "pending");
     assert.isTrue(waiting.type === "pending" && waiting.request.runId === null);
+    for (const pendingBackgroundTasks of [
+      [{ kind: "subagent" as const }],
+      [{ kind: "command" as const }],
+    ]) {
+      assert.equal(schedule({ pendingBackgroundTasks, onlyIfIdle: true }).type, "reject");
+    }
   });
 
   it("waits on the active run only when scheduled after the turn", () => {
@@ -902,6 +908,120 @@ const threadState = (threadId: ThreadId) =>
   });
 
 it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
+  it.effect(
+    "archives finished descendants through archived ancestors and reports active or denied descendants",
+    () =>
+      Effect.gen(function* () {
+        const scheduler = yield* ThreadArchiveScheduler.ThreadArchiveScheduler;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const root = yield* createThread("tree-root");
+        const child = Effect.fn("test.createArchiveDescendant")(function* (
+          name: string,
+          parent: ThreadId,
+          relationship: "fork" | "subagent",
+        ) {
+          const id = yield* createThread(name);
+          const thread = yield* threadState(id);
+          const now = yield* DateTime.now;
+          yield* eventSink.commitCommand({
+            commandId: CommandId.make(`${name}-lineage`),
+            threadId: id,
+            commandType: "thread.create",
+            acceptedAt: now,
+            events: [
+              {
+                id: EventId.make(`${name}-lineage`),
+                type: "thread.metadata-updated",
+                threadId: id,
+                occurredAt: now,
+                payload: {
+                  ...thread,
+                  lineage: {
+                    parentThreadId: parent,
+                    rootThreadId: root,
+                    relationshipToParent: relationship,
+                  },
+                },
+              },
+            ],
+            effects: [],
+          });
+          return id;
+        });
+        const finished = yield* child("tree-finished", root, "subagent");
+        const bridge = yield* child("tree-bridge", root, "fork");
+        const nested = yield* child("tree-nested", bridge, "subagent");
+        const deletedBridge = yield* child("tree-deleted", root, "fork");
+        const surviving = yield* child("tree-surviving", deletedBridge, "fork");
+        yield* orchestrator.dispatch({
+          type: "thread.delete",
+          commandId: CommandId.make("tree-delete-bridge"),
+          threadId: deletedBridge,
+        });
+        const running = yield* child("tree-running", root, "fork");
+        const denied = yield* child("tree-denied", root, "fork");
+        const racing = yield* child("tree-racing", root, "fork");
+        const unrelated = yield* createThread("tree-unrelated");
+        yield* scheduler.schedule({ threadId: bridge, afterTurn: false });
+        yield* sendMessage(running, "tree-running", { type: "start_immediately" });
+        const result = yield* scheduler.schedule({
+          threadId: root,
+          afterTurn: true,
+          includeDescendants: true,
+          authorizeDescendant: (thread) =>
+            thread.id === denied
+              ? Effect.fail({ message: "Outside caller modes" })
+              : thread.id === racing
+                ? sendMessage(racing, "tree-racing", { type: "start_immediately" }).pipe(
+                    Effect.asVoid,
+                    Effect.provideService(Orchestrator.OrchestratorV2, orchestrator),
+                  )
+                : Effect.void,
+        });
+        assert.isNotNull(result.archivedAt);
+        for (const id of [finished, nested, surviving])
+          assert.isNotNull((yield* scheduler.status(id)).archivedAt);
+        for (const id of [running, denied, racing, unrelated]) {
+          const status = yield* scheduler.status(id);
+          assert.isNull(status.archivedAt);
+          assert.isNull(status.request);
+        }
+        assert.sameDeepMembers(
+          result.descendants?.map(({ threadId, outcome }) => ({ threadId, outcome })) ?? [],
+          [
+            { threadId: finished, outcome: "archived" },
+            { threadId: nested, outcome: "archived" },
+            { threadId: surviving, outcome: "archived" },
+            { threadId: running, outcome: "skipped" },
+            { threadId: denied, outcome: "skipped" },
+            { threadId: racing, outcome: "skipped" },
+          ],
+        );
+        assert.include(
+          result.descendants?.find((entry) => entry.threadId === running),
+          { state: "starting", outcome: "skipped" },
+        );
+        yield* resetRemoval({ blocker: "The worktree is still shared." });
+        const refused = yield* scheduler
+          .schedule({
+            threadId: root,
+            afterTurn: true,
+            includeDescendants: true,
+            removeWorktree: true,
+            authorizeDescendant: (thread) =>
+              thread.id === denied
+                ? Effect.fail({ message: `Outside caller modes${"x".repeat(5000)}` })
+                : Effect.void,
+          })
+          .pipe(Effect.flip);
+        assert.include(refused.detail, `${running} ("tree-running", starting)`);
+        assert.include(refused.detail, `${denied} ("tree-denied", idle): Outside caller modes`);
+        assert.isBelow(refused.detail.length, 2000);
+        assert.isNull((yield* scheduler.status(running)).request);
+      }),
+  );
+
   it.effect("archives an idle thread immediately and records the completed request", () =>
     Effect.gen(function* () {
       const scheduler = yield* ThreadArchiveScheduler.ThreadArchiveScheduler;

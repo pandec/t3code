@@ -3102,6 +3102,8 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     /** Required to schedule while a run is active; otherwise only idle threads qualify. */
     afterTurn: Schema.Boolean,
+    /** Bulk cleanup must skip active descendants, never schedule their future archive. */
+    onlyIfIdle: Schema.optional(Schema.Boolean),
     /** Remove the thread's clean, unshared worktree after archiving; its branch is kept. */
     removeWorktree: Schema.optional(Schema.Boolean),
   }),

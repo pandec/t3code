@@ -658,7 +658,14 @@ const make = Effect.gen(function* () {
               kind,
             )?.id);
       if (labId === undefined) {
-        return yield* new LabsError({ reason: "not_found", detail: `No ${kind} lab is free.` });
+        const free = state.environments.filter((lab) => {
+          const labKind = resolveLabKind(lab);
+          return labKind !== null && findFreeLab([lab], labKind) !== undefined;
+        });
+        return yield* new LabsError({
+          reason: "not_found",
+          detail: `No ${kind} lab ${taken.size === 0 ? "is free" : "could be reserved"}. Free labs: ${free.length === 0 ? "none" : free.map((lab) => `${resolveLabKind(lab)} ${lab.id}`).join(", ")}.`,
+        });
       }
       const prepared = yield* prepareThread({
         threadId: input.threadId,

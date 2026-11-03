@@ -13,6 +13,7 @@ import type {
   OrchestrationV2PendingBackgroundTask,
   OrchestrationV2Run,
   OrchestrationV2ThreadArchiveRequest,
+  OrchestrationV2ThreadShell,
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -21,8 +22,31 @@ import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 import type { EffectOutboxV2Shape } from "./EffectOutbox.ts";
+
+const encodeDiagnosticTitle = Schema.encodeSync(Schema.fromJsonString(Schema.String));
+const shortenDiagnostic = (text: string, limit: number) =>
+  text.length > limit ? `${text.slice(0, limit)}…` : text;
+
+/** Error summaries stay small; the bulk archive success result retains every outcome. */
+export function formatArchiveThreadDetails(
+  threads: ReadonlyArray<
+    Pick<OrchestrationV2ThreadShell, "id" | "title" | "status"> & {
+      readonly detail?: string | undefined;
+    }
+  >,
+): string {
+  if (threads.length === 0) return "none";
+  const listed = threads.slice(0, 10).map((thread) => {
+    const title = encodeDiagnosticTitle(shortenDiagnostic(thread.title, 80));
+    const detail = thread.detail === undefined ? "" : `: ${shortenDiagnostic(thread.detail, 160)}`;
+    return `${thread.id} (${title}, ${thread.status})${detail}`;
+  });
+  const omitted = threads.length - listed.length;
+  return `${threads.length} thread${threads.length === 1 ? "" : "s"}: ${listed.join("; ")}${omitted > 0 ? `; and ${omitted} more` : ""}`;
+}
 
 export type ArchiveRun = Pick<
   OrchestrationV2Run,
@@ -223,6 +247,7 @@ export function planArchiveSchedule(input: {
     Pick<OrchestrationV2PendingBackgroundTask, "kind" | "awaited">
   >;
   readonly afterTurn: boolean;
+  readonly onlyIfIdle?: boolean;
   readonly removeWorktree?: boolean;
   readonly requestId: CommandId;
   readonly now: DateTime.Utc;
@@ -247,6 +272,14 @@ export function planArchiveSchedule(input: {
   const run = activeRun(input.runs);
   if (run !== null && !input.afterTurn) {
     return { type: "reject", detail: "The thread is running. Archive it after the turn instead." };
+  }
+  if (
+    input.onlyIfIdle === true &&
+    (run !== null ||
+      input.pendingBackgroundTasks.length > 0 ||
+      undeliveredCompletionPending(input.runs))
+  ) {
+    return { type: "reject", detail: "The thread still has active or pending background work." };
   }
   const request: OrchestrationV2ThreadArchiveRequest = {
     requestId: input.requestId,

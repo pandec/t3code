@@ -154,10 +154,18 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
         labId: Schema.optional(TrimmedNonEmptyString),
         branch: Schema.optional(TrimmedNonEmptyString),
         baseRef: Schema.optional(TrimmedNonEmptyString),
-      }).annotate({
-        description:
-          "SalesPros only; see its sp-labs skill. Runs in the first free lab of `kind`, or `labId`. `branch` alone continues it, else new from `baseRef` (master).",
-      }),
+      })
+        .check(
+          Schema.makeFilter(
+            (lab) =>
+              (lab.kind === undefined) !== (lab.labId === undefined) ||
+              "Pass exactly one of lab.kind or lab.labId; omit the other.",
+          ),
+        )
+        .annotate({
+          description:
+            "SalesPros only; see its sp-labs skill. Runs in the first free lab of `kind`, or `labId`. `branch` alone continues it, else new from `baseRef` (master).",
+        }),
     ),
     message: Schema.optional(
       Schema.String.check(Schema.isMaxLength(120000)).annotate({

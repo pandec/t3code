@@ -3,7 +3,7 @@
  * no other unarchived thread uses. Never forced (Git also keeps locked worktrees); the branch is
  * always kept. Callers get the reason a worktree was kept instead of an error.
  */
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId, OrchestrationV2ThreadShell } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -19,7 +19,7 @@ import {
   reserveWorkspace,
   withWorkspaceLease,
 } from "../workspace/workspaceLease.ts";
-import { worktreeRemovalRequest } from "./DeferredArchive.ts";
+import { formatArchiveThreadDetails, worktreeRemovalRequest } from "./DeferredArchive.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
@@ -96,20 +96,32 @@ const make = Effect.gen(function* () {
       }
     }
     const active = yield* threads.getShellSnapshot({ location: "active" });
+    const sharing: Array<OrchestrationV2ThreadShell> = [];
+    const moving: Array<OrchestrationV2ThreadShell> = [];
     for (const thread of active.threads) {
       if (thread.id === threadId || thread.deletedAt !== null) continue;
       const cwd =
         thread.worktreePath ??
         projectShells.find((project) => project.id === thread.projectId)?.workspaceRoot;
       if (cwd !== undefined && contains(root, yield* canonicalWorkspacePath(cwd))) {
-        return WORKTREE_KEPT_DETAIL.shared;
+        sharing.push(thread);
       }
       if (
         thread.worktreeSwitch?.status === "pending" &&
         contains(root, yield* canonicalWorkspacePath(thread.worktreeSwitch.targetPath))
       ) {
-        return WORKTREE_KEPT_DETAIL.pendingMove;
+        moving.push(thread);
       }
+    }
+    if (sharing.length > 0 || moving.length > 0) {
+      return [
+        ...(sharing.length > 0
+          ? [`${WORKTREE_KEPT_DETAIL.shared} ${formatArchiveThreadDetails(sharing)}.`]
+          : []),
+        ...(moving.length > 0
+          ? [`${WORKTREE_KEPT_DETAIL.pendingMove} ${formatArchiveThreadDetails(moving)}.`]
+          : []),
+      ].join(" ");
     }
     // Read the live checkout: thread metadata does not track a detached HEAD.
     const status = yield* git.statusDetailsLocal(root, { includeDivergence: false });

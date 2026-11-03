@@ -8,6 +8,7 @@ import {
   CommandId,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ThreadArchiveRequest,
+  type OrchestrationV2ThreadShell,
   type ThreadId,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
@@ -28,6 +29,7 @@ import { forkParked } from "../serverActivation.ts";
 import * as ArchiveWorktreeRemoval from "./ArchiveWorktreeRemoval.ts";
 import {
   evaluateDeferredArchive,
+  formatArchiveThreadDetails,
   isThreadPayloadEvent,
   pendingArchiveRequest,
   restartContinuationPending,
@@ -39,6 +41,13 @@ import * as ThreadManagement from "./ThreadManagementService.ts";
 export interface ThreadArchiveStatus {
   readonly archivedAt: DateTime.Utc | null;
   readonly request: OrchestrationV2ThreadArchiveRequest | null;
+  readonly descendants?: ReadonlyArray<{
+    readonly threadId: ThreadId;
+    readonly title: string;
+    readonly state: OrchestrationV2ThreadShell["status"];
+    readonly outcome: "archived" | "skipped";
+    readonly detail?: string;
+  }>;
 }
 
 export class ThreadArchiveSchedulerError extends Schema.TaggedError<ThreadArchiveSchedulerError>()(
@@ -66,6 +75,10 @@ export class ThreadArchiveScheduler extends Context.Service<
     readonly schedule: (input: {
       readonly threadId: ThreadId;
       readonly afterTurn: boolean;
+      readonly includeDescendants?: boolean;
+      readonly authorizeDescendant?: (
+        thread: OrchestrationV2ThreadShell,
+      ) => Effect.Effect<void, { readonly message: string }>;
       readonly removeWorktree?: boolean;
       readonly commandId?: CommandId;
     }) => Effect.Effect<ThreadArchiveStatus, ThreadArchiveSchedulerError>;
@@ -253,27 +266,146 @@ export const make = Effect.gen(function* () {
     Effect.andThen(worker.drain),
   );
 
-  return ThreadArchiveScheduler.of({
-    schedule: Effect.fn("ThreadArchiveScheduler.schedule")(function* (input) {
-      if (input.removeWorktree === true) {
-        const blocker = yield* worktreeRemoval.blocker(input.threadId);
-        if (blocker !== null) {
-          return yield* new ThreadArchiveSchedulerError({
+  const archiveDescendants = Effect.fn("ThreadArchiveScheduler.archiveDescendants")(function* (
+    input: Parameters<ThreadArchiveScheduler["Service"]["schedule"]>[0],
+  ) {
+    // Deleted parents retain lineage, but shell snapshots intentionally omit them.
+    const family = yield* sql<{
+      readonly thread_id: ThreadId;
+      readonly parent_thread_id: ThreadId | null;
+    }>`
+      SELECT thread_id, json_extract(payload_json, '$.lineage.parentThreadId') AS parent_thread_id
+      FROM orchestration_v2_projection_threads
+      WHERE json_extract(payload_json, '$.lineage.rootThreadId') = (
+        SELECT json_extract(payload_json, '$.lineage.rootThreadId')
+        FROM orchestration_v2_projection_threads WHERE thread_id = ${input.threadId}
+      )
+    `.pipe(
+      Effect.mapError(
+        (cause) =>
+          new ThreadArchiveSchedulerError({
             operation: "schedule",
             threadId: input.threadId,
-            detail: blocker,
-          });
-        }
+            detail: errorDetail(cause),
+          }),
+      ),
+    );
+    const children = new Map<ThreadId, Array<ThreadId>>();
+    for (const thread of family) {
+      const parent = thread.parent_thread_id;
+      if (parent === null) continue;
+      const siblings = children.get(parent) ?? [];
+      siblings.push(thread.thread_id);
+      children.set(parent, siblings);
+    }
+    const descendants: Array<ThreadId> = [];
+    const visited = new Set<ThreadId>([input.threadId]);
+    const pending = [input.threadId];
+    for (let index = 0; index < pending.length; index++) {
+      for (const threadId of children.get(pending[index]!) ?? []) {
+        if (visited.has(threadId)) continue;
+        visited.add(threadId);
+        pending.push(threadId);
+        descendants.push(threadId);
       }
-      yield* dispatch("schedule", input.threadId, {
-        type: "thread.archive.schedule",
-        commandId: input.commandId ?? (yield* newCommandId("archive-schedule", input.threadId)),
-        threadId: input.threadId,
-        afterTurn: input.afterTurn,
-        ...(input.removeWorktree === true ? { removeWorktree: true } : {}),
+    }
+    const snapshot = yield* threads
+      .getShellSnapshot({ threadIds: descendants, location: "active" })
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new ThreadArchiveSchedulerError({
+              operation: "schedule",
+              threadId: input.threadId,
+              detail: errorDetail(cause),
+            }),
+        ),
+      );
+    const active = new Map(snapshot.threads.map((thread) => [thread.id, thread]));
+    const results: Array<NonNullable<ThreadArchiveStatus["descendants"]>[number]> = [];
+    // Deepest first, so finished children no longer block their parent's cleanup.
+    for (const threadId of descendants.reverse()) {
+      const thread = active.get(threadId);
+      if (thread === undefined) continue;
+      const result = yield* (input.authorizeDescendant?.(thread) ?? Effect.void).pipe(
+        Effect.andThen(
+          dispatch("schedule", thread.id, {
+            type: "thread.archive.schedule",
+            commandId: yield* newCommandId("archive-descendant", thread.id),
+            threadId: thread.id,
+            afterTurn: false,
+            onlyIfIdle: true,
+          }),
+        ),
+        Effect.match({
+          onSuccess: () => ({ outcome: "archived" as const }),
+          onFailure: (error) => ({ outcome: "skipped" as const, detail: error.message }),
+        }),
+      );
+      const current =
+        result.outcome === "skipped"
+          ? yield* threads.getThreadShell(thread.id).pipe(Effect.orElseSucceed(() => null))
+          : thread;
+      results.push({
+        threadId: thread.id,
+        title: thread.title,
+        state: current?.status ?? thread.status,
+        ...result,
       });
-      // After dispatch: a failed read leaves the outcome unknown, not refused.
-      return yield* status(input.threadId, "status");
+    }
+    return results;
+  });
+
+  return ThreadArchiveScheduler.of({
+    schedule: Effect.fn("ThreadArchiveScheduler.schedule")(function* (input) {
+      // Verify the root exists before changing any descendants.
+      const current =
+        input.includeDescendants === true ? yield* status(input.threadId, "schedule") : undefined;
+      const descendants =
+        input.includeDescendants === true ? yield* archiveDescendants(input) : undefined;
+      if (
+        current !== undefined &&
+        current.archivedAt !== null &&
+        descendants !== undefined &&
+        input.removeWorktree !== true
+      ) {
+        return { ...current, descendants };
+      }
+      return yield* Effect.gen(function* () {
+        if (input.removeWorktree === true) {
+          const blocker = yield* worktreeRemoval.blocker(input.threadId);
+          if (blocker !== null) {
+            return yield* new ThreadArchiveSchedulerError({
+              operation: "schedule",
+              threadId: input.threadId,
+              detail: blocker,
+            });
+          }
+        }
+        yield* dispatch("schedule", input.threadId, {
+          type: "thread.archive.schedule",
+          commandId: input.commandId ?? (yield* newCommandId("archive-schedule", input.threadId)),
+          threadId: input.threadId,
+          afterTurn: input.afterTurn,
+          ...(input.removeWorktree === true ? { removeWorktree: true } : {}),
+        });
+        // After dispatch: a failed read leaves the outcome unknown, not refused.
+        return {
+          ...(yield* status(input.threadId, "status")),
+          ...(descendants === undefined ? {} : { descendants }),
+        };
+      }).pipe(
+        Effect.mapError((error) => {
+          if (descendants === undefined) return error;
+          const archived = descendants.filter((entry) => entry.outcome === "archived").length;
+          const skipped = descendants.filter((entry) => entry.outcome === "skipped");
+          return new ThreadArchiveSchedulerError({
+            operation: error.operation,
+            threadId: error.threadId,
+            detail: `${error.detail} Archived ${archived} descendants. Skipped descendants: ${formatArchiveThreadDetails(skipped.map((entry) => ({ id: entry.threadId, title: entry.title, status: entry.state, detail: entry.detail })))}.`,
+          });
+        }),
+      );
     }),
     status: Effect.fn("ThreadArchiveScheduler.status")((threadId) => status(threadId, "status")),
     recheck: enqueue,
