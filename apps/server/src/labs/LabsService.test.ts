@@ -10,9 +10,10 @@ import {
 } from "@t3tools/contracts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -47,7 +48,10 @@ interface FakeLab {
   readonly lender?: string;
 }
 
-type UpBehaviour = { readonly type: "ok" } | { readonly type: "fail"; readonly error: string };
+type UpBehaviour =
+  | { readonly type: "ok" }
+  | { readonly type: "fail"; readonly error: string }
+  | { readonly type: "wait"; readonly ready: Deferred.Deferred<void> };
 
 const environment = (id: string, lab: FakeLab | null): LabEnvironment => ({
   id,
@@ -137,6 +141,7 @@ const makeFakeCli = Effect.gen(function* () {
           if (behaviour.type === "fail") {
             return yield* new LabsError({ reason: "cli_failed", detail: behaviour.error });
           }
+          if (behaviour.type === "wait") yield* Deferred.await(behaviour.ready);
           yield* setLab(target, (lab) => ({ ...lab, running: true }));
           return { devReady: true, extension: { ok: true } };
         }
@@ -208,16 +213,6 @@ const withService = <A, E>(
 const takeCall = (fake: FakeCli, command: string) =>
   Queue.take(fake.calls).pipe(Effect.repeat({ until: (call) => call.args[0] === command }));
 
-const awaitSnapshot = (predicate: (snapshot: LabsSnapshot) => boolean) =>
-  Effect.gen(function* () {
-    const labs = yield* LabsService.LabsService;
-    return yield* labs.subscribe.pipe(
-      Stream.filter(predicate),
-      Stream.runHead,
-      Effect.map(Option.getOrThrow),
-    );
-  });
-
 describe("LabsService", () => {
   it.effect("polls status only while someone subscribes, and pushes only changes", () =>
     Effect.gen(function* () {
@@ -261,7 +256,7 @@ describe("LabsService", () => {
     }),
   );
 
-  it.effect("prepares a lab thread: acquire for the thread, first-turn note once, then up", () =>
+  it.effect("reserves a lab without starting it and restores its first-turn note on retry", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakeCli;
       yield* withService(
@@ -300,15 +295,7 @@ describe("LabsService", () => {
             "--base",
             "master",
           ]);
-          // `up` runs in the background, for the thread's lease.
-          const up = yield* takeCall(fake, "up");
-          assert.deepEqual(up.args, ["up", "sp-lab-1", "--lease", "lease-1"]);
-          const settled = yield* awaitSnapshot(
-            (snapshot) =>
-              snapshot.t3["sp-lab-1"]?.lastUp != null &&
-              snapshot.t3["sp-lab-1"]?.operation === null,
-          );
-          assert.isTrue(settled.t3["sp-lab-1"]!.lastUp!.ok);
+          assert.isFalse((yield* Queue.clear(fake.calls)).some((call) => call.args[0] === "up"));
           yield* sql`ALTER TABLE broken_notes RENAME TO fork_thread_hidden_notes`;
           const labTurn = { worktreePath: "/fake/sp-lab-1" };
           assert.deepEqual(yield* notes.pending(THREAD, labTurn), []);
@@ -323,6 +310,7 @@ describe("LabsService", () => {
           const pending = yield* notes.pending(THREAD, labTurn);
           assert.equal(pending.length, 1);
           assert.include(pending[0]!.text, "This thread runs in sp-lab-1");
+          assert.include(pending[0]!.text, "full lab");
           assert.include(pending[0]!.text, prepared.branch);
           // An older CLI prints neither a standing note nor persona plans.
           assert.notInclude(pending[0]!.text, "\n");
@@ -442,10 +430,13 @@ describe("LabsService", () => {
             });
             const continued = yield* takeCall(fake, "acquire");
             assert.deepEqual(continued.args.slice(-2), ["--branch", "feature/x"]);
-            assert.include(yield* launch({ threadId: other, kind: "full" }), {
-              reason: "not_found",
-              detail: "No full lab is free. Free labs: lite sp-lab-7.",
-            });
+            assert.include(
+              yield* launch({ threadId: ThreadId.make("another-thread"), kind: "full" }),
+              {
+                reason: "not_found",
+                detail: "No full lab is free. Free labs: lite sp-lab-7.",
+              },
+            );
 
             // A free lab taken between the pick and the acquire is skipped for the next one;
             // a named lab is never swapped.
@@ -462,16 +453,22 @@ describe("LabsService", () => {
             assert.include(yield* launch({ threadId: third, kind: "lite" }), {
               labId: "sp-lab-8",
             });
-            assert.include(yield* launch({ kind: "lite" }), {
-              reason: "not_found",
-              detail: "No lite lab is free. Free labs: none.",
-            });
+            assert.include(
+              yield* launch({ threadId: ThreadId.make("thread-no-free"), kind: "lite" }),
+              {
+                reason: "not_found",
+                detail: "No lite lab is free. Free labs: none.",
+              },
+            );
             yield* fake.setLab("sp-lab-7", (lab) => ({ ...lab, lease: null }));
             yield* Ref.set(fake.releaseAfterStatus, "sp-lab-7");
-            assert.include(yield* launch({ kind: "lite" }), {
-              reason: "not_found",
-              detail: "No lite lab could be reserved. Free labs: lite sp-lab-7.",
-            });
+            assert.include(
+              yield* launch({ threadId: ThreadId.make("thread-no-free"), kind: "lite" }),
+              {
+                reason: "not_found",
+                detail: "No lite lab could be reserved. Free labs: lite sp-lab-7.",
+              },
+            );
           }),
         );
       }),
@@ -490,7 +487,7 @@ describe("LabsService", () => {
             kind: "full",
             purpose: "Fix",
           });
-          yield* takeCall(fake, "up");
+          yield* labs.startThread({ threadId: THREAD, ...prepared });
 
           // Someone released and took the lab again before the abandon reached it.
           const newer = { ...LEASE, id: "lease-2", threadId: "someone-else" };
@@ -509,6 +506,57 @@ describe("LabsService", () => {
           assert.deepEqual(down.args, ["down", "sp-lab-1", "--lease", prepared.leaseId]);
           const release = yield* takeCall(fake, "release");
           assert.deepEqual(release.args, ["release", "sp-lab-1", "--lease", prepared.leaseId]);
+        }),
+      );
+    }),
+  );
+
+  it.effect("waits for readiness before notifying the thread and reuses its reservation", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeCli;
+      const ready = yield* Deferred.make<void>();
+      yield* Ref.set(fake.up, { type: "wait", ready });
+      yield* withService(
+        fake,
+        Effect.gen(function* () {
+          const labs = yield* LabsService.LabsService;
+          const notes = yield* ThreadHiddenNotes.ThreadHiddenNotes;
+          const input = {
+            threadId: THREAD,
+            projectId: PROJECT,
+            kind: "full" as const,
+            purpose: "Fix",
+          };
+          const prepared = yield* labs.prepareAgentThread(input);
+          const retried = yield* labs.prepareAgentThread(input);
+          assert.equal(retried.leaseId, prepared.leaseId);
+          assert.equal(retried.labId, prepared.labId);
+          const startup = yield* labs
+            .startThread({ threadId: THREAD, ...prepared })
+            .pipe(Effect.forkChild);
+          const up = yield* takeCall(fake, "up");
+          assert.deepEqual(up.args, ["up", "sp-lab-1", "--lease", "lease-1"]);
+          const turn = { worktreePath: prepared.worktreePath };
+          assert.isFalse(
+            (yield* notes.pending(THREAD, turn)).some((note) =>
+              note.text.includes("lab sp-lab-1 is ready"),
+            ),
+          );
+          yield* Deferred.succeed(ready, undefined);
+          yield* Fiber.join(startup);
+          const pending = yield* notes.pending(THREAD, turn);
+          assert.isTrue(pending.some((note) => note.text.includes("full lab sp-lab-1 is ready")));
+          yield* notes.acknowledge(pending.map((note) => note.id));
+          yield* labs.startThread({ threadId: THREAD, ...prepared });
+          assert.deepEqual(yield* notes.pending(THREAD, turn), []);
+          yield* fake.setLab(prepared.labId, (lab) => ({
+            ...lab,
+            lease: { ...LEASE, id: "other-lease", threadId: "someone-else" },
+          }));
+          yield* Queue.clear(fake.calls);
+          const lost = yield* labs.startThread({ threadId: THREAD, ...prepared }).pipe(Effect.exit);
+          assert.isTrue(Exit.isFailure(lost));
+          assert.isFalse((yield* Queue.clear(fake.calls)).some((call) => call.args[0] === "up"));
         }),
       );
     }),

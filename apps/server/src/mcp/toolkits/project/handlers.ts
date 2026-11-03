@@ -21,7 +21,6 @@ import { mutateProjectWithClone } from "../../../project/ProjectMutation.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
-import * as LabsService from "../../../labs/LabsService.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as ProviderRegistry from "../../../provider/ProviderRegistry.ts";
 import * as DateTime from "effect/DateTime";
@@ -238,23 +237,6 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             )?.supportedRuntimeModes,
           });
         }
-        // Fork (SP Labs): reserved for this thread id before the launch, as the composer does.
-        const { lab } = input;
-        const labWorkspace =
-          lab === undefined
-            ? undefined
-            : yield* LabsService.LabsService.pipe(
-                Effect.flatMap((labs) =>
-                  labs.prepareAgentThread({ ...lab, threadId, projectId, purpose: input.title }),
-                ),
-                Effect.mapError(
-                  (error) =>
-                    new OrchestratorMcpFailure({
-                      code: "invalid_request",
-                      message: `${error.message} No thread was created.`,
-                    }),
-                ),
-              );
         const result = yield* ThreadMessageIntake.launchThread({
           commandId,
           threadId,
@@ -264,13 +246,9 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           runtimeMode: startedRuntimeMode,
           interactionMode,
           workspaceStrategy:
-            labWorkspace === undefined
+            input.lab === undefined
               ? (input.workspaceStrategy ?? { type: "root" })
-              : {
-                  type: "existing_worktree",
-                  worktreePath: labWorkspace.worktreePath,
-                  branch: labWorkspace.branch,
-                },
+              : { ...input.lab, type: "lab", purpose: input.title },
           ...(input.groupId === undefined ? {} : { customGroupId: input.groupId }),
           ...(input.message === undefined && attachments.length === 0
             ? {}
@@ -288,24 +266,6 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           // Kept only alongside linkOrigin: thread.create drops it otherwise.
           ...(input.delegatedFrom === undefined ? {} : { delegatedFrom: input.delegatedFrom }),
         }).pipe(
-          // These reject the launch before any thread exists, so its lab would stay reserved.
-          Effect.tapError((error) =>
-            labWorkspace !== undefined &&
-            (error._tag === "AttachmentClaimError" ||
-              error._tag === "ThreadManagementProviderInstanceDisabledError" ||
-              // A refused initial message leaves its thread behind; a refused create does not.
-              (error._tag === "ThreadLaunchError" &&
-                error.operation === "create-thread" &&
-                isAboveCeilingError(error.cause)))
-              ? LabsService.LabsService.pipe(
-                  Effect.flatMap((labs) =>
-                    labs
-                      .abandonThread({ labId: labWorkspace.labId, leaseId: labWorkspace.leaseId })
-                      .pipe(Effect.forkDetach),
-                  ),
-                )
-              : Effect.void,
-          ),
           Effect.mapError((error) => {
             if (error._tag === "AttachmentClaimError") {
               return new OrchestratorMcpFailure({

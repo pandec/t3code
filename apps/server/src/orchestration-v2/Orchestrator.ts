@@ -846,13 +846,11 @@ function delegatedTaskTerminalStatus(
 function worktreeSetupPending(
   projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs">,
 ): boolean {
-  return (
-    projection.thread.worktreePath === null &&
-    projection.runs.some(
-      (run) =>
-        (run.status === "failed" || run.status === "interrupted") &&
-        run.workspacePreparation?.type === "worktree",
-    )
+  return projection.runs.some(
+    (run) =>
+      (run.status === "failed" || run.status === "interrupted") &&
+      (run.workspacePreparation?.type === "lab" ||
+        (run.workspacePreparation?.type === "worktree" && projection.thread.worktreePath === null)),
   );
 }
 
@@ -1760,8 +1758,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           : undefined;
       const worktreeMissing =
         failedRun?.id === options?.endedRunId &&
-        failedRun?.workspacePreparation?.type === "worktree" &&
-        projection.thread.worktreePath === null;
+        (failedRun?.workspacePreparation?.type === "lab" ||
+          (failedRun?.workspacePreparation?.type === "worktree" &&
+            projection.thread.worktreePath === null));
       const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
       const instanceDisabledForProject = (instanceId: ProviderInstanceId) => {
         const projectOverride =
@@ -6309,8 +6308,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       activeRun === undefined &&
       dispatchMode.type === "queue_after_active" &&
       (latestRun?.status === "failed" || latestRun?.status === "interrupted") &&
-      latestRun.workspacePreparation?.type === "worktree" &&
-      projection.thread.worktreePath === null
+      (latestRun.workspacePreparation?.type === "lab" ||
+        (latestRun.workspacePreparation?.type === "worktree" &&
+          projection.thread.worktreePath === null))
         ? latestRun
         : undefined;
     const queueBehindRun = activeRun ?? worktreeMissingRun;

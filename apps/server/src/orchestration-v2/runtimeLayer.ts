@@ -1,3 +1,6 @@
+import * as LabsService from "../labs/LabsService.ts";
+import * as LabsCli from "../labs/LabsCli.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import * as GuestShareService from "../guest/GuestShareService.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
@@ -299,11 +302,21 @@ export const layerProjectSetupScriptRunner = ProjectSetupScriptRunner.layer.pipe
 const layerManagedProjectFoldersProvided = ManagedProjectFolders.layer.pipe(
   Layer.provide(layerProjectService),
 );
+const layerLabsProvided = LabsService.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      LabsCli.layer.pipe(Layer.provide(ProcessRunner.layer)),
+      ThreadHiddenNotes.layer,
+      layerProjectService,
+    ),
+  ),
+);
 const layerThreadLaunchProvided = ThreadLaunchService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
       layerProjectService,
       layerProjectSetupScriptRunner,
+      layerLabsProvided,
       layerManagedProjectFoldersProvided,
       layerThreadManagementProvided,
       layerCommandReceiptStoreProvided,
@@ -414,6 +427,7 @@ export const layer = Layer.mergeAll(
 );
 
 export const layerProduction = Layer.mergeAll(
+  layerLabsProvided,
   layer.pipe(Layer.provide(layerProjectService)),
   layerProjectService,
   layerManagedProjectFoldersProvided,

@@ -43,6 +43,7 @@ import {
 } from "./baseSchemas.ts";
 import { AuthMcpClientAccess } from "./auth.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
+import { LabKind } from "./labs.ts";
 import { ThreadGuestShare } from "./guestShare.ts";
 import { StoredThreadTags, ThreadTag } from "./threadTags.ts";
 import {
@@ -728,6 +729,19 @@ export const OrchestrationV2ThreadLaunchWorkspaceStrategy = Schema.Union([
 export type OrchestrationV2ThreadLaunchWorkspaceStrategy =
   typeof OrchestrationV2ThreadLaunchWorkspaceStrategy.Type;
 
+export const OrchestrationV2WorkspacePreparation = Schema.Union([
+  OrchestrationV2ThreadLaunchWorkspaceStrategy,
+  Schema.Struct({
+    type: Schema.Literal("lab"),
+    kind: Schema.optional(LabKind),
+    labId: Schema.optional(TrimmedNonEmptyString),
+    branch: Schema.optional(TrimmedNonEmptyString),
+    baseRef: Schema.optional(TrimmedNonEmptyString),
+    purpose: TrimmedNonEmptyString,
+  }),
+]);
+export type OrchestrationV2WorkspacePreparation = typeof OrchestrationV2WorkspacePreparation.Type;
+
 export const ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE = "workspace_preparation_failed";
 
 export const OrchestrationV2Run = Schema.Struct({
@@ -786,7 +800,7 @@ export const OrchestrationV2Run = Schema.Struct({
   editHolds: Schema.optional(Schema.Array(QueuedRunEditHoldLease)),
   /** Fork (PR #47): restart recovery sets this on a run it cancelled mid-turn. */
   strandedByRestart: Schema.optional(Schema.Literal(true)),
-  workspacePreparation: Schema.optional(OrchestrationV2ThreadLaunchWorkspaceStrategy),
+  workspacePreparation: Schema.optional(OrchestrationV2WorkspacePreparation),
 });
 export type OrchestrationV2Run = typeof OrchestrationV2Run.Type;
 
@@ -809,13 +823,11 @@ export function orchestrationV2WorktreePending(
   worktreePath: string | null,
   runs: ReadonlyArray<Pick<OrchestrationV2Run, "status" | "workspacePreparation">>,
 ): boolean {
-  return (
-    worktreePath === null &&
-    runs.some(
-      (run) =>
-        (run.status === "preparing" || run.status === "failed" || run.status === "interrupted") &&
-        run.workspacePreparation?.type === "worktree",
-    )
+  return runs.some(
+    (run) =>
+      (run.status === "preparing" || run.status === "failed" || run.status === "interrupted") &&
+      (run.workspacePreparation?.type === "lab" ||
+        (run.workspacePreparation?.type === "worktree" && worktreePath === null)),
   );
 }
 
@@ -3361,7 +3373,7 @@ export const OrchestrationV2Command = Schema.Union([
     dispatchMode: Schema.Union([
       Schema.Struct({
         type: Schema.Literal("defer_start"),
-        workspaceStrategy: Schema.optional(OrchestrationV2ThreadLaunchWorkspaceStrategy),
+        workspaceStrategy: Schema.optional(OrchestrationV2WorkspacePreparation),
       }),
       Schema.Struct({ type: Schema.Literal("steer_active"), targetRunId: RunId }),
       Schema.Struct({ type: Schema.Literal("restart_active"), targetRunId: RunId }),
@@ -3954,7 +3966,7 @@ export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
-  workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
+  workspaceStrategy: OrchestrationV2WorkspacePreparation,
   /** Fork: custom group a newly created thread joins (threadCustomGroupCreation). */
   customGroupId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   initialMessage: Schema.optional(
