@@ -6,6 +6,7 @@ import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as ServerConfig from "../config.ts";
 import { createPendingAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
 import * as ThreadMessageIntake from "./ThreadMessageIntake.ts";
@@ -2683,6 +2684,28 @@ it.effect("keeps a lab run preparing until readiness succeeds", () =>
       );
       const started = yield* threads.getThreadProjection(launched.threadId);
       assert.equal(started.runs[0]?.status, "starting");
+      assert.isUndefined(started.runs[0]?.workspacePreparation);
+      yield* threads.dispatch({
+        type: "run.interrupt",
+        commandId: CommandId.make("lab:stop-after-ready"),
+        threadId: launched.threadId,
+        runId: started.runs[0]!.id,
+      });
+      yield* threads.sendToThread({
+        projectId,
+        commandId: CommandId.make("lab:send-after-stop"),
+        threadId: launched.threadId,
+        messageId: MessageId.make("lab:send-after-stop"),
+        text: "Continue in the ready lab",
+        attachments: [],
+        mode: "auto",
+        createdBy: "user",
+        creationSource: "web",
+      });
+      assert.equal(
+        (yield* threads.getThreadProjection(launched.threadId)).runs.at(-1)?.status,
+        "starting",
+      );
       assert.equal(harness.runSetup.mock.calls.length, 0);
       assert.equal(harness.createWorktree.mock.calls.length, 0);
       assert.isNotEmpty(
@@ -2766,6 +2789,20 @@ it.effect.each(["failed", "cancelled"] as const)(
         assert.equal(stopped.runs[1]?.status, "queued");
         assert.isTrue(stopped.runs[1]?.queueHeld);
         assert.equal(harness.removeWorktree.mock.calls.length, 0);
+        yield* threads.sendToThread({
+          projectId,
+          commandId: CommandId.make(`lab:auto-after-failure:${ending}`),
+          threadId: launched.threadId,
+          messageId: MessageId.make(`lab:auto-after-failure:${ending}`),
+          text: "Sent normally after startup failed",
+          attachments: [],
+          mode: "auto",
+          createdBy: "user",
+          creationSource: "web",
+        });
+        const late = (yield* threads.getThreadProjection(launched.threadId)).runs.at(-1)!;
+        assert.equal(late.status, "queued");
+        assert.isTrue(late.queueHeld);
         yield* Ref.set(fail, false);
         yield* Deferred.succeed(proceed, undefined);
         yield* launches.retryPreparation({
@@ -2782,4 +2819,31 @@ it.effect.each(["failed", "cancelled"] as const)(
         assert.equal(retried.thread.worktreePath, "/labs/sp-lab-1");
       }).pipe(Effect.provide(harness.layer));
     }),
+);
+
+it.effect("publishes an idle lab thread only after its lab is ready", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const ready = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      startLab: () =>
+        Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(ready))),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const input = launchInput({
+        command: "lab:idle",
+        thread: "thread:lab-idle",
+        workspace: { type: "lab", kind: "full", purpose: "Idle lab" },
+      });
+      const preparing = yield* launches.launch(input).pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      assert.isNull(yield* threads.getThreadShell(input.threadId));
+      yield* Deferred.succeed(ready, undefined);
+      const launched = yield* Fiber.join(preparing);
+      assert.equal(launched.projection.thread.worktreePath, "/labs/sp-lab-1");
+      assert.isEmpty(launched.projection.runs);
+    }).pipe(Effect.provide(harness.layer));
+  }),
 );

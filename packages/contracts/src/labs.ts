@@ -257,7 +257,7 @@ export const LabsInventoryInput = Schema.Struct({});
 export type LabsInventoryInput = typeof LabsInventoryInput.Type;
 
 /**
- * Reserves `labId` for `threadId` and checks out its branch; the client then launches the
+ * Reserves `labId` for `threadId`, checks out its branch, and waits for startup; the client launches the
  * thread with `workspaceStrategy: { type: "existing_worktree", worktreePath, branch }`.
  * Idempotent for a thread that already holds the lab, so a retried launch reuses it.
  */

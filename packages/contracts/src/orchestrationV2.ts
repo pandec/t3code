@@ -815,10 +815,7 @@ export function orchestrationV2RunWorkStartedAt(
   return run.workStartedAt ?? run.startedAt ?? run.requestedAt;
 }
 
-/**
- * Work started now would run in the project checkout, not the worktree the thread asked for. A
- * failed or interrupted setup leaves the request standing until a worktree exists.
- */
+/** Missing worktrees and unverified labs block sends that would bypass preparation. */
 export function orchestrationV2WorktreePending(
   worktreePath: string | null,
   runs: ReadonlyArray<Pick<OrchestrationV2Run, "status" | "workspacePreparation">>,

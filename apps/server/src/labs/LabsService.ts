@@ -127,7 +127,7 @@ export class LabsService extends Context.Service<
       readonly labId: string;
       readonly leaseId: string;
     }) => Effect.Effect<void, LabsError>;
-    /** `prepareThread` for agent launches, which name a kind instead of reading the panel. */
+    /** Reserves a named lab or the first free lab of a kind; launch preparation starts it separately. */
     readonly prepareAgentThread: (
       input: LabsAgentThreadInput,
     ) => Effect.Effect<LabsPrepareThreadResult, LabsError>;
@@ -544,8 +544,8 @@ const make = Effect.gen(function* () {
       ? runUp(input.envId, input.action)
       : runSimple(input.envId, input.action, input.note);
 
-  const prepareThread: LabsService["Service"]["prepareThread"] = Effect.fn(
-    "LabsService.prepareThread",
+  const reserveThread: LabsService["Service"]["prepareThread"] = Effect.fn(
+    "LabsService.reserveThread",
   )(function* (input) {
     if (input.branch === null && input.baseRef === null) {
       return yield* new LabsError({
@@ -676,6 +676,14 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const prepareThread: LabsService["Service"]["prepareThread"] = Effect.fn(
+    "LabsService.prepareThread",
+  )(function* (input) {
+    const prepared = yield* reserveThread(input);
+    yield* startThread({ threadId: input.threadId, ...prepared });
+    return prepared;
+  });
+
   const prepareAgentThread: LabsService["Service"]["prepareAgentThread"] = Effect.fn(
     "LabsService.prepareAgentThread",
   )(function* (input) {
@@ -724,7 +732,7 @@ const make = Effect.gen(function* () {
           detail: `No ${kind} lab ${taken.size === 0 ? "is free" : "could be reserved"}. Free labs: ${free.length === 0 ? "none" : free.map((lab) => `${resolveLabKind(lab)} ${lab.id}`).join(", ")}.`,
         });
       }
-      const prepared = yield* prepareThread({
+      const prepared = yield* reserveThread({
         threadId: input.threadId,
         labId,
         branch: input.branch ?? null,

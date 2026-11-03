@@ -1114,6 +1114,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     isCompacting: compactionAwaitingRow,
     isRevertingCheckpoint,
     backgroundWorktreeSetup,
+    isPreparingLab: worktreeSetup?.stages.some((stage) => stage.id === "lab-reservation") ?? false,
     awaitingUser: awaitingUser !== null,
     isPreparingWorktree,
     latestRunId: latestRun?.runId ?? null,

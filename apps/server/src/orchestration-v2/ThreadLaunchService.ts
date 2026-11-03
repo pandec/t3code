@@ -488,10 +488,7 @@ const make = Effect.gen(function* () {
         worktreePath = preparedLab.worktreePath;
         branch = preparedLab.branch;
         yield* setupTracker.update(threadId, (snapshot) => ({ ...snapshot, worktreePath, branch }));
-        yield* setupTracker.stage(threadId, "lab-reservation", {
-          status: "done",
-          detail: preparedLab.labId,
-        });
+        yield* setupTracker.stageStatus(threadId, "lab-reservation", "done", preparedLab.labId);
       }
       if (input.workspaceStrategy.type === "worktree") {
         if (runId !== null) {
@@ -1023,7 +1020,7 @@ const make = Effect.gen(function* () {
           yield* validateReusableThread(input, candidateThreadId);
         }
 
-        const workspaceStrategy: ThreadLaunchWorkspaceStrategy =
+        let workspaceStrategy: ThreadLaunchWorkspaceStrategy =
           input.workspaceStrategy.type === "root" && Option.isNone(launchReceipt)
             ? Option.match(
                 yield* managedFolders
@@ -1039,6 +1036,33 @@ const make = Effect.gen(function* () {
                 },
               )
             : input.workspaceStrategy;
+        let idleLab: import("@t3tools/contracts").LabsPrepareThreadResult | null = null;
+        // An idle thread has no preparing run to hold its first send, so publish it after readiness.
+        if (
+          workspaceStrategy.type === "lab" &&
+          input.initialMessage === undefined &&
+          Option.isNone(launchReceipt)
+        ) {
+          idleLab = yield* labs
+            .prepareAgentThread({
+              ...workspaceStrategy,
+              projectId: input.projectId,
+              threadId: candidateThreadId,
+            })
+            .pipe(Effect.mapError(mapError(input, "prepare-lab", candidateThreadId)));
+          const reserved = idleLab;
+          yield* labs.startThread({ threadId: candidateThreadId, ...reserved }).pipe(
+            Effect.onError(() =>
+              labs.abandonThread(reserved).pipe(Effect.forkIn(preparationScope)),
+            ),
+            Effect.mapError(mapError(input, "start-lab", candidateThreadId)),
+          );
+          workspaceStrategy = {
+            type: "existing_worktree",
+            worktreePath: reserved.worktreePath,
+            branch: reserved.branch,
+          };
+        }
         const initialBranch = workspaceStrategy.branch ?? null;
         const initialWorktreePath =
           workspaceStrategy.type === "existing_worktree" ? workspaceStrategy.worktreePath : null;
@@ -1073,6 +1097,18 @@ const make = Effect.gen(function* () {
                 creationSource: input.creationSource,
               });
         const claimed = yield* claimDispatch.pipe(
+          Effect.tapError(() => {
+            const reserved = idleLab;
+            return reserved === null
+              ? Effect.void
+              : threads.getThreadShell(candidateThreadId).pipe(
+                  Effect.flatMap((shell) =>
+                    shell === null ? labs.abandonThread(reserved) : Effect.void,
+                  ),
+                  Effect.ignore,
+                  Effect.forkIn(preparationScope),
+                );
+          }),
           Effect.mapError(
             mapError(
               input,

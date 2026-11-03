@@ -268,13 +268,13 @@ describe("LabsService", () => {
           const input = {
             threadId: THREAD,
             labId: "sp-lab-1",
-            branch: null,
+            projectId: PROJECT,
             baseRef: "master",
             purpose: "Fix the parser",
           };
           // The reservation lands, but writing its first-turn note fails.
           yield* sql`ALTER TABLE fork_thread_hidden_notes RENAME TO broken_notes`;
-          const prepared = yield* labs.prepareThread(input);
+          const prepared = yield* labs.prepareAgentThread(input);
           assert.match(prepared.branch, /^t3\/[0-9a-f]{8}$/);
           assert.deepEqual(prepared, {
             labId: "sp-lab-1",
@@ -302,7 +302,7 @@ describe("LabsService", () => {
 
           // A retried launch reuses the reservation and restores the lost note.
           yield* Queue.clear(fake.calls);
-          const retried = yield* labs.prepareThread(input);
+          const retried = yield* labs.prepareAgentThread(input);
           assert.equal(retried.leaseId, "lease-1");
           assert.equal(retried.branch, prepared.branch);
           const later = yield* Queue.clear(fake.calls);
@@ -317,13 +317,13 @@ describe("LabsService", () => {
 
           // Once the first turn heard it, a retry never queues it again.
           yield* notes.acknowledge(pending.map((note) => note.id));
-          yield* labs.prepareThread(input);
+          yield* labs.prepareAgentThread(input);
           assert.deepEqual(yield* notes.pending(THREAD, labTurn), []);
 
           // Never act on cached state: a failed status read fails the mutation.
           yield* Ref.set(fake.statusFails, true);
           const failed = yield* labs
-            .prepareThread(input)
+            .prepareAgentThread(input)
             .pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => null }));
           assert.equal(failed?.reason, "cli_failed");
         }),
@@ -364,11 +364,11 @@ describe("LabsService", () => {
         Effect.gen(function* () {
           const labs = yield* LabsService.LabsService;
           const notes = yield* ThreadHiddenNotes.ThreadHiddenNotes;
-          yield* labs.prepareThread({
+          yield* labs.prepareAgentThread({
             threadId: THREAD,
+            projectId: PROJECT,
             labId: "sp-lab-1",
             branch: "feature/plans",
-            baseRef: null,
             purpose: "Check plans",
           });
           const [note] = yield* notes.pending(THREAD, { worktreePath: "/fake/sp-lab-1" });
@@ -547,7 +547,13 @@ describe("LabsService", () => {
           const pending = yield* notes.pending(THREAD, turn);
           assert.isTrue(pending.some((note) => note.text.includes("full lab sp-lab-1 is ready")));
           yield* notes.acknowledge(pending.map((note) => note.id));
-          yield* labs.startThread({ threadId: THREAD, ...prepared });
+          yield* labs.prepareThread({
+            threadId: THREAD,
+            labId: prepared.labId,
+            branch: prepared.branch,
+            baseRef: null,
+            purpose: "Legacy client retry",
+          });
           assert.deepEqual(yield* notes.pending(THREAD, turn), []);
           yield* fake.setLab(prepared.labId, (lab) => ({
             ...lab,

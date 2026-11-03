@@ -842,7 +842,7 @@ function delegatedTaskTerminalStatus(
   }
 }
 
-/** Failed worktree setup keeps the queue held so queued messages cannot start in the project checkout. */
+/** Failed preparation holds the queue until the worktree exists or the lab is verified. */
 function worktreeSetupPending(
   projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs">,
 ): boolean {
@@ -6300,16 +6300,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       (candidate) => candidate.id === projection.thread.activeProviderThreadId,
     );
     const activeRun = projection.runs.find(isActiveRun);
-    // A message queued during worktree setup can arrive after that setup failed
-    // without a worktree. It waits, held, like the messages queued before the
-    // failure, instead of starting in the project checkout.
+    // Failed lab startup blocks every send; missing worktrees retain their explicit queue guard.
     const latestRun = latestExecutedRun(projection.runs);
     const worktreeMissingRun =
       activeRun === undefined &&
-      dispatchMode.type === "queue_after_active" &&
       (latestRun?.status === "failed" || latestRun?.status === "interrupted") &&
       (latestRun.workspacePreparation?.type === "lab" ||
-        (latestRun.workspacePreparation?.type === "worktree" &&
+        (dispatchMode.type === "queue_after_active" &&
+          latestRun.workspacePreparation?.type === "worktree" &&
           projection.thread.worktreePath === null))
         ? latestRun
         : undefined;
@@ -10619,6 +10617,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           updatedAt: now,
         },
       });
+      const { workspacePreparation: _preparation, ...preparedRun } = state.run;
       yield* emitEvent({
         type: "run.updated",
         threadId: command.threadId,
@@ -10626,7 +10625,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         nodeId: state.rootNode.id,
         providerInstanceId: state.run.providerInstanceId,
         occurredAt: now,
-        payload: { ...state.run, status: "starting" },
+        payload: {
+          ...(state.run.workspacePreparation?.type === "lab" ? preparedRun : state.run),
+          status: "starting",
+        },
       });
       yield* Ref.update(effects, (existing) => [
         ...existing,
