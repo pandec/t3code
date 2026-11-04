@@ -136,6 +136,7 @@ import { isModelPickerOpen } from "../modelPickerVisibility";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { cn, isMacPlatform } from "~/lib/utils";
 import { readLocalApi } from "../localApi";
+import { configuredHostedAppUrl } from "../hostedPairing";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import {
   pickableProjectGroups,
@@ -1585,6 +1586,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     },
   });
   const [projectScopeMenuOpen, setProjectScopeMenuOpen] = useState(false);
+  const legacySidebarEnabled = useClientSettings((settings) => settings.legacySidebarEnabled);
   const folderRowsMultiline = useClientSettings((settings) => settings.boringSidebarMultilineRows);
   const newThreadContext = useHandleNewThread();
   const openAddProjectCommandPalette = () => openCommandPalette({ open: "add-project" });
@@ -3830,7 +3832,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             }
             return;
           case "copy-thread":
-            void copyThreadReference(threadChipCopyTarget(threadRef, thread.title));
+            void copyThreadReference(
+              threadChipCopyTarget(threadRef, thread.title, configuredHostedAppUrl()),
+            );
             return;
           case "copy-thread-id":
             copyThreadIdToClipboard(thread.id, { threadId: thread.id });
@@ -3971,7 +3975,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     // route resolves to a hidden project or environment, use the picker.
     if (
       targetIsVisible &&
-      (boringSidebarEnabled ||
+      (legacySidebarEnabled ||
         shouldCreateNewThreadInCurrentProject(
           event?.shiftKey ?? false,
           scopeGroups.length,
@@ -4016,7 +4020,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         />
       </TooltipTrigger>
       <TooltipPopup side="right">
-        {projectGroups.length > 1 ? (
+        {!legacySidebarEnabled && projectGroups.length > 1 ? (
           <span className="flex flex-col gap-0.5">
             <span>
               {newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"}

@@ -55,10 +55,13 @@ export function idleCompactionWindow(
   if (!isListedThreadLineage(thread.lineage)) return null;
   // Fork: the /compact turn is new work, which would cancel a pending archive-when-done.
   if (pendingArchiveRequest(thread) !== null) return null;
-  const latestRun = runs.reduce<(typeof runs)[number] | null>(
-    (latest, run) => (latest === null || run.ordinal > latest.ordinal ? run : latest),
-    null,
-  );
+  // A removed or steered queued message leaves a cancelled run that never started.
+  const latestRun = runs
+    .filter((run) => run.status !== "cancelled" || run.startedAt !== null)
+    .reduce<(typeof runs)[number] | null>(
+      (latest, run) => (latest === null || run.ordinal > latest.ordinal ? run : latest),
+      null,
+    );
   if (latestRun?.status !== "completed" || latestRun.completedAt === null) return null;
   const message = messages.find((candidate) => candidate.id === latestRun.userMessageId);
   // Never compact a compaction, so one idle spell compacts at most once.

@@ -8,7 +8,7 @@ import {
 
 import type { ComposerEditorSelection } from "../../components/ComposerEditor";
 import { useEnvironmentScope } from "../../state/session";
-import { isDeviceVoiceInputAvailable, useGlobalVoiceInput } from "./VoiceInputProvider";
+import { useDeviceVoiceInputAvailable, useGlobalVoiceInput } from "./VoiceInputProvider";
 import { createVoiceInputTarget } from "./voiceInputSession";
 
 const IDLE_STATE: VoiceInputState = { phase: "idle", error: null, errorAction: null };
@@ -36,6 +36,7 @@ export function useVoiceInputController(input: {
   readonly onChangeSelection: (selection: ComposerEditorSelection) => void;
 }) {
   const global = useGlobalVoiceInput();
+  const isDeviceAvailable = useDeviceVoiceInputAvailable();
   const { session } = global;
   // Server transcription operates the environment; on-device dictation needs no grant.
   const canOperateEnvironment = useEnvironmentScope(
@@ -90,8 +91,7 @@ export function useVoiceInputController(input: {
   const state = global.ownerKey === input.ownerKey ? global.state : IDLE_STATE;
   const isBusy = voiceInputBlocksSubmission(state);
   const canTranscribe =
-    isDeviceVoiceInputAvailable() ||
-    (input.environmentId !== null && environmentTranscriptionAvailable);
+    isDeviceAvailable || (input.environmentId !== null && environmentTranscriptionAvailable);
   return {
     isAvailable: canTranscribe && (!global.isBusy || global.ownerKey === input.ownerKey),
     state,

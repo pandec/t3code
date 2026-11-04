@@ -3,7 +3,9 @@ import {
   ClaudeSettings,
   CodexSettings,
   EasDeviceHostConfig,
+  type ProviderInstanceConfig,
   type ServerSettings,
+  type SettingsSecretValue,
   SimlockDeviceHostConfig,
   UsageLimitSourceConfig,
   isSecretReference,
@@ -59,16 +61,19 @@ export interface SettingsSecret {
 }
 
 type SecretValue = Pick<SettingsSecret, "value" | "redacted">;
+type SecretSlotName = (field: string, serverHost: string | null) => string;
+type SecretFieldsMapper = (
+  fields: Readonly<Record<string, unknown>>,
+  secretFields: ReadonlyArray<string>,
+  name: SecretSlotName,
+) => Record<string, unknown>;
+type ProviderEnvironment = NonNullable<ProviderInstanceConfig["environment"]>;
 
 export function mapSettingsSecrets(
   settings: ServerSettings,
   map: (secret: SettingsSecret) => SecretValue,
 ): ServerSettings {
-  const mapFields = (
-    fields: Readonly<Record<string, unknown>>,
-    secretFields: ReadonlyArray<string>,
-    name: (field: string, serverHost: string | null) => string,
-  ) => {
+  const mapFields: SecretFieldsMapper = (fields, secretFields, name) => {
     const next = { ...fields };
     for (const field of secretFields) {
       if (!(field in next) || isSecretReference(next[field])) continue;
@@ -89,6 +94,123 @@ export function mapSettingsSecrets(
     return next;
   };
 
+  const mapped = mapSecretFieldGroups(settings, mapFields, (instanceId, environment) =>
+    environment.map((variable) => {
+      const { valueRedacted: _omit, ...rest } = variable;
+      // A secret reference is not itself secret; storage sees the value cleared.
+      const reference = typeof variable.value === "string" ? undefined : variable.value;
+      const result = map({
+        secretName: `provider-env-${encode(instanceId)}-${encode(variable.name)}`,
+        kind: "environment",
+        value: typeof variable.value === "string" ? variable.value : "",
+        // Fork: a sent value wins over a stale redaction flag.
+        redacted:
+          typeof variable.value === "string" &&
+          variable.valueRedacted === true &&
+          variable.value.length === 0,
+        sensitive: variable.sensitive,
+        providerInstanceId: instanceId,
+        environmentVariable: variable.name,
+      });
+      if (reference !== undefined) return { ...rest, value: reference };
+      return {
+        ...rest,
+        value: result.value,
+        ...(result.redacted ? { valueRedacted: true } : {}),
+      };
+    }),
+  );
+  return mapForkSecrets(mapped, map);
+}
+
+/** Fork-only secrets: a gateway usage source's management key and the Telegram bot token. */
+function mapForkSecrets(
+  settings: ServerSettings,
+  map: (secret: SettingsSecret) => SecretValue,
+): ServerSettings {
+  const providerInstances = Object.fromEntries(
+    Object.entries(settings.providerInstances).map(([instanceId, instance]) => {
+      if (!instance.usageSource) return [instanceId, instance];
+      // A sent value wins over the flag.
+      const { managementKeyRedacted, ...source } = instance.usageSource;
+      const result = map({
+        secretName: `provider-usage-source-${encode(instanceId)}`,
+        kind: "usageSource",
+        value: source.managementKey,
+        redacted: managementKeyRedacted === true && source.managementKey.length === 0,
+        sensitive: true,
+        providerInstanceId: instanceId,
+      });
+      return [
+        instanceId,
+        {
+          ...instance,
+          usageSource: {
+            ...source,
+            managementKey: result.value,
+            ...(result.redacted ? { managementKeyRedacted: true } : {}),
+          },
+        },
+      ];
+    }),
+  );
+  const botToken = map({
+    secretName: "telegram-bot-token",
+    kind: "field",
+    value: settings.telegram.botToken,
+    redacted: settings.telegram.botToken === SECRET_REDACTED,
+    sensitive: true,
+  });
+  return {
+    ...settings,
+    providerInstances,
+    telegram: {
+      ...settings.telegram,
+      botToken: botToken.redacted ? SECRET_REDACTED : botToken.value,
+    },
+  };
+}
+
+/**
+ * Maps each value a secret field holds, literal or reference, with the secret name of its slot.
+ * Provider environment variables are left as they are.
+ */
+export function mapSettingsSecretValues(
+  settings: ServerSettings,
+  map: (value: SettingsSecretValue, secretName: string) => SettingsSecretValue,
+): ServerSettings {
+  const mapValue = (value: unknown, secretName: string) =>
+    typeof value === "string" || isSecretReference(value) ? map(value, secretName) : value;
+  return mapSecretFieldGroups(settings, (fields, secretFields, name) => {
+    const next = { ...fields };
+    for (const field of secretFields) {
+      if (!(field in next)) continue;
+      const value = next[field];
+      next[field] =
+        value !== null &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        !isSecretReference(value)
+          ? Object.fromEntries(
+              Object.entries(value).map(([serverHost, entry]) => [
+                serverHost,
+                mapValue(entry, name(field, serverHost.trim().toLowerCase())),
+              ]),
+            )
+          : mapValue(value, name(field, null));
+    }
+    return next;
+  });
+}
+
+function mapSecretFieldGroups(
+  settings: ServerSettings,
+  mapFields: SecretFieldsMapper,
+  mapEnvironment: (instanceId: string, environment: ProviderEnvironment) => ProviderEnvironment = (
+    _instanceId,
+    environment,
+  ) => environment,
+): ServerSettings {
   const providerInstances = Object.fromEntries(
     Object.entries(settings.providerInstances).map(([instanceId, instance]) => {
       const config = instance.config;
@@ -108,53 +230,7 @@ export function mapSettingsSecrets(
               }
             : {}),
           ...(instance.environment
-            ? {
-                environment: instance.environment.map((variable) => {
-                  const { valueRedacted: _omit, ...rest } = variable;
-                  // A secret reference is not itself secret; storage sees the value cleared.
-                  const reference = typeof variable.value === "string" ? undefined : variable.value;
-                  const result = map({
-                    secretName: `provider-env-${encode(instanceId)}-${encode(variable.name)}`,
-                    kind: "environment",
-                    value: typeof variable.value === "string" ? variable.value : "",
-                    // Fork: a sent value wins over a stale redaction flag.
-                    redacted:
-                      typeof variable.value === "string" &&
-                      variable.valueRedacted === true &&
-                      variable.value.length === 0,
-                    sensitive: variable.sensitive,
-                    providerInstanceId: instanceId,
-                    environmentVariable: variable.name,
-                  });
-                  if (reference !== undefined) return { ...rest, value: reference };
-                  return {
-                    ...rest,
-                    value: result.value,
-                    ...(result.redacted ? { valueRedacted: true } : {}),
-                  };
-                }),
-              }
-            : {}),
-          // fork: a gateway usage source's management key. A sent value wins over the flag.
-          ...(instance.usageSource
-            ? {
-                usageSource: (() => {
-                  const { managementKeyRedacted, ...source } = instance.usageSource;
-                  const result = map({
-                    secretName: `provider-usage-source-${encode(instanceId)}`,
-                    kind: "usageSource",
-                    value: source.managementKey,
-                    redacted: managementKeyRedacted === true && source.managementKey.length === 0,
-                    sensitive: true,
-                    providerInstanceId: instanceId,
-                  });
-                  return {
-                    ...source,
-                    managementKey: result.value,
-                    ...(result.redacted ? { managementKeyRedacted: true } : {}),
-                  };
-                })(),
-              }
+            ? { environment: mapEnvironment(instanceId, instance.environment) }
             : {}),
         },
       ];
@@ -185,19 +261,6 @@ export function mapSettingsSecrets(
     ]),
   ) as ServerSettings["usageLimitSources"];
 
-  // fork: Telegram bot token.
-  const botToken = map({
-    secretName: "telegram-bot-token",
-    kind: "field",
-    value: settings.telegram.botToken,
-    redacted: settings.telegram.botToken === SECRET_REDACTED,
-    sensitive: true,
-  });
-  const telegram = {
-    ...settings.telegram,
-    botToken: botToken.redacted ? SECRET_REDACTED : botToken.value,
-  };
-
   const easDeviceHosts = settings.easDeviceHosts.map(
     (host) =>
       mapFields(
@@ -227,7 +290,6 @@ export function mapSettingsSecrets(
     sourceControlHosts,
     usageLimitSources,
     easDeviceHosts,
-    telegram,
     simlockDeviceHosts,
   };
 }

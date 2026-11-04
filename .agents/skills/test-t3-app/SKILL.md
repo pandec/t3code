@@ -72,7 +72,7 @@ Keep pairing URLs out of screenshots, committed files, and durable logs. When th
 
 ## Optional built-in Browser panel
 
-When T3's preview tools are available, the Browser panel can replace the browser chosen above. Call `preview_status`, open the panel with `preview_open` when needed, then navigate to this test's complete pairing URL once with `preview_navigate`. Use `preview_snapshot` and the returned interaction tools in the same tab. Keep the isolated-state, token, sharing, and teardown rules in this skill. If the panel is unavailable, continue with the existing controlled-browser choices.
+When T3's preview tools are available, the Browser panel can replace the browser chosen above. Call `preview_status`, then `preview_open` when no tab can be automated (status can report `available: false` or `tabId: null` only because no tab exists yet), then navigate to this test's complete pairing URL once with `preview_navigate`. Use `preview_snapshot` and the returned interaction tools in the same tab. Keep the isolated-state, token, sharing, and teardown rules in this skill. If the tools are absent or `preview_open` reports unavailable or fails, continue with the existing controlled-browser choices.
 
 ## Recover a consumed or expired pairing token
 

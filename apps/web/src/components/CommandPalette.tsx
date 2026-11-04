@@ -149,6 +149,7 @@ import {
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useStableCallback } from "../hooks/useStableCallback";
 import { readLocalApi } from "../localApi";
+import { configuredHostedAppUrl } from "../hostedPairing";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
 import { filesystemEnvironment, useFilesystemReadAccess } from "../state/filesystem";
 import { projectEnvironment } from "../state/projects";
@@ -281,6 +282,7 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { openThreadGroupsDialog } from "./sidebar/threadGroupsDialogStore";
 import { threadGroupId } from "@t3tools/shared/threadGroups";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
+import { isSidebarHiddenThread } from "./Sidebar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
 import {
   selectCommandPaletteClientSettings,
@@ -698,12 +700,14 @@ function OpenCommandPaletteDialog(props: {
           pullRequests: currentThread?.pullRequests,
           linkedPullRequestUrl:
             currentThread?.linkedPullRequest?.url ?? currentThread?.branchPullRequest?.url ?? null,
+          hostedAppUrl: configuredHostedAppUrl(),
         });
   const copyActiveThreadReference = async (target = activeThreadReferenceCopyTarget) => {
     if (target === null) return;
     await copyThreadReference(target);
   };
-  const threads = useVisibleThreadShells();
+  // Side chats and subagents open inside their parent, so opening a project never lands on one.
+  const threads = useVisibleThreadShells().filter((thread) => !isSidebarHiddenThread(thread));
   const allThreads = useThreadShells();
   const serverConfigs = useServerConfigs();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);

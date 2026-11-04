@@ -6,20 +6,16 @@ import {
   VOICE_TRANSCRIPTION_MIN_DURATION_MS,
   type EnvironmentId,
 } from "@t3tools/contracts";
-import {
-  AudioModule,
-  RecordingPresets,
-  requestRecordingPermissionsAsync,
-  type RecordingStatus,
-} from "expo-audio";
+import { AudioModule, RecordingPresets, type RecordingStatus } from "expo-audio";
 import { File } from "expo-file-system";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { useSyncExternalStore } from "react";
-import { AppState, Platform } from "react-native";
+import { Platform } from "react-native";
 import { Atom, AsyncResult } from "effect/reactivity";
 import { makeMutable } from "react-native-reanimated";
 
 import {
+  type MicrophoneEntry,
   microphoneOrder,
   preferredMicrophoneInput,
   rememberMicrophones,
@@ -39,6 +35,8 @@ import { transcribeVoiceRecording } from "../../state/voice";
 import { createLazyVoiceRecorder } from "./lazyVoiceRecorder";
 import { VOICE_WAVEFORM_SAMPLE_COUNT } from "./voiceInputMetering";
 import { VoiceInputSession } from "./voiceInputSession";
+import { createVoiceRecordingPermission } from "./voiceRecordingPermission";
+import { makePermissionStatusAtom } from "../../lib/permissionStatusAtom";
 import {
   acquireAudioSession,
   activateAudioSession,
@@ -57,18 +55,36 @@ const VOICE_RECORDING_OPTIONS = {
   ...(Platform.OS === "ios" ? IOS_RECORDING_OPTIONS : ANDROID_RECORDING_OPTIONS),
 };
 
-/** Whether this device can dictate without an environment's server transcriber. */
-export function isDeviceVoiceInputAvailable(): boolean {
-  // Store screenshots show the dictation button even on simulators, whose
-  // on-device transcription is unavailable.
-  return getLocalVoiceTranscriber() !== null || getNativeShowcaseScene() !== null;
-}
-
 function keepScreenAwake(tag: string): () => void {
   const activation = activateKeepAwakeAsync(tag);
   void activation.catch(() => {});
   // Release after activation settles, even if the recording ends immediately.
   return () => void activation.then(() => deactivateKeepAwake(tag)).catch(() => {});
+}
+
+export const deviceMicrophoneOrder = (saved?: ReadonlyArray<MicrophoneEntry>) =>
+  microphoneOrder(saved, Platform.OS === "android" ? "android" : "ios");
+
+/** "checking" until the first availability probe settles; re-probed on foreground. */
+export const localVoiceTranscriberAtom = makePermissionStatusAtom<
+  VoiceTranscriber | null | "checking"
+>({
+  label: "mobile:voice-input:transcriber",
+  initial: "checking",
+  read: () => getLocalVoiceTranscriber().catch(() => null),
+}).pipe(Atom.keepAlive);
+
+// Each foreground re-probe yields a new transcriber; composers re-render only when availability flips.
+const localVoiceInputAvailableAtom = Atom.make((get) => {
+  const transcriber = get(localVoiceTranscriberAtom);
+  return transcriber !== null && transcriber !== "checking";
+});
+
+/** Whether this device can dictate without an environment's server transcriber. */
+export function useDeviceVoiceInputAvailable(): boolean {
+  // Store screenshots show the dictation button even on simulators, whose
+  // on-device transcription is unavailable.
+  return useAtomValue(localVoiceInputAvailableAtom) || getNativeShowcaseScene() !== null;
 }
 
 /**
@@ -80,6 +96,7 @@ const voiceInputAtom = Atom.make((get) => {
   // Mounted so the recorder can read and remember microphones synchronously.
   get.mount(mobilePreferencesAtom);
   get.mount(updateMobilePreferencesAtom);
+  get.mount(localVoiceTranscriberAtom);
   const audioLevels = makeMutable<ReadonlyArray<number>>(
     Array<number>(VOICE_WAVEFORM_SAMPLE_COUNT).fill(0),
   );
@@ -90,6 +107,9 @@ const voiceInputAtom = Atom.make((get) => {
   let usesEnvironmentTranscriber = false;
   let recordingDurationMs = 0;
   const listeningRecordingOwner = Symbol("mobile-voice-input");
+  const permission = createVoiceRecordingPermission(() => {
+    void session.controller.appMovedToBackground();
+  });
   const recorder = createLazyVoiceRecorder({
     create: () => new AudioModule.AudioRecorder(VOICE_RECORDING_OPTIONS),
     onStatus: (status: RecordingStatus) => {
@@ -104,12 +124,12 @@ const voiceInputAtom = Atom.make((get) => {
     selectInput: (inputs) => {
       const preferences = registry.get(mobilePreferencesAtom);
       if (!AsyncResult.isSuccess(preferences)) return null;
-      const known = microphoneOrder(preferences.value.microphones);
+      const known = deviceMicrophoneOrder(preferences.value.microphones);
       const order = rememberMicrophones(known, inputs);
       if (order !== known) {
         registry.set(updateMobilePreferencesAtom, {
           transform: (current) => ({
-            microphones: rememberMicrophones(microphoneOrder(current.microphones), inputs),
+            microphones: rememberMicrophones(deviceMicrophoneOrder(current.microphones), inputs),
           }),
         });
       }
@@ -162,7 +182,7 @@ const voiceInputAtom = Atom.make((get) => {
       get uri() {
         return recorder.uri;
       },
-      prepareToRecordAsync: () => recorder.prepareToRecordAsync(),
+      prepareToRecordAsync: (signal) => recorder.prepareToRecordAsync(signal),
       record: ({ forDuration }) =>
         recorder.record({
           forDuration: usesEnvironmentTranscriber
@@ -174,7 +194,8 @@ const voiceInputAtom = Atom.make((get) => {
     getTranscriber: () => {
       // Read from the target captured at start, never from the focused composer.
       const environmentId = session.transcriptionEnvironmentId;
-      const localTranscriber = getLocalVoiceTranscriber();
+      const probed = registry.get(localVoiceTranscriberAtom);
+      const localTranscriber = probed === "checking" ? null : probed;
       const environmentTranscriber = environmentId
         ? createEnvironmentTranscriber(environmentId)
         : null;
@@ -195,10 +216,7 @@ const voiceInputAtom = Atom.make((get) => {
         },
       };
     },
-    requestPermission: async () => {
-      const permission = await requestRecordingPermissionsAsync();
-      return { granted: permission.granted, canAskAgain: permission.canAskAgain };
-    },
+    requestPermission: permission.requestPermission,
     configureRecording: async () => {
       recordingDurationMs = 0;
       // Dictation and listening playback share the audio session.
@@ -236,14 +254,8 @@ const voiceInputAtom = Atom.make((get) => {
     publishAudioLevels: (levels) => audioLevels.set(levels),
     keepAwake: () => keepScreenAwake(`voice-input:${++keepAwakeSequence}`),
   });
-  // iOS reports `inactive` while its permission dialog is open. Only the real
-  // background state cancels preparation; recorder status handles calls and
-  // route interruptions during capture.
-  const appStateSubscription = AppState.addEventListener("change", (nextState) => {
-    if (nextState === "background") void session.controller.appMovedToBackground();
-  });
   get.addFinalizer(() => {
-    appStateSubscription.remove();
+    permission.dispose();
     session.dispose();
     recorder.release();
   });
@@ -252,11 +264,12 @@ const voiceInputAtom = Atom.make((get) => {
 
 export function useGlobalVoiceInput() {
   const { session, audioLevels } = useAtomValue(voiceInputAtom);
+  const isDeviceAvailable = useDeviceVoiceInputAvailable();
   const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot);
   return {
     ...snapshot,
     // An environment captured with the active target can still retry it.
-    isAvailable: isDeviceVoiceInputAvailable() || session.transcriptionEnvironmentId !== null,
+    isAvailable: isDeviceAvailable || session.transcriptionEnvironmentId !== null,
     audioLevels,
     isBusy: voiceInputBlocksSubmission(snapshot.state),
     session,
