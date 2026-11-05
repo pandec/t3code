@@ -935,6 +935,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "browser-profiles",
   },
   {
+    id: "browser-extensions",
+    title: "Browser extensions",
+    to: "/settings/browser",
+    targetId: "browser-extensions",
+    searchTerms: ["dashlane password manager pin toolbar install update"],
+    desktopOnly: true,
+  },
+  {
     id: "browser-default-viewport",
     title: "Default browser viewport",
     to: "/settings/browser",

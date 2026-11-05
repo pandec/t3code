@@ -1166,6 +1166,64 @@ export interface DesktopBridge {
 /** Renderer callback invoked by Electron with a fresh user gesture before display-media capture. */
 export const DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER = "__t3DesktopPreviewRecordingCapture";
 
+export interface DesktopPreviewExtensionAction {
+  readonly id: string;
+  readonly name: string;
+  readonly title: string;
+  /** PNG data URL of the icon the extension shows for this tab. */
+  readonly icon: string | null;
+}
+
+export interface DesktopBrowserExtensionUpdate {
+  readonly activity: "idle" | "checking" | "downloading" | "updating";
+  /** ISO time of the last update check that reached the update service. */
+  readonly checkedAt: string | null;
+  /** A verified newer version, downloaded and waiting for the extension to restart. */
+  readonly readyVersion: string | null;
+  /** Why the last check, download, or update failed. */
+  readonly error: string | null;
+}
+
+export interface DesktopBrowserExtensionInstallation {
+  readonly id: string;
+  readonly name: string;
+  /** Where the unpacked extension is read from. */
+  readonly directory: string;
+  /** Null when the directory holds no valid copy of the extension. */
+  readonly version: string | null;
+  readonly update?: DesktopBrowserExtensionUpdate;
+}
+
+/** A toolbar control's bounds in the host window's CSS pixels. */
+export interface DesktopPreviewAnchorRect {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/** Extension actions are keyed by the guest webContents id that the tab state reports. */
+export interface DesktopPreviewExtensionsBridge {
+  listInstallations: () => Promise<ReadonlyArray<DesktopBrowserExtensionInstallation>>;
+  /** Checks for and downloads a newer version, or installs the extension when it is missing. */
+  checkForUpdates: (extensionId: string) => Promise<void>;
+  /** Restarts the extension on its downloaded version. */
+  applyUpdate: (extensionId: string) => Promise<void>;
+  onInstallationsChange: (listener: () => void) => () => void;
+  listActions: (webContentsId: number) => Promise<ReadonlyArray<DesktopPreviewExtensionAction>>;
+  openPopup: (
+    webContentsId: number,
+    extensionId: string,
+    anchor: DesktopPreviewAnchorRect,
+  ) => Promise<void>;
+  /** Receives a guest whose actions changed, or null when any guest's may have. */
+  onActionsChange: (listener: (webContentsId: number | null) => void) => () => void;
+  /** An extension asked to show its popup, for example from an in-page prompt. */
+  onPopupRequest: (
+    listener: (request: { readonly webContentsId: number; readonly extensionId: string }) => void,
+  ) => () => void;
+}
+
 export interface DesktopPreviewBridge {
   setForwardedShortcuts: (shortcuts: ReadonlyArray<PreviewForwardedShortcut>) => Promise<void>;
   createTab: (tabId: string, defaults?: DesktopPreviewTabDefaults) => Promise<void>;
@@ -1225,6 +1283,7 @@ export interface DesktopPreviewBridge {
   onStateChange: (listener: (tabId: string, state: DesktopPreviewTabState) => void) => () => void;
   onPointerEvent: (listener: (event: DesktopPreviewPointerEvent) => void) => () => void;
   onOpenLink: (listener: (event: DesktopPreviewOpenLinkEvent) => void) => () => void;
+  extensions?: DesktopPreviewExtensionsBridge;
 }
 
 export type ConfirmDialogVariant = "default" | "destructive";
