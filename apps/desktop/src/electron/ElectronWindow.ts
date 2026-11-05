@@ -109,7 +109,7 @@ export class ElectronWindowOperationError extends Schema.TaggedError<ElectronWin
 export class ElectronWindow extends Context.Service<
   ElectronWindow,
   {
-    /** Auxiliary windows are never returned as the main-or-first fallback. */
+    /** Auxiliary windows are never the main-or-first window, nor receive menu actions or app broadcasts. */
     readonly create: (
       options: Electron.BrowserWindowConstructorOptions,
       behavior?: { readonly auxiliary?: boolean },
@@ -205,7 +205,11 @@ export const make = Effect.gen(function* () {
           cause,
         }),
     }).pipe(Effect.orDie);
-    if (Option.isSome(focused) && !(yield* isWindowDestroyed(focused.value))) {
+    if (
+      Option.isSome(focused) &&
+      !auxiliaryWindows.has(focused.value) &&
+      !(yield* isWindowDestroyed(focused.value))
+    ) {
       return focused;
     }
     return yield* currentMainOrFirst;
@@ -341,7 +345,7 @@ export const make = Effect.gen(function* () {
       /* Window broadcasts run for streamed updates; avoid a span per broadcast. */
       Effect.fnUntraced(function* (channel, ...args) {
         for (const window of yield* listWindows) {
-          if (yield* isWindowDestroyed(window)) {
+          if (auxiliaryWindows.has(window) || (yield* isWindowDestroyed(window))) {
             continue;
           }
           yield* Effect.try({

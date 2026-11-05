@@ -26,6 +26,21 @@ export interface PreviewExtensions {
   readonly setPinned: (extensionId: string, pinned: boolean) => void;
 }
 
+const sameActions = (
+  left: ReadonlyArray<DesktopPreviewExtensionAction>,
+  right: ReadonlyArray<DesktopPreviewExtensionAction>,
+) =>
+  left.length === right.length &&
+  left.every((action, index) => {
+    const other = right[index]!;
+    return (
+      action.id === other.id &&
+      action.name === other.name &&
+      action.title === other.title &&
+      action.icon === other.icon
+    );
+  });
+
 const anchorRect = (element: Element) => {
   const { x, y, width, height } = element.getBoundingClientRect();
   return { x, y, width, height };
@@ -38,12 +53,14 @@ export function usePreviewExtensions(webContentsId: number | null): PreviewExten
     readonly actions: ReadonlyArray<DesktopPreviewExtensionAction>;
   } | null>(null);
   const settings = useClientSettings((current) => current.browserExtensions);
+  // Without an enabled extension nothing runs, so tab switches skip the request and its render.
+  const anyEnabled = Object.values(settings).some((extension) => extension.enabled);
   const buttons = useRef(new Map<string, HTMLElement>());
   const menuAnchorRef = useRef<HTMLButtonElement | null>(null);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- mirrors the actions the desktop pushes for this guest
   useEffect(() => {
-    if (extensionsBridge === null || webContentsId === null) return;
+    if (extensionsBridge === null || webContentsId === null || !anyEnabled) return;
     let active = true;
     let latest = 0;
     const load = () => {
@@ -51,7 +68,12 @@ export function usePreviewExtensions(webContentsId: number | null): PreviewExten
       const request = latest;
       extensionsBridge.listActions(webContentsId).then(
         (actions) => {
-          if (active && request === latest) setLoaded({ webContentsId, actions });
+          if (!active || request !== latest) return;
+          setLoaded((current) =>
+            current?.webContentsId === webContentsId && sameActions(current.actions, actions)
+              ? current
+              : { webContentsId, actions },
+          );
         },
         () => undefined,
       );
@@ -71,9 +93,9 @@ export function usePreviewExtensions(webContentsId: number | null): PreviewExten
       stopChanges();
       stopRequests();
     };
-  }, [webContentsId]);
+  }, [webContentsId, anyEnabled]);
 
-  if (extensionsBridge === null || webContentsId === null) return null;
+  if (extensionsBridge === null || webContentsId === null || !anyEnabled) return null;
   if (loaded?.webContentsId !== webContentsId) return null;
   return {
     items: loaded.actions.map((action) => ({

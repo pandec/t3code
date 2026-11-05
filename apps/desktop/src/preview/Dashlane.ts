@@ -6,6 +6,7 @@ import {
   resolveBrowserProfiles,
   type BrowserExtensionSettingsById,
   type BrowserProfile,
+  type ClientSettings,
   type DesktopBrowserExtensionInstallation,
   type DesktopBrowserExtensionUpdate,
   type DesktopPreviewAnchorRect,
@@ -17,6 +18,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
+import * as FiberHandle from "effect/FiberHandle";
 import * as Base64 from "effect/encoding/Base64";
 import * as FileSystem from "effect/FileSystem";
 import * as HttpClient from "effect/http/HttpClient";
@@ -29,6 +31,7 @@ import type * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import { parseSafeExternalUrl } from "../electron/ElectronShell.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import {
@@ -153,8 +156,10 @@ export class PreviewDashlane extends Context.Service<
       session: Session,
       profileId: string | undefined,
     ) => Effect.Effect<void>;
-    /** Loads or unloads every prepared session to match the current settings. */
-    readonly refreshProfiles: Effect.Effect<void>;
+    /** Loads or unloads every prepared session to match saved settings; other saves return at once. */
+    readonly refreshProfiles: (
+      settings: Pick<ClientSettings, "browserProfiles" | "browserExtensions">,
+    ) => Effect.Effect<void>;
     /** Reports preview tabs the user interacts with to Dashlane, which only analyses tabs Chrome says are highlighted. */
     readonly trackGuest: (guest: WebContents) => void;
     readonly listInstallations: Effect.Effect<ReadonlyArray<DesktopBrowserExtensionInstallation>>;
@@ -195,6 +200,26 @@ interface ActionState {
   readonly iconRequests: Map<number | undefined, number>;
 }
 
+interface BrowserSettings {
+  readonly profiles: ReadonlyArray<BrowserProfile>;
+  readonly extensions: BrowserExtensionSettingsById;
+}
+
+const resolveSettings = (
+  settings: Pick<ClientSettings, "browserProfiles" | "browserExtensions">,
+): BrowserSettings => ({
+  profiles: resolveBrowserProfiles(settings.browserProfiles),
+  extensions: settings.browserExtensions,
+});
+
+/** Settings come from the decoded settings file, so their JSON is plain and comparable. */
+const settingsKey = (settings: BrowserSettings) => JSON.stringify(settings);
+
+const wantedAnywhere = (settings: BrowserSettings) =>
+  settings.profiles.some((profile) =>
+    browserExtensionRunsInProfile(settings.extensions, DASHLANE_EXTENSION_ID, profile),
+  );
+
 interface Popup {
   readonly window: BrowserWindow;
   readonly session: Session;
@@ -208,6 +233,7 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
   const fileSystem = yield* FileSystem.FileSystem;
   const crypto = yield* Digest.Digest;
   const httpClient = yield* HttpClient.HttpClient;
+  const electronWindow = yield* ElectronWindow.ElectronWindow;
   const preloadPath = environment.path.join(environment.dirname, "preview-dashlane-preload.cjs");
   /** Every session a preview tab used, with its profile, so setting changes can load or unload it. */
   const sessions = new Map<Session, string | undefined>();
@@ -217,8 +243,14 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
   const actions = new WeakMap<Session, ActionState>();
   const iconCache = new Map<string, string>();
   const lastGuests = new WeakMap<Session, WebContents>();
+  const guests = new WeakMap<Session, Set<WebContents>>();
+  const inputListeners = new WeakMap<
+    WebContents,
+    (event: unknown, input: Electron.InputEvent) => void
+  >();
   const highlighted = new WeakMap<Session, number>();
   const listeners = new Set<(event: PreviewDashlaneEvent) => Effect.Effect<void>>();
+  const schedule = yield* FiberHandle.make<void>();
   let popup: Popup | undefined;
   let dismissed: { readonly tabId: number; readonly at: number } | undefined;
   const pages = new WeakMap<Session, BrowserWindow>();
@@ -232,6 +264,7 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
   const context = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(context);
   const runPromise = Effect.runPromiseWith(context);
+  const runSync = Effect.runSyncWith(context);
   const emit = (event: PreviewDashlaneEvent) => {
     for (const listener of listeners) runFork(listener(event));
   };
@@ -283,11 +316,17 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
       Effect.orElseSucceed(() => null),
     );
 
-  let update: Omit<DesktopBrowserExtensionUpdate, "readyVersion"> = {
-    activity: "idle",
+  let update: Pick<DesktopBrowserExtensionUpdate, "checkedAt" | "error"> = {
     checkedAt: null,
     error: null,
   };
+  // A check can run while an update holds the mutex; each owns its activity so neither clears the other's.
+  let checkActivity: "checking" | "downloading" | undefined;
+  let updating = false;
+  /** Bumped whenever the installed or waiting version on disk changes. */
+  let diskChanges = 0;
+  /** A version that failed to load, not downloaded again until a newer one is offered. */
+  let brokenVersion: string | undefined;
   const setUpdate = (patch: Partial<typeof update>) => {
     update = { ...update, ...patch };
     emit({ _tag: "InstallationsChanged" });
@@ -310,6 +349,7 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
     if (installed === null && (yield* readVersion(previous)) !== null) {
       yield* removeDirectory(current);
       yield* fileSystem.rename(previous, current);
+      diskChanges += 1;
       installed = yield* readVersion(current);
     }
     if (!(yield* fileSystem.exists(pending))) return;
@@ -318,6 +358,7 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
       staged === null ||
       (installed !== null && ExtensionPackage.compareVersions(staged, installed) <= 0)
     ) {
+      diskChanges += 1;
       return yield* removeDirectory(pending);
     }
     if (installed === null) {
@@ -330,6 +371,7 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
       yield* fileSystem.rename(current, previous);
     }
     yield* fileSystem.rename(pending, current);
+    diskChanges += 1;
     iconCache.clear();
     yield* Effect.logInfo("Applied Dashlane extension update", { from: installed, to: staged });
   }).pipe(
@@ -347,6 +389,7 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
     yield* removeDirectory(failed);
     if (yield* fileSystem.exists(current)) yield* fileSystem.rename(current, failed);
     yield* fileSystem.rename(previous, current);
+    diskChanges += 1;
     yield* removeDirectory(failed);
     iconCache.clear();
     return restored;
@@ -404,8 +447,12 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
     tabId: number | undefined,
     appearance: ActionAppearance,
   ) => {
-    if (tabId === undefined) state.global = { ...state.global, ...appearance };
-    else state.tabs.set(tabId, { ...state.tabs.get(tabId), ...appearance });
+    const current = (tabId === undefined ? state.global : state.tabs.get(tabId)) ?? {};
+    const next = { ...current, ...appearance };
+    // Dashlane repeats its icon and title often; an unchanged one would re-render every preview.
+    if (next.icon === current.icon && next.title === current.title) return;
+    if (tabId === undefined) state.global = next;
+    else state.tabs.set(tabId, next);
     emit({ _tag: "ActionsChanged", webContentsId: tabId ?? null });
   };
 
@@ -455,24 +502,15 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
       throw new Error(`Loaded unexpected extension ${extension.id}`);
     }
     enabled.add(session);
+    for (const guest of guests.get(session) ?? []) watchInput(guest);
   };
 
   const readSettings = clientSettings.get.pipe(
     Effect.orElseSucceed(() => Option.none()),
-    Effect.map(
-      (
-        settings,
-      ): {
-        readonly profiles: ReadonlyArray<BrowserProfile>;
-        readonly extensions: BrowserExtensionSettingsById;
-      } =>
-        Option.match(settings, {
-          onNone: () => ({ profiles: resolveBrowserProfiles([]), extensions: {} }),
-          onSome: (value) => ({
-            profiles: resolveBrowserProfiles(value.browserProfiles),
-            extensions: value.browserExtensions,
-          }),
-        }),
+    Effect.map((settings) =>
+      resolveSettings(
+        Option.getOrElse(settings, () => ({ browserProfiles: [], browserExtensions: {} })),
+      ),
     ),
   );
 
@@ -494,6 +532,7 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
     lastGuests.delete(session);
     highlighted.delete(session);
     enabled.delete(session);
+    for (const guest of guests.get(session) ?? []) unwatchInput(guest);
     if (!registered.has(session)) return;
     const onWorkerStatus = workerListeners.get(session);
     if (onWorkerStatus)
@@ -526,6 +565,7 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
     const failedVersion = yield* readVersion(extensionDirectory());
     const restored = yield* rollBack;
     if (restored === null) return;
+    if (failedVersion !== null) brokenVersion = failedVersion;
     setUpdate({
       error: `Dashlane ${failedVersion === null ? "update" : `v${failedVersion}`} did not load, so v${restored} was restored.`,
     });
@@ -562,8 +602,8 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
   const sync = Effect.fn("PreviewDashlane.sync")(function* (
     session: Session,
     profileId: string | undefined,
+    settings: BrowserSettings,
   ) {
-    const settings = yield* readSettings;
     const profile = findBrowserProfile(settings.profiles, profileId ?? DEFAULT_BROWSER_PROFILE_ID);
     if (!browserExtensionRunsInProfile(settings.extensions, DASHLANE_EXTENSION_ID, profile)) {
       disable(session);
@@ -575,26 +615,39 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
   const prepareSession = Effect.fn("PreviewDashlane.prepareSession")(
     function* (session: Session, profileId: string | undefined) {
       sessions.set(session, profileId);
-      yield* sync(session, profileId);
+      yield* sync(session, profileId, yield* readSettings);
     },
     // Electron cannot cancel a load; keep setting changes serialized until its promise settles.
     Effect.uninterruptible,
     mutex.withPermit,
   );
 
+  /** The settings every prepared session and the update schedule last matched. */
+  let applied: string | undefined;
+
   /** Matches every prepared session to the settings, then applies a download nothing has loaded. */
-  const reconcile = Effect.gen(function* () {
-    for (const [session, profileId] of sessions) yield* sync(session, profileId);
+  const reconcile = Effect.fn("PreviewDashlane.reconcile")(function* (settings: BrowserSettings) {
+    applied = settingsKey(settings);
+    const disk = diskChanges;
+    yield* syncSchedule(settings);
+    for (const [session, profileId] of sessions) yield* sync(session, profileId, settings);
     if (!loadedAnywhere()) yield* settleDisk;
     // Loading can swap in a download or roll one back, which changes what Settings shows.
-    emit({ _tag: "InstallationsChanged" });
+    if (diskChanges !== disk) emit({ _tag: "InstallationsChanged" });
   });
 
-  const refreshProfiles = reconcile.pipe(
-    Effect.uninterruptible,
-    mutex.withPermit,
-    Effect.withSpan("PreviewDashlane.refreshProfiles"),
-  );
+  const refreshProfiles = (
+    saved: Pick<ClientSettings, "browserProfiles" | "browserExtensions">,
+  ) => {
+    const settings = resolveSettings(saved);
+    // Most saves change neither setting, and must not wait for a load or download.
+    if (settingsKey(settings) === applied) return Effect.void;
+    return reconcile(settings).pipe(
+      Effect.uninterruptible,
+      mutex.withPermit,
+      Effect.withSpan("PreviewDashlane.refreshProfiles"),
+    );
+  };
 
   const readyVersion = Effect.gen(function* () {
     const staged = yield* readVersion(extensionDirectory("pending"));
@@ -608,18 +661,28 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
   const listInstallations = Effect.gen(function* () {
     const directory = extensionDirectory();
     const version = yield* readVersion(directory);
+    const activity: DesktopBrowserExtensionUpdate["activity"] = updating
+      ? "updating"
+      : (checkActivity ?? "idle");
     return [
       {
         id: DASHLANE_EXTENSION_ID,
         name: EXTENSION_NAME,
         directory,
         version,
-        update: { ...update, readyVersion: yield* readyVersion },
+        update: {
+          ...update,
+          activity,
+          readyVersion: yield* readyVersion,
+        },
       },
     ];
   }).pipe(Effect.withSpan("PreviewDashlane.listInstallations"));
 
-  let checking = false;
+  const setCheckActivity = (activity: typeof checkActivity) => {
+    checkActivity = activity;
+    emit({ _tag: "InstallationsChanged" });
+  };
   const packageTarget = (version: string) => ({
     extensionId: DASHLANE_EXTENSION_ID,
     version,
@@ -631,7 +694,7 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
     const pending = extensionDirectory("pending");
     yield* removeDirectory(pending);
     yield* fileSystem.rename(extensionDirectory("download"), pending);
-    if (!loadedAnywhere()) yield* reconcile;
+    if (!loadedAnywhere()) yield* reconcile(yield* readSettings);
   }).pipe(Effect.uninterruptible, mutex.withPermit);
 
   const findUpdate = Effect.fn("PreviewDashlane.findUpdate")(
@@ -648,8 +711,8 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
       if (installed !== null && ExtensionPackage.compareVersions(result.version, installed) <= 0) {
         return;
       }
-      if (result.version === (yield* readyVersion)) return;
-      setUpdate({ activity: "downloading" });
+      if (result.version === brokenVersion || result.version === (yield* readyVersion)) return;
+      setCheckActivity("downloading");
       const crx = yield* ExtensionPackage.downloadPackage(result);
       const download = extensionDirectory("download");
       yield* removeDirectory(download);
@@ -666,9 +729,9 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
 
   const runCheck = Effect.fn("PreviewDashlane.runCheck")(function* (onDemand: boolean) {
     // One check or download at a time; a second request while one runs is already answered by it.
-    if (checking) return;
-    checking = true;
-    setUpdate({ activity: "checking", error: null });
+    if (checkActivity !== undefined) return;
+    checkActivity = "checking";
+    setUpdate({ error: null });
     yield* findUpdate(onDemand).pipe(
       Effect.catch((error) =>
         Effect.logWarning("Dashlane update check failed", { error }).pipe(
@@ -683,12 +746,7 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
           ),
         ),
       ),
-      Effect.ensuring(
-        Effect.sync(() => {
-          checking = false;
-          setUpdate({ activity: "idle" });
-        }),
-      ),
+      Effect.ensuring(Effect.sync(() => setCheckActivity(undefined))),
     );
   });
 
@@ -698,27 +756,48 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
   const applyUpdate = Effect.fn("PreviewDashlane.applyUpdate")(
     function* (extensionId: string) {
       if (extensionId !== DASHLANE_EXTENSION_ID || (yield* readyVersion) === null) return;
-      setUpdate({ activity: "updating", error: null });
-      for (const session of sessions.keys()) disable(session);
-      yield* reconcile;
-      setUpdate({ activity: "idle" });
+      updating = true;
+      setUpdate({ error: null });
+      yield* Effect.suspend(() => {
+        for (const session of sessions.keys()) disable(session);
+        return readSettings.pipe(Effect.flatMap(reconcile));
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            updating = false;
+            emit({ _tag: "InstallationsChanged" });
+          }),
+        ),
+      );
     },
     Effect.uninterruptible,
     mutex.withPermit,
   );
 
   const scheduledCheck = Effect.gen(function* () {
-    const settings = yield* readSettings;
-    const wanted = settings.profiles.some((profile) =>
-      browserExtensionRunsInProfile(settings.extensions, DASHLANE_EXTENSION_ID, profile),
-    );
     // Installing is the user's call from Settings; the schedule only keeps an install current.
-    if (!wanted || (yield* readVersion(extensionDirectory())) === null) return;
+    if ((yield* readVersion(extensionDirectory())) === null) return;
     yield* runCheck(false);
   });
 
-  yield* Effect.sleep(UPDATE_STARTUP_DELAY).pipe(
-    Effect.andThen(scheduledCheck.pipe(Effect.repeat(Schedule.spaced(UPDATE_INTERVAL)))),
+  /** Checks run shortly after Dashlane is turned on, then daily, and stop while it is off everywhere. */
+  // Annotated: a check can stage a download, which reconciles, which syncs this schedule.
+  function syncSchedule(settings: BrowserSettings): Effect.Effect<void> {
+    return wantedAnywhere(settings)
+      ? FiberHandle.run(
+          schedule,
+          Effect.sleep(UPDATE_STARTUP_DELAY).pipe(
+            Effect.andThen(scheduledCheck.pipe(Effect.repeat(Schedule.spaced(UPDATE_INTERVAL)))),
+          ),
+          { onlyIfMissing: true },
+        ).pipe(Effect.asVoid)
+      : FiberHandle.clear(schedule);
+  }
+
+  yield* readSettings.pipe(
+    Effect.tap((settings) => Effect.sync(() => void (applied ??= settingsKey(settings)))),
+    Effect.flatMap(syncSchedule),
+    mutex.withPermit,
     Effect.forkScoped,
   );
 
@@ -752,9 +831,12 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
       if (Option.isSome(external)) void shell.openExternal(external.value);
       return { action: "deny" };
     });
-    webContents.on("will-navigate", (event, url) => {
-      if (!url.startsWith(origin)) event.preventDefault();
-    });
+    // Server redirects bypass will-navigate; Turnstile's frames load from elsewhere.
+    const confine = (details: { url: string; isMainFrame: boolean; preventDefault(): void }) => {
+      if (details.isMainFrame && !details.url.startsWith(origin)) details.preventDefault();
+    };
+    webContents.on("will-navigate", confine);
+    webContents.on("will-redirect", confine);
   };
   const keepOnExtension = (webContents: WebContents) => keepOn(webContents, `${EXTENSION_ORIGIN}/`);
 
@@ -779,6 +861,21 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
     }, 0);
   };
 
+  /** T3's menus, broadcasts and Dock activation pass these windows by. */
+  const createWindow = (options: Electron.BrowserWindowConstructorOptions) =>
+    runSync(electronWindow.create(options, { auxiliary: true }));
+
+  /** A window without a parent closes with T3's, so closing T3 still quits on Windows and Linux. */
+  const closeWithMain = (window: BrowserWindow) => {
+    const main = Option.getOrUndefined(runSync(electronWindow.main));
+    if (main === undefined) return;
+    const close = () => {
+      if (!window.isDestroyed()) window.destroy();
+    };
+    main.once("closed", close);
+    window.once("closed", () => main.removeListener("closed", close));
+  };
+
   /** Shows a Dashlane page that Chrome would open in a tab, such as its web app, in one window per session. */
   const openPage = (session: Session, url: string): number => {
     const existing = pages.get(session);
@@ -787,13 +884,14 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
       existing.focus();
       return existing.webContents.id;
     }
-    const page = new BrowserWindow({
+    const page = createWindow({
       width: 1100,
       height: 800,
       title: "Dashlane",
       show: false,
       webPreferences: { session, sandbox: true, contextIsolation: true, nodeIntegration: false },
     });
+    closeWithMain(page);
     // Not a popup: the shim keeps Chrome's tab behaviour here.
     page.webContents.ipc.on(DASHLANE_ACTIVE_TAB_CHANNEL, (event) => {
       event.returnValue = null;
@@ -814,12 +912,13 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
   const openCheck = async (session: Session) => {
     const previous = checks.get(session);
     if (previous && !previous.isDestroyed()) previous.destroy();
-    const check = new BrowserWindow({
+    const check = createWindow({
       width: 480,
       height: 640,
       title: "Dashlane security check",
       webPreferences: { session, sandbox: true, contextIsolation: true, nodeIntegration: false },
     });
+    closeWithMain(check);
     keepOn(check.webContents, CHECK_URL);
     check.on("blur", () => closePopupUnlessFocused(session));
     checks.set(session, check);
@@ -880,7 +979,7 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
       height: Math.round(anchorInHost.height * zoom),
     };
     let preferred: Size = { width: 380, height: 600 };
-    const window = new BrowserWindow({
+    const window = createWindow({
       ...preferred,
       title: EXTENSION_NAME,
       show: false,
@@ -944,23 +1043,14 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
       if (guest !== undefined && extensionId === DASHLANE_EXTENSION_ID) showPopup(guest, anchor);
     });
 
-  const trackGuest = (guest: WebContents): void => {
+  /** Input events are frequent, so only tabs of sessions running Dashlane listen to them. */
+  function watchInput(guest: WebContents) {
+    if (inputListeners.has(guest)) return;
     const { id, session } = guest;
-    // Electron emits no focus events for webview guests, so a press in another tab, or on a new page, stands in.
-    guest.on("did-navigate", () => {
-      if (highlighted.get(session) === id) highlighted.delete(session);
-    });
-    guest.on("destroyed", () => {
-      const state = actions.get(session);
-      state?.tabs.delete(id);
-      state?.iconRequests.delete(id);
-      if (highlighted.get(session) === id) highlighted.delete(session);
-      if (lastGuests.get(session) === guest) lastGuests.delete(session);
-      if (popup?.tabId === id) closePopup();
-    });
-    guest.on("input-event", (_event, input) => {
-      if (!["mouseDown", "rawKeyDown", "keyDown"].includes(input.type)) return;
-      if (!enabled.has(session)) return;
+    const listener = (_event: unknown, input: Electron.InputEvent) => {
+      if (input.type !== "mouseDown" && input.type !== "rawKeyDown" && input.type !== "keyDown") {
+        return;
+      }
       lastGuests.set(session, guest);
       if (highlighted.get(session) === id) return;
       highlighted.set(session, id);
@@ -973,7 +1063,36 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
           }
         })
         .catch(() => undefined);
+    };
+    inputListeners.set(guest, listener);
+    guest.on("input-event", listener);
+  }
+
+  function unwatchInput(guest: WebContents) {
+    const listener = inputListeners.get(guest);
+    if (listener === undefined) return;
+    inputListeners.delete(guest);
+    guest.removeListener("input-event", listener);
+  }
+
+  const trackGuest = (guest: WebContents): void => {
+    const { id, session } = guest;
+    const tracked = guests.get(session) ?? new Set();
+    guests.set(session, tracked.add(guest));
+    // Electron emits no focus events for webview guests, so a press in another tab, or on a new page, stands in.
+    guest.on("did-navigate", () => {
+      if (highlighted.get(session) === id) highlighted.delete(session);
     });
+    guest.on("destroyed", () => {
+      tracked.delete(guest);
+      const state = actions.get(session);
+      state?.tabs.delete(id);
+      state?.iconRequests.delete(id);
+      if (highlighted.get(session) === id) highlighted.delete(session);
+      if (lastGuests.get(session) === guest) lastGuests.delete(session);
+      if (popup?.tabId === id) closePopup();
+    });
+    if (enabled.has(session)) watchInput(guest);
   };
 
   const subscribe = (listener: (event: PreviewDashlaneEvent) => Effect.Effect<void>) =>

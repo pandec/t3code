@@ -6,6 +6,7 @@ import {
   type BrowserExtensionSettings,
   updateBrowserExtensionSettings,
 } from "@t3tools/contracts";
+import type * as Electron from "electron";
 import type { Session, WebContents } from "electron";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -23,6 +24,7 @@ import { type Mock, vi } from "vite-plus/test";
 
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import {
   DASHLANE_ACTION_CHANNEL,
@@ -46,6 +48,8 @@ const electron = vi.hoisted(() => {
   class FakeWindow {
     readonly handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
     readonly events = new Map<string, (...args: unknown[]) => void>();
+    readonly windowEvents = new Map<string, Set<() => void>>();
+    auxiliary = false;
     readonly loadURL = vi.fn((_url: string) => Promise.resolve());
     readonly focus = vi.fn();
     destroyed = false;
@@ -69,9 +73,18 @@ const electron = vi.hoisted(() => {
     static fromWebContents = (contents: { readonly window?: unknown }) => contents.window ?? null;
     static getFocusedWindow = () => null;
     on = () => undefined;
-    once = () => undefined;
+    once = (name: string, listener: () => void) => {
+      const listeners = this.windowEvents.get(name) ?? new Set();
+      this.windowEvents.set(name, listeners.add(listener));
+    };
+    removeListener = (name: string, listener: () => void) =>
+      void this.windowEvents.get(name)?.delete(listener);
     isDestroyed = () => this.destroyed;
-    destroy = () => void (this.destroyed = true);
+    destroy = () => {
+      if (this.destroyed) return;
+      this.destroyed = true;
+      for (const listener of this.windowEvents.get("closed") ?? []) listener();
+    };
   }
   return { windows, guests, paths, FakeWindow };
 });
@@ -185,6 +198,7 @@ const makeHarness = Effect.fn("DashlaneTest.makeHarness")(function* (
   );
   const links = new Map<string, string>();
   const realPath = vi.fn((path: string) => Effect.succeed(links.get(path) ?? path));
+  const mainWindow = new electron.FakeWindow({});
   const service = yield* make.pipe(
     Effect.provide(
       Layer.mergeAll(
@@ -207,6 +221,19 @@ const makeHarness = Effect.fn("DashlaneTest.makeHarness")(function* (
           set: () => Effect.void,
         }),
         Layer.succeed(HttpClient.HttpClient, httpClient),
+        Layer.mock(ElectronWindow.ElectronWindow)({
+          create: (options, behavior) =>
+            Effect.sync(() => {
+              const window = new electron.FakeWindow(options);
+              window.auxiliary = behavior?.auxiliary === true;
+              return window as unknown as Electron.BrowserWindow;
+            }),
+          main: Effect.sync(() =>
+            mainWindow.isDestroyed()
+              ? Option.none()
+              : Option.some(mainWindow as unknown as Electron.BrowserWindow),
+          ),
+        }),
         options.userData === undefined
           ? FileSystem.layerNoop({ readFileString, readFile, realPath })
           : Layer.empty,
@@ -222,6 +249,9 @@ const makeHarness = Effect.fn("DashlaneTest.makeHarness")(function* (
       destroyed: false,
       isDestroyed: () => guest.destroyed,
       on: (name: string, listener: (...args: unknown[]) => void) => void events.set(name, listener),
+      removeListener: (name: string, listener: (...args: unknown[]) => void) => {
+        if (events.get(name) === listener) events.delete(name);
+      },
       events,
     };
     electron.guests.set(id, guest);
@@ -230,6 +260,9 @@ const makeHarness = Effect.fn("DashlaneTest.makeHarness")(function* (
   };
   return {
     service,
+    /** Tells the service the settings were saved, as the settings IPC does. */
+    refresh: () => service.refreshProfiles(settings),
+    mainWindow,
     session,
     preloads,
     loadExtension,
@@ -356,22 +389,49 @@ describe("Dashlane session lifecycle", () => {
       yield* test.service.prepareSession(test.session, undefined);
       assert.isTrue(yield* running());
 
+      const events = yield* Queue.unbounded<PreviewDashlaneEvent>();
+      yield* test.service.subscribe((event) => Queue.offer(events, event).pipe(Effect.asVoid));
       test.configure({ enabled: false });
-      yield* test.service.refreshProfiles;
+      yield* test.refresh();
       assert.isFalse(yield* running());
       assert.deepStrictEqual(test.removeExtension.mock.calls, [[DASHLANE_EXTENSION_ID]]);
       assert.strictEqual(test.preloads.size, 0);
 
       // Prepared sessions load again when the setting comes back, before any new tab asks.
       test.configure({ enabled: true });
-      yield* test.service.refreshProfiles;
+      yield* test.refresh();
       assert.isTrue(yield* running());
       assert.strictEqual(test.loadExtension.mock.calls.length, 2);
+      // Neither change touched the installed files, so Settings is not told to reload them.
+      const tags = [yield* Queue.take(events), yield* Queue.take(events)].map(
+        (event) => event._tag,
+      );
+      assert.deepStrictEqual(tags, ["ActionsChanged", "ActionsChanged"]);
 
       test.configure({ profileIds: ["profile-1"] });
-      yield* test.service.refreshProfiles;
+      yield* test.refresh();
       assert.isFalse(yield* running());
       assert.strictEqual(test.removeExtension.mock.calls.length, 2);
+    }).pipe(Effect.scoped, Effect.provide(testServices)),
+  );
+
+  it.effect("saves of other settings never wait for a load", () =>
+    Effect.gen(function* () {
+      const allowRead = yield* Deferred.make<void>();
+      let gated = false;
+      const test = yield* makeHarness({
+        beforeRead: Effect.suspend(() => (gated ? Deferred.await(allowRead) : Effect.void)),
+      });
+      yield* test.refresh();
+      gated = true;
+      const loading = yield* test.service
+        .prepareSession(test.session, undefined)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* test.refresh();
+      assert.strictEqual(test.loadExtension.mock.calls.length, 0);
+      yield* Deferred.succeed(allowRead, undefined);
+      yield* Fiber.join(loading);
+      assert.strictEqual(test.loadExtension.mock.calls.length, 1);
     }).pipe(Effect.scoped, Effect.provide(testServices)),
   );
 
@@ -393,8 +453,10 @@ describe("Dashlane session lifecycle", () => {
         version: null,
       });
 
+      // A later setting change retries.
       test.setInstalled(true);
-      yield* test.service.refreshProfiles;
+      test.configure({ profileIds: ["default"] });
+      yield* test.refresh();
       assert.strictEqual(test.loadExtension.mock.calls.length, 1);
       assert.strictEqual((yield* installation(test)).version, "6.2645.0");
     }).pipe(Effect.scoped, Effect.provide(testServices)),
@@ -460,6 +522,13 @@ describe("Dashlane toolbar action", () => {
       report({}, { kind: "title", title: "Unlocked", tabId: 7 });
       yield* Queue.take(events);
       yield* Queue.take(events);
+      // Repeating an appearance tells nobody.
+      report({}, { kind: "title", title: "Unlocked", tabId: 7 });
+      report({}, { kind: "title", title: "Dashlane", tabId: 8 });
+      assert.deepStrictEqual(yield* Queue.take(events), {
+        _tag: "ActionsChanged",
+        webContentsId: 8,
+      });
       assert.deepInclude(yield* action(7), {
         icon: iconUrl("icon_auth@2x.png"),
         title: "Unlocked",
@@ -514,6 +583,8 @@ describe("Dashlane popup navigation", () => {
       });
       const popup = electron.windows.at(-1)!;
       assert.deepInclude(popup.options as Record<string, unknown>, { frame: false });
+      // T3's menus, broadcasts and Dock activation pass Dashlane's windows by.
+      assert.isTrue(popup.auxiliary);
       const openTab = popup.handlers.get(DASHLANE_OPEN_TAB_CHANNEL)!;
       const fromPopup = { senderFrame: popup.webContents.mainFrame };
       const page = (route: string) =>
@@ -534,6 +605,7 @@ describe("Dashlane popup navigation", () => {
         nodeIntegration: false,
       });
       assert.deepStrictEqual(vault.loadURL.mock.calls, [[page("login")]]);
+      assert.isTrue(vault.auxiliary);
 
       yield* Effect.promise(() => Promise.resolve(openTab(fromPopup, page("signup"))));
       assert.strictEqual(electron.windows.at(-1), vault);
@@ -549,7 +621,7 @@ describe("Dashlane popup navigation", () => {
       assert.isFalse(vault.isDestroyed());
 
       test.configure({ enabled: false });
-      yield* test.service.refreshProfiles;
+      yield* test.refresh();
       assert.isTrue(vault.isDestroyed());
     }).pipe(Effect.scoped, Effect.provide(testServices)),
   );
@@ -579,15 +651,34 @@ describe("Dashlane security check", () => {
       assert.deepStrictEqual(check.loadURL.mock.calls, [[checkUrl]]);
       // Dashlane asks the check page for a token only once its tab reports complete.
       assert.deepInclude(first, { id: check.webContents.id, status: "complete" });
+      assert.isTrue(check.auxiliary);
+
+      // A server redirect is held to the same origin as a navigation; Turnstile's frames are not.
+      const blocked = (name: string, url: string, isMainFrame = true) => {
+        const preventDefault = vi.fn();
+        check.events.get(name)!({ url, isMainFrame, preventDefault });
+        return preventDefault.mock.calls.length > 0;
+      };
+      for (const name of ["will-navigate", "will-redirect"]) {
+        assert.isTrue(blocked(name, "https://attacker.example/"), name);
+        assert.isFalse(blocked(name, `${checkUrl}?step=2`), name);
+      }
+      assert.isFalse(blocked("will-redirect", "https://challenges.cloudflare.com/", false));
 
       yield* Effect.promise(() => Promise.resolve(openTab({}, checkUrl)));
       assert.isTrue(check.isDestroyed());
       const second = electron.windows.at(-1)!;
       assert.notStrictEqual(second, check);
 
-      test.configure({ enabled: false });
-      yield* test.service.refreshProfiles;
+      // It closes with T3's window, so closing that still quits on Windows and Linux.
+      test.mainWindow.destroy();
       assert.isTrue(second.isDestroyed());
+      yield* Effect.promise(() => Promise.resolve(openTab({}, checkUrl)));
+      const third = electron.windows.at(-1)!;
+
+      test.configure({ enabled: false });
+      yield* test.refresh();
+      assert.isTrue(third.isDestroyed());
       assert.strictEqual(test.workerListeners.size, 0);
     }).pipe(Effect.scoped, Effect.provide(testServices)),
   );
@@ -633,13 +724,17 @@ describe("Dashlane tab focus", () => {
       yield* workerStarted();
       assert.strictEqual(test.workerSend.mock.calls.length, 3);
 
+      // Off, no tab tracks input; on again, open tabs do.
       guest.destroyed = false;
       test.configure({ enabled: false });
-      yield* test.service.refreshProfiles;
-      navigate();
-      input("mouseDown");
-      assert.strictEqual(start.mock.calls.length, 4);
-      assert.strictEqual(test.workerSend.mock.calls.length, 3);
+      yield* test.refresh();
+      const later = test.addGuest(5);
+      assert.isFalse(guest.events.has("input-event"));
+      assert.isFalse(later.events.has("input-event"));
+      test.configure({ enabled: true });
+      yield* test.refresh();
+      assert.isTrue(guest.events.has("input-event"));
+      assert.isTrue(later.events.has("input-event"));
     }).pipe(Effect.scoped, Effect.provide(testServices)),
   );
 });
@@ -667,6 +762,16 @@ const makeUserData = Effect.gen(function* () {
   return { root, directory, writeVersion, exists: fileSystem.exists };
 });
 
+const offerUpdate = (version: string) => (url: URL) =>
+  url.hostname === "clients2.google.com"
+    ? new Response(
+        NO_UPDATE_XML.replace(
+          '<updatecheck status="noupdate"/>',
+          `<updatecheck codebase="https://clients2.googleusercontent.com/crx/blobs/x.crx" status="ok" version="${version}"/>`,
+        ),
+      )
+    : new Response("PK\u0003\u0004 not a crx");
+
 describe("Dashlane updates", () => {
   it.effect("swaps in a download only while no session has Dashlane loaded", () =>
     Effect.gen(function* () {
@@ -683,7 +788,7 @@ describe("Dashlane updates", () => {
 
       // While it runs, a newer download waits for Update now.
       yield* disk.writeVersion("pending", "6.2700.0");
-      yield* test.service.refreshProfiles;
+      yield* test.refresh();
       assert.deepInclude(yield* installation(test), { version: "6.2645.0" });
       assert.strictEqual((yield* installation(test)).update?.readyVersion, "6.2700.0");
       assert.strictEqual(test.loadExtension.mock.calls.length, 1);
@@ -703,7 +808,7 @@ describe("Dashlane updates", () => {
       yield* test.service.subscribe((event) => Queue.offer(events, event).pipe(Effect.asVoid));
       yield* disk.writeVersion("pending", "6.2800.0");
       test.configure({ enabled: false });
-      yield* test.service.refreshProfiles;
+      yield* test.refresh();
       assert.strictEqual((yield* installation(test)).version, "6.2800.0");
       assert.deepInclude(yield* Queue.takeAll(events), { _tag: "InstallationsChanged" });
     }).pipe(Effect.scoped, Effect.provide(testServices)),
@@ -728,6 +833,20 @@ describe("Dashlane updates", () => {
       });
       assert.lengthOf(yield* test.service.listActions(HOST_ID, 7), 1);
       assert.isFalse(yield* disk.exists(disk.directory("failed")));
+
+      // The version that failed is not downloaded again; a newer one is.
+      const hosts = Queue.takeAll(test.requests).pipe(
+        Effect.map((urls) => [...urls].map((url) => url.hostname)),
+      );
+      test.respondWith(offerUpdate("6.2645.0"));
+      yield* test.service.checkForUpdates(DASHLANE_EXTENSION_ID);
+      assert.deepStrictEqual(yield* hosts, ["clients2.google.com"]);
+      test.respondWith(offerUpdate("6.2700.0"));
+      yield* test.service.checkForUpdates(DASHLANE_EXTENSION_ID);
+      assert.deepStrictEqual(yield* hosts, [
+        "clients2.google.com",
+        "clients2.googleusercontent.com",
+      ]);
     }).pipe(Effect.scoped, Effect.provide(testServices)),
   );
 
@@ -747,6 +866,40 @@ describe("Dashlane updates", () => {
       test.loadExtension.mockImplementationOnce(() => Promise.reject(new Error("bad build")));
       yield* test.service.prepareSession(test.session, undefined);
       assert.deepInclude(yield* installation(test), { version: "6.2600.0" });
+    }).pipe(Effect.scoped, Effect.provide(testServices)),
+  );
+
+  it.effect("keeps an update's activity apart from a check's, and clears it when it fails", () =>
+    Effect.gen(function* () {
+      const disk = yield* makeUserData;
+      yield* disk.writeVersion(undefined, "6.2600.0");
+      const test = yield* makeHarness({ userData: disk.root });
+      yield* test.service.prepareSession(test.session, undefined);
+      yield* disk.writeVersion("pending", "6.2645.0");
+      const activity = installation(test).pipe(Effect.map((value) => value.update?.activity));
+
+      const loading = Promise.withResolvers<void>();
+      const finishLoad = Promise.withResolvers<{ id: string }>();
+      test.loadExtension.mockImplementationOnce(() => {
+        loading.resolve();
+        return finishLoad.promise;
+      });
+      const updating = yield* test.service
+        .applyUpdate(DASHLANE_EXTENSION_ID)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Effect.promise(() => loading.promise);
+      yield* test.service.checkForUpdates(DASHLANE_EXTENSION_ID);
+      assert.strictEqual(yield* activity, "updating");
+      finishLoad.resolve({ id: DASHLANE_EXTENSION_ID });
+      yield* Fiber.join(updating);
+      assert.strictEqual(yield* activity, "idle");
+
+      yield* disk.writeVersion("pending", "6.2700.0");
+      test.removeExtension.mockImplementationOnce(() => {
+        throw new Error("Electron refused");
+      });
+      yield* Effect.exit(test.service.applyUpdate(DASHLANE_EXTENSION_ID));
+      assert.strictEqual(yield* activity, "idle");
     }).pipe(Effect.scoped, Effect.provide(testServices)),
   );
 
@@ -773,16 +926,7 @@ describe("Dashlane updates", () => {
       assert.deepInclude(checked, { activity: "idle", readyVersion: null, error: null });
       assert.isNotNull(checked?.checkedAt);
 
-      test.respondWith((url) =>
-        url.hostname === "clients2.google.com"
-          ? new Response(
-              NO_UPDATE_XML.replace(
-                '<updatecheck status="noupdate"/>',
-                '<updatecheck codebase="https://clients2.googleusercontent.com/crx/blobs/x.crx" status="ok" version="6.2645.0"/>',
-              ),
-            )
-          : new Response("PK\u0003\u0004 not a crx"),
-      );
+      test.respondWith(offerUpdate("6.2645.0"));
       yield* test.service.checkForUpdates(DASHLANE_EXTENSION_ID);
       assert.deepInclude((yield* installation(test)).update, {
         activity: "idle",
@@ -797,16 +941,25 @@ describe("Dashlane updates", () => {
   it.effect("checks shortly after start and daily, only while Dashlane is on", () =>
     Effect.gen(function* () {
       const test = yield* makeHarness();
-      test.configure({ enabled: false });
-      yield* TestClock.adjust("30 seconds");
-      // The startup check read the setting and skipped.
+      // Start reads the setting once, to decide whether to schedule checks.
       yield* Queue.take(test.settingsReads);
+      test.configure({ enabled: false });
+      yield* test.refresh();
+      yield* TestClock.adjust("2 days");
+      assert.strictEqual(yield* Queue.size(test.requests), 0);
+
       test.configure({ enabled: true });
-      yield* TestClock.adjust("1 day");
+      yield* test.refresh();
+      yield* TestClock.adjust("30 seconds");
       const url = yield* Queue.take(test.requests);
       assert.strictEqual(url.searchParams.get("x"), `id=${DASHLANE_EXTENSION_ID}&v=6.2645.0&uc`);
       yield* TestClock.adjust("1 day");
       yield* Queue.take(test.requests);
+      assert.strictEqual(yield* Queue.size(test.settingsReads), 0);
+
+      test.configure({ enabled: false });
+      yield* test.refresh();
+      yield* TestClock.adjust("1 day");
       assert.strictEqual(yield* Queue.size(test.requests), 0);
     }).pipe(Effect.scoped, Effect.provide(testServices)),
   );

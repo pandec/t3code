@@ -176,6 +176,16 @@ describe("ElectronWindow", () => {
       getAllWindowsMock.mockReturnValue([auxiliary, ordinary]);
       const current = yield* electronWindow.currentMainOrFirst;
       assert.isTrue(current._tag === "Some" && current.value === ordinary);
+
+      // A focused auxiliary window neither receives menu actions nor app broadcasts.
+      getFocusedWindowMock.mockReturnValue(auxiliary);
+      const focused = yield* electronWindow.focusedMainOrFirst;
+      assert.isTrue(focused._tag === "Some" && focused.value === ordinary);
+      const sent: Array<unknown> = [];
+      Object.assign(auxiliary, { webContents: { send: () => sent.push(auxiliary) } });
+      Object.assign(ordinary, { webContents: { send: () => sent.push(ordinary) } });
+      yield* electronWindow.sendAll("channel");
+      assert.deepStrictEqual(sent, [ordinary]);
     }).pipe(Effect.provide(layerTest)),
   );
 });
