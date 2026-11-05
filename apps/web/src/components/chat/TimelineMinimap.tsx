@@ -102,12 +102,21 @@ export const TimelineMinimap = memo(function TimelineMinimap({
     currentIndex !== null && currentIndex >= 0 && currentIndex < items.length ? currentIndex : null;
   const spacing = resolveTimelineMinimapSpacing(items.length, railHeight);
   // Pointer hover must not move the rail under the cursor; only keyboard focus leads it.
-  const scrollOffset = resolveTimelineMinimapScrollOffset({
-    anchorIndex: keyboardNavigating ? resolvedActiveIndex : anchorIndex,
+  const readingScrollOffset = resolveTimelineMinimapScrollOffset({
+    anchorIndex,
     itemCount: items.length,
     railHeight,
     spacing,
   });
+  const scrollOffset =
+    keyboardNavigating && resolvedActiveIndex !== null
+      ? resolveTimelineMinimapScrollOffset({
+          anchorIndex: resolvedActiveIndex,
+          itemCount: items.length,
+          railHeight,
+          spacing,
+        })
+      : readingScrollOffset;
   const maxScrollOffset = resolveTimelineMinimapScrollOffset({
     anchorIndex: null,
     itemCount: items.length,
@@ -124,19 +133,17 @@ export const TimelineMinimap = memo(function TimelineMinimap({
     resolvedCurrentIndex === null ? null : (items[resolvedCurrentIndex - 1] ?? null);
   const nextItem = resolvedCurrentIndex === null ? null : (items[resolvedCurrentIndex + 1] ?? null);
 
-  const resolveActiveIndexFromPointer = (event: MouseEvent<HTMLElement>) => {
+  const resolveActiveIndexFromPointer = (
+    event: MouseEvent<HTMLElement>,
+    offset: number = scrollOffset,
+  ) => {
     return resolveTimelineMinimapItemIndexFromPointer({
       itemCount: items.length,
       railTop: event.currentTarget.getBoundingClientRect().top,
-      scrollOffset,
+      scrollOffset: offset,
       spacing,
       pointerY: event.clientY,
     });
-  };
-
-  const updateActiveIndexFromPointer = (event: MouseEvent<HTMLElement>) => {
-    const nextIndex = resolveActiveIndexFromPointer(event);
-    setActiveIndex(nextIndex);
   };
 
   const moveActiveIndex = (delta: number) => {
@@ -186,6 +193,7 @@ export const TimelineMinimap = memo(function TimelineMinimap({
           ref={railRef}
           style={{
             height: resolveTimelineMinimapHeightStyle(items.length),
+            maxHeight: "100%",
             width: resolveTimelineMinimapInteractiveWidth(hitStripWidth, activeItem !== null),
           }}
         >
@@ -222,7 +230,9 @@ export const TimelineMinimap = memo(function TimelineMinimap({
               }
               event.currentTarget.blur();
             }}
-            onFocus={() => setActiveIndex((current) => current ?? resolvedCurrentIndex ?? 0)}
+            onFocus={() =>
+              setActiveIndex((current) => current ?? resolvedCurrentIndex ?? anchorIndex ?? 0)
+            }
             onKeyDown={(event) => {
               if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
                 setKeyboardNavigating(true);
@@ -249,12 +259,9 @@ export const TimelineMinimap = memo(function TimelineMinimap({
             onMouseLeave={() => setActiveIndex(null)}
             onMouseMove={(event) => {
               if (event.buttons !== 0 && !pressedOnStripRef.current) return;
-              // The rail re-anchors when keyboard leading ends; hit-test after that offset applies.
-              if (keyboardNavigating) {
-                setKeyboardNavigating(false);
-                return;
-              }
-              updateActiveIndexFromPointer(event);
+              // The pointer ends keyboard leading, so hit-test against the reading offset it restores.
+              setKeyboardNavigating(false);
+              setActiveIndex(resolveActiveIndexFromPointer(event, readingScrollOffset));
             }}
             onMouseDown={(event) => {
               if (timelineMinimapEventTargetsPreview(event.target)) {

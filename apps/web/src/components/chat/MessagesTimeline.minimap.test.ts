@@ -31,6 +31,8 @@ function messageRow(input: {
       text: input.text,
       streaming: input.streaming ?? false,
       ...(input.createdBy ? { createdBy: input.createdBy } : {}),
+      createdAt: `created:${input.id}`,
+      updatedAt: `updated:${input.id}`,
     },
     isFinalAssistantResponse: input.final ?? false,
   } as never;
@@ -83,16 +85,25 @@ describe("deriveTimelineMinimapItems", () => {
       messageRow({ id: "assistant-3", role: "assistant", text: "assistant-3", final: true }),
     ];
 
-    expect(deriveTimelineMinimapItems(rows, "final-assistant").map(({ id }) => id)).toEqual([
-      "assistant-1",
-      "assistant-3",
+    expect(
+      deriveTimelineMinimapItems(rows, "final-assistant").map(({ id, timestamp }) => [
+        id,
+        timestamp,
+      ]),
+    ).toEqual([
+      ["assistant-1", "updated:assistant-1"],
+      ["assistant-3", "updated:assistant-3"],
     ]);
     expect(
-      deriveTimelineMinimapItems(rows, "user-turn").map(({ id, fromAgent }) => [id, fromAgent]),
+      deriveTimelineMinimapItems(rows, "user-turn").map(({ id, fromAgent, timestamp }) => [
+        id,
+        fromAgent,
+        timestamp,
+      ]),
     ).toEqual([
-      ["user-1", false],
-      ["user-2", false],
-      ["user-3", true],
+      ["user-1", false, "created:user-1"],
+      ["user-2", false, "created:user-2"],
+      ["user-3", true, "created:user-3"],
     ]);
   });
 
