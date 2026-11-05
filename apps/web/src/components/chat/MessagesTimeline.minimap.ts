@@ -280,6 +280,9 @@ export function resolveTimelineMinimapScrollOffset(input: {
   readonly railHeight: number;
   readonly spacing: number;
 }): number {
+  if (input.railHeight <= 0) {
+    return 0;
+  }
   const overflow =
     resolveTimelineMinimapStripTop(input.itemCount - 1, input.spacing) - input.railHeight;
   if (overflow <= 0 || input.anchorIndex === null) {

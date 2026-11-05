@@ -288,6 +288,7 @@ describe("resolveTimelineMinimapScrollOffset", () => {
     expect(resolveTimelineMinimapScrollOffset({ ...input, anchorIndex: 0 })).toBe(0);
     expect(resolveTimelineMinimapScrollOffset({ ...input, anchorIndex: 10 })).toBe(40);
     expect(resolveTimelineMinimapScrollOffset({ ...input, anchorIndex: null })).toBe(40);
+    expect(resolveTimelineMinimapScrollOffset({ ...input, anchorIndex: 5, railHeight: 0 })).toBe(0);
   });
 });
 

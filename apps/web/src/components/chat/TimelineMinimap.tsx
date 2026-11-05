@@ -249,7 +249,11 @@ export const TimelineMinimap = memo(function TimelineMinimap({
             onMouseLeave={() => setActiveIndex(null)}
             onMouseMove={(event) => {
               if (event.buttons !== 0 && !pressedOnStripRef.current) return;
-              setKeyboardNavigating(false);
+              // The rail re-anchors when keyboard leading ends; hit-test after that offset applies.
+              if (keyboardNavigating) {
+                setKeyboardNavigating(false);
+                return;
+              }
               updateActiveIndexFromPointer(event);
             }}
             onMouseDown={(event) => {
@@ -271,7 +275,7 @@ export const TimelineMinimap = memo(function TimelineMinimap({
                 )}
               />
               <div
-                className="absolute inset-x-0 top-1 transition-transform duration-150 motion-reduce:transition-none"
+                className="absolute inset-x-0 top-1"
                 style={{ transform: `translateY(${-scrollOffset}px)` }}
               >
                 {items.map((item, index) => {
