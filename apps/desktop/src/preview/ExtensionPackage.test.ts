@@ -238,7 +238,17 @@ describe("unpackExtension", () => {
         "png",
       );
 
+      // The manifest verifies and is written first; a later entry fails its checksum.
+      const laterCorrupt = makeZip([
+        { name: "manifest.json", data: manifest() },
+        { name: "b.js", data: "b" },
+      ]);
+      laterCorrupt.writeUInt32LE(
+        0,
+        laterCorrupt.lastIndexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02])) + 16,
+      );
       const refused = [
+        [makeCrx(laterCorrupt), /corrupt/],
         [makeCrx(extensionZip({ version: "2.0.1" })), /differs from the offered update/],
         [makeCrx(extensionZip({ minimum_chrome_version: "153" })), /newer Chromium/],
         [makeCrx(makeZip([{ name: "../x", data: "x" }])), /unsafe file name/],
@@ -367,6 +377,11 @@ describe("parseUpdateCheck", () => {
           ),
           Effect.flip,
         );
+
+      const badRedirect = yield* check(
+        () => new Response(null, { status: 302, headers: { location: "https://[" } }),
+      );
+      assert.match(badRedirect.reason, /invalid redirect/);
 
       // No Content-Length, so only counting while reading can stop it.
       const huge = new ReadableStream<Uint8Array>({

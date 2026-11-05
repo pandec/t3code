@@ -22,13 +22,17 @@ import { SettingsRow, SettingsSection } from "./settingsLayout";
 
 const extensionsBridge = previewBridge?.extensions ?? null;
 
-const updateExtension = (extensionId: string, patch: Partial<BrowserExtensionSettings>) =>
+/** Patches from the saved setting, not a render's copy, so quick successive changes all apply. */
+const updateExtension = (
+  extensionId: string,
+  patch: (setting: BrowserExtensionSettings) => Partial<BrowserExtensionSettings>,
+) =>
   void persistClientSettingsUpdate((current) => ({
     ...current,
     browserExtensions: updateBrowserExtensionSettings(
       current.browserExtensions,
       extensionId,
-      patch,
+      patch(browserExtensionSettings(current.browserExtensions, extensionId)),
     ),
   }));
 
@@ -72,11 +76,16 @@ function BrowserExtensionRows({
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- installs and update checks run in the desktop main process, which reports changes
   useEffect(() => {
     let active = true;
-    const load = () =>
+    let latest = 0;
+    const load = () => {
+      latest += 1;
+      const request = latest;
+      // Overlapping loads can settle out of order; only the newest may apply.
       void bridge.listInstallations().then(
-        (next) => active && setInstallations(next),
+        (next) => active && request === latest && setInstallations(next),
         () => undefined,
       );
+    };
     load();
     const unsubscribe = bridge.onInstallationsChange(load);
     // Relative check times go stale while the window is in the background.
@@ -105,7 +114,7 @@ function BrowserExtensionRows({
         description={
           <>
             {installation.version === null
-              ? "Not installed. Turn it on and install it from the Chrome Web Store."
+              ? "Not installed. Turn it on, then press Install."
               : `Installed v${installation.version}. Runs in the profiles checked below, never in Incognito. Reopen tabs that were open before turning it on.`}
             {summary === null ? null : <span className="block">{summary}</span>}
           </>
@@ -115,7 +124,7 @@ function BrowserExtensionRows({
             disabled={!hydrated}
             checked={setting.enabled}
             onCheckedChange={(checked) =>
-              updateExtension(installation.id, { enabled: Boolean(checked) })
+              updateExtension(installation.id, () => ({ enabled: Boolean(checked) }))
             }
             aria-label={`Enable ${installation.name}`}
           />
@@ -161,12 +170,12 @@ function BrowserExtensionRows({
                   disabled={!hydrated}
                   checked={setting.profileIds.includes(profile.id)}
                   onCheckedChange={(checked) =>
-                    updateExtension(installation.id, {
+                    updateExtension(installation.id, ({ profileIds }) => ({
                       profileIds:
                         checked === true
-                          ? [...setting.profileIds, profile.id]
-                          : setting.profileIds.filter((id) => id !== profile.id),
-                    })
+                          ? [...profileIds.filter((id) => id !== profile.id), profile.id]
+                          : profileIds.filter((id) => id !== profile.id),
+                    }))
                   }
                 />
                 <span className="truncate">{profile.name}</span>

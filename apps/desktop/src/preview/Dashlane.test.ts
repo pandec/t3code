@@ -260,8 +260,10 @@ const makeHarness = Effect.fn("DashlaneTest.makeHarness")(function* (
   };
   return {
     service,
-    /** Tells the service the settings were saved, as the settings IPC does. */
-    refresh: () => service.refreshProfiles(settings),
+    /** Tells the service the settings were saved, as the settings IPC does, and waits until they apply. */
+    refresh: () => service.refreshProfiles(settings).pipe(Effect.flatMap(Fiber.join)),
+    /** Tells the service the settings were saved without waiting, as the settings IPC does. */
+    save: () => service.refreshProfiles(settings),
     mainWindow,
     session,
     preloads,
@@ -435,6 +437,25 @@ describe("Dashlane session lifecycle", () => {
     }).pipe(Effect.scoped, Effect.provide(testServices)),
   );
 
+  it.effect("saves that change Dashlane return before its load finishes", () =>
+    Effect.gen(function* () {
+      const allowRead = yield* Deferred.make<void>();
+      let gated = false;
+      const test = yield* makeHarness({
+        beforeRead: Effect.suspend(() => (gated ? Deferred.await(allowRead) : Effect.void)),
+      });
+      test.configure({ enabled: false });
+      yield* test.service.prepareSession(test.session, undefined);
+      gated = true;
+      test.configure({ enabled: true });
+      const applying = yield* test.save();
+      assert.strictEqual(test.loadExtension.mock.calls.length, 0);
+      yield* Deferred.succeed(allowRead, undefined);
+      yield* Fiber.join(applying);
+      assert.strictEqual(test.loadExtension.mock.calls.length, 1);
+    }).pipe(Effect.scoped, Effect.provide(testServices)),
+  );
+
   it.effect("loads once installed, and never into incognito", () =>
     Effect.gen(function* () {
       const test = yield* makeHarness();
@@ -491,7 +512,7 @@ describe("Dashlane toolbar action", () => {
       const test = yield* makeHarness();
       const events = yield* Queue.unbounded<PreviewDashlaneEvent>();
       yield* test.service.subscribe((event) => Queue.offer(events, event).pipe(Effect.asVoid));
-      test.addGuest(7);
+      const tab = test.addGuest(7);
       const other = test.addGuest(8);
       yield* test.service.prepareSession(test.session, undefined);
       yield* Queue.take(events);
@@ -556,13 +577,17 @@ describe("Dashlane toolbar action", () => {
       assert.deepStrictEqual(yield* test.service.listActions(2, 7), []);
       other.events.get("destroyed")!();
       assert.deepInclude(yield* action(8), { icon: iconUrl("icon_not_auth@2x.png") });
+      other.destroyed = true;
 
-      // An in-page prompt asks the background to open the popup for the tab the user pressed in.
+      // An in-page prompt asks the background to open the popup for the tab the user pressed in,
+      // never for a closed one.
       other.events.get("input-event")!({}, { type: "mouseDown" });
+      report({}, { kind: "openPopup" });
+      tab.events.get("input-event")!({}, { type: "mouseDown" });
       report({}, { kind: "openPopup" });
       assert.deepStrictEqual(yield* Queue.take(events), {
         _tag: "PopupRequested",
-        webContentsId: 8,
+        webContentsId: 7,
         extensionId: DASHLANE_EXTENSION_ID,
       });
     }).pipe(Effect.scoped, Effect.provide(testServices)),
@@ -717,12 +742,22 @@ describe("Dashlane tab focus", () => {
         [DASHLANE_TAB_FOCUS_CHANNEL, 3],
       ]);
 
+      // A worker that fails to start leaves the tab unreported, so its next press retries.
+      start.mockImplementationOnce(() => Promise.reject(new Error("no worker")));
+      navigate();
+      input("mouseDown");
+      yield* Effect.promise(() => start.mock.results.at(-1)!.value.catch(() => undefined));
+      input("mouseDown");
+      yield* workerStarted();
+      assert.deepStrictEqual(test.workerSend.mock.calls.at(-1), [DASHLANE_TAB_FOCUS_CHANNEL, 3]);
+      assert.strictEqual(test.workerSend.mock.calls.length, 4);
+
       // The worker starts asynchronously; a tab closed meanwhile is not reported.
       navigate();
       input("rawKeyDown");
       guest.destroyed = true;
       yield* workerStarted();
-      assert.strictEqual(test.workerSend.mock.calls.length, 3);
+      assert.strictEqual(test.workerSend.mock.calls.length, 4);
 
       // Off, no tab tracks input; on again, open tabs do.
       guest.destroyed = false;

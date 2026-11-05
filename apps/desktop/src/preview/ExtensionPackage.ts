@@ -447,7 +447,7 @@ export interface ExtensionPackageTarget {
   readonly chromeVersion: string;
 }
 
-/** Verifies a downloaded CRX and unpacks it into an empty `directory`; nothing is written unless it verifies. */
+/** Verifies a downloaded CRX and unpacks it into a new `directory`, which is left absent when either fails. */
 export const unpackExtension = Effect.fn("ExtensionPackage.unpackExtension")(function* (
   crx: Uint8Array,
   target: ExtensionPackageTarget,
@@ -480,30 +480,36 @@ export const unpackExtension = Effect.fn("ExtensionPackage.unpackExtension")(fun
   });
   yield* fileSystem.makeDirectory(directory, { recursive: true });
   const created = new Set<string>();
-  for (const file of prepared.files) {
-    const parent = path.join(directory, ...file.segments.slice(0, -1));
-    if (!created.has(parent)) {
-      yield* fileSystem.makeDirectory(parent, { recursive: true });
-      created.add(parent);
+  yield* Effect.gen(function* () {
+    for (const file of prepared.files) {
+      const parent = path.join(directory, ...file.segments.slice(0, -1));
+      if (!created.has(parent)) {
+        yield* fileSystem.makeDirectory(parent, { recursive: true });
+        created.add(parent);
+      }
+      const target = path.join(directory, ...file.segments);
+      if (file === prepared.manifest) {
+        yield* fileSystem.writeFileString(target, prepared.manifestText, { flag: "wx" });
+        continue;
+      }
+      const content = yield* Effect.try({
+        try: file.read,
+        catch: (cause) =>
+          isExtensionPackageError(cause)
+            ? cause
+            : new ExtensionPackageError({
+                stage: "archive",
+                reason: "The package archive is corrupt",
+                cause,
+              }),
+      });
+      yield* fileSystem.writeFile(target, content, { flag: "wx" });
     }
-    const target = path.join(directory, ...file.segments);
-    if (file === prepared.manifest) {
-      yield* fileSystem.writeFileString(target, prepared.manifestText, { flag: "wx" });
-      continue;
-    }
-    const content = yield* Effect.try({
-      try: file.read,
-      catch: (cause) =>
-        isExtensionPackageError(cause)
-          ? cause
-          : new ExtensionPackageError({
-              stage: "archive",
-              reason: "The package archive is corrupt",
-              cause,
-            }),
-    });
-    yield* fileSystem.writeFile(target, content, { flag: "wx" });
-  }
+  }).pipe(
+    Effect.onError(() =>
+      fileSystem.remove(directory, { recursive: true, force: true }).pipe(Effect.ignore),
+    ),
+  );
 });
 
 /** Fetches over https from Google's update hosts only, re-checking the host on every redirect. */
@@ -532,7 +538,14 @@ const getFromGoogle = Effect.fn("ExtensionPackage.getFromGoogle")(function* (
     );
     const location = response.headers.location;
     if (response.status >= 300 && response.status < 400 && location !== undefined) {
-      current = new URL(location, current);
+      const next = URL.parse(location, current);
+      if (next === null) {
+        return yield* new ExtensionPackageError({
+          stage,
+          reason: "Google's update service sent an invalid redirect",
+        });
+      }
+      current = next;
       continue;
     }
     if (response.status !== 200) {

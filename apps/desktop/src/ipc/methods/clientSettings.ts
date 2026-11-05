@@ -27,7 +27,7 @@ export const setClientSettings = DesktopIpc.makeIpcMethod({
     const clientSettings = yield* DesktopClientSettings.DesktopClientSettings;
     const snapShot = yield* DesktopSnapShot.DesktopSnapShot;
     yield* clientSettings.set(settings);
-    yield* (yield* PreviewDashlane.PreviewDashlane).refreshProfiles(settings);
     yield* snapShot.configure(settings);
+    yield* (yield* PreviewDashlane.PreviewDashlane).refreshProfiles(settings);
   }),
 });

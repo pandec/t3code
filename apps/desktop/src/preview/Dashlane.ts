@@ -18,6 +18,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
+import type * as Fiber from "effect/Fiber";
 import * as FiberHandle from "effect/FiberHandle";
 import * as Base64 from "effect/encoding/Base64";
 import * as FileSystem from "effect/FileSystem";
@@ -156,10 +157,10 @@ export class PreviewDashlane extends Context.Service<
       session: Session,
       profileId: string | undefined,
     ) => Effect.Effect<void>;
-    /** Loads or unloads every prepared session to match saved settings; other saves return at once. */
+    /** Starts loading or unloading every prepared session to match saved settings; the fiber ends once they match. */
     readonly refreshProfiles: (
       settings: Pick<ClientSettings, "browserProfiles" | "browserExtensions">,
-    ) => Effect.Effect<void>;
+    ) => Effect.Effect<Fiber.Fiber<void>>;
     /** Reports preview tabs the user interacts with to Dashlane, which only analyses tabs Chrome says are highlighted. */
     readonly trackGuest: (guest: WebContents) => void;
     readonly listInstallations: Effect.Effect<ReadonlyArray<DesktopBrowserExtensionInstallation>>;
@@ -239,6 +240,7 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
   const sessions = new Map<Session, string | undefined>();
   const registered = new WeakSet<Session>();
   const mutex = yield* Semaphore.make(1);
+  const scope = yield* Effect.scope;
   const enabled = new WeakSet<Session>();
   const actions = new WeakMap<Session, ActionState>();
   const iconCache = new Map<string, string>();
@@ -640,13 +642,19 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
     saved: Pick<ClientSettings, "browserProfiles" | "browserExtensions">,
   ) => {
     const settings = resolveSettings(saved);
-    // Most saves change neither setting, and must not wait for a load or download.
-    if (settingsKey(settings) === applied) return Effect.void;
-    return reconcile(settings).pipe(
-      Effect.uninterruptible,
-      mutex.withPermit,
-      Effect.withSpan("PreviewDashlane.refreshProfiles"),
-    );
+    // A load has no timeout, so saves never wait for one; most change neither setting and skip the queue.
+    const work =
+      settingsKey(settings) === applied
+        ? Effect.void
+        : reconcile(settings).pipe(
+            Effect.uninterruptible,
+            mutex.withPermit,
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Could not apply Dashlane settings", { cause }),
+            ),
+            Effect.withSpan("PreviewDashlane.refreshProfiles"),
+          );
+    return Effect.forkIn(work, scope);
   };
 
   const readyVersion = Effect.gen(function* () {
@@ -716,9 +724,7 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
       const crx = yield* ExtensionPackage.downloadPackage(result);
       const download = extensionDirectory("download");
       yield* removeDirectory(download);
-      yield* ExtensionPackage.unpackExtension(crx, packageTarget(result.version), download).pipe(
-        Effect.tapError(() => removeDirectory(download).pipe(Effect.ignore)),
-      );
+      yield* ExtensionPackage.unpackExtension(crx, packageTarget(result.version), download);
       yield* stageDownload;
       yield* Effect.logInfo("Downloaded Dashlane extension update", { version: result.version });
     },
@@ -1062,7 +1068,10 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
             worker.send(DASHLANE_TAB_FOCUS_CHANNEL, id);
           }
         })
-        .catch(() => undefined);
+        .catch(() => {
+          // Let the next press retry.
+          if (highlighted.get(session) === id) highlighted.delete(session);
+        });
     };
     inputListeners.set(guest, listener);
     guest.on("input-event", listener);
