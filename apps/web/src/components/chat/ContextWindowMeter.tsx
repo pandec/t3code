@@ -549,15 +549,6 @@ export function ContextWindowMeter(props: {
               </div>
             ) : null}
 
-            {providerUsageAccounts.length > 0 && fableUsage && fableAccountName ? (
-              <div className="flex shrink-0 items-center justify-between gap-3 text-2xs">
-                <span className="text-muted-foreground/70">Fable next</span>
-                <span className="truncate font-medium text-muted-foreground/90">
-                  {fableAccountName}
-                </span>
-              </div>
-            ) : null}
-
             {providerUsage || providerUsageAccounts.length > 0 || props.openRouterCredits ? (
               // Focusable and labelled: the rows hold no controls, so without a
               // tab stop a keyboard user has nothing to scroll the list from.

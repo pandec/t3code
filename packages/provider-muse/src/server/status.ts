@@ -9,7 +9,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 
 import { createMuseSdkHost, makeMuseEnvironment } from "./sdk.ts";
 import { parseMuseVersion } from "./maintenance.ts";
-import { museUsageOutputToLimits } from "./usageLimits.ts";
+import { isMuseUsageIdle, museUsageOutputToLimits } from "./usageLimits.ts";
 import { discoverMuseModels, museModelCapabilities } from "./modelCatalog.ts";
 import {
   buildServerProvider,
@@ -123,7 +123,23 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
     });
   }
 
-  // `muse usage` reads the subscription allowance without a model turn.
+  const readUsage = runMuse(["usage", "--json"]).pipe(
+    Effect.timeout(15_000),
+    Effect.map((output) => (output.code === 0 ? output.stdout : "")),
+  );
+  // An idle window has no allowance to read; one tiny unlogged turn opens it.
+  const pokeUsage = runMuse([
+    "exec",
+    "--no-session-log",
+    "--preset",
+    "empty",
+    "--model",
+    "muse-spark-1.3",
+    "--reasoning-effort",
+    "minimal",
+    "Reply with: hi",
+  ]).pipe(Effect.timeout(60_000));
+
   const [catalog, usageLimits] = yield* Effect.all(
     [
       discoverMuseModels(settings, museEnvironment, cwd, createHost).pipe(
@@ -131,11 +147,12 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
         Effect.timeoutOption(12_000),
         Effect.result,
       ),
-      runMuse(["usage", "--json"]).pipe(
-        Effect.timeout(15_000),
-        Effect.map((output) =>
-          museUsageOutputToLimits(output.code === 0 ? output.stdout : "", checkedAt),
+      readUsage.pipe(
+        Effect.filterOrElse(
+          (stdout) => !isMuseUsageIdle(stdout),
+          () => pokeUsage.pipe(Effect.andThen(readUsage)),
         ),
+        Effect.map((stdout) => museUsageOutputToLimits(stdout, checkedAt)),
         Effect.orElseSucceed(() => museUsageOutputToLimits("", checkedAt)),
       ),
     ],

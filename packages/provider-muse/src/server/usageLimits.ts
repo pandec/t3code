@@ -38,6 +38,16 @@ const UNSUPPORTED_ALLOWANCE_REASONS = new Map([
   ["no_allowance", "This Muse Code account has no subscription allowance."],
 ]);
 
+/** Meta reports no allowance until the account's first turn in a new session window. */
+export function isMuseUsageIdle(stdout: string): boolean {
+  const decoded = decodeMuseUsageOutput(stdout.trim());
+  return (
+    Option.isSome(decoded) &&
+    decoded.value.allowance === null &&
+    decoded.value.reason === "server_sent_no_usage"
+  );
+}
+
 /** Translate `muse usage --json` output; any unreadable answer is a failed probe. */
 export function museUsageOutputToLimits(
   stdout: string,

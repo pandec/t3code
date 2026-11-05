@@ -116,6 +116,39 @@ it.layer(NodeServices.layer)("Muse status", (it) => {
     ),
   );
 
+  it.effect("pokes an idle allowance with one unlogged turn, then rereads usage", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const binaryPath = yield* fakeCli(`
+          const fs = await import("node:fs");
+          const marker = new URL("./poked", import.meta.url);
+          const args = process.argv.slice(2);
+          if (args[0] === "exec") {
+            fs.writeFileSync(marker, args.join(" "));
+          } else if (args[0] === "usage") {
+            process.stdout.write(JSON.stringify(fs.existsSync(marker)
+              ? { allowance: { weekly: { usedPercent: 18 } } }
+              : { allowance: null, reason: "server_sent_no_usage" }));
+          } else {
+            process.stdout.write("muse 1.0.3-R2198.1\\n");
+          }
+        `);
+        const snapshot = yield* checkMuseProviderStatus(
+          settings({ enabled: true, binaryPath }),
+          undefined,
+          undefined,
+          async () => makeHost(metaCatalog),
+        );
+        expect(snapshot.usageLimits?.windows).toEqual([
+          { id: "muse-weekly", kind: "weekly", label: "Weekly", usedPercent: 18 },
+        ]);
+        const fs = yield* FileSystem.FileSystem;
+        const pokeArgs = yield* fs.readFileString(binaryPath.replace(/muse(\.cmd)?$/, "poked"));
+        expect(pokeArgs).toContain("--no-session-log");
+      }),
+    ),
+  );
+
   it.effect("keeps an empty discovered catalog empty instead of advertising a fallback model", () =>
     Effect.scoped(
       Effect.gen(function* () {

@@ -852,7 +852,6 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     ownerId: composerOwnerKey,
     providerLabel: providerUsageLabel,
     accounts: providerUsageMeter.accounts,
-    fableUsage: providerUsageMeter.fable,
     nowMs: providerUsage.nowMs,
     panelObservedAt: providerUsage.panelObservedAt,
     refreshing: providerUsage.refreshing,
