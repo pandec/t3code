@@ -151,8 +151,9 @@ export function ThreadDetailsCard({
           {...detailsArea}
           data-workspace-focus-key={`details:${threadRef.environmentId}:${threadRef.threadId}`}
           // Skip the return transition to avoid overlapping the rising preview.
+          // Above the timeline minimap (z-40), which hides under the card until it is closed.
           className={cn(
-            "absolute z-20",
+            "absolute z-50",
             topInset > 0 && "transition-[top] duration-150 ease-out motion-reduce:transition-none",
           )}
           style={{

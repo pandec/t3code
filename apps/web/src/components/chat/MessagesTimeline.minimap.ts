@@ -1,7 +1,12 @@
 import { isAttachmentOnlyBootstrapPrompt } from "@t3tools/shared/composerContextReferences";
 import { parseThreadLinkHref } from "@t3tools/shared/threadLinks";
+import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
 
-import type { MessagesTimelineRow } from "./MessagesTimeline.logic";
+import {
+  resolveTimelineMinimapCurrentIndex,
+  TIMELINE_MINIMAP_ITEM_SPACING,
+  type MessagesTimelineRow,
+} from "./MessagesTimeline.logic";
 
 const TIMELINE_MINIMAP_ARIA_EXCERPT_MAX_LENGTH = 120;
 export const TIMELINE_MINIMAP_PREVIEW_MAX_LENGTH = 240;
@@ -11,8 +16,9 @@ export type TimelineMinimapKind = "user-turn" | "final-assistant";
 export interface TimelineMinimapItem {
   readonly id: string;
   readonly rowIndex: number;
-  readonly positionIndex: number;
-  readonly positionCount: number;
+  readonly timestamp: string;
+  /** Sent into this thread by another thread's agent. */
+  readonly fromAgent: boolean;
   readonly primaryText: string | null;
   readonly secondaryText: string | null;
 }
@@ -128,8 +134,8 @@ function reuseMinimapItem(
   const previous = previousById.get(item.id);
   return previous &&
     previous.rowIndex === item.rowIndex &&
-    previous.positionIndex === item.positionIndex &&
-    previous.positionCount === item.positionCount &&
+    previous.timestamp === item.timestamp &&
+    previous.fromAgent === item.fromAgent &&
     previous.primaryText === item.primaryText &&
     previous.secondaryText === item.secondaryText
     ? previous
@@ -146,8 +152,7 @@ function reuseMinimapItems(
 }
 
 /**
- * Derives both rails in one shared pass after counting turn positions and
- * reuses compact previews for unchanged message text. Streaming normalizes
+ * Derives both rails in one shared pass and reuses compact previews for unchanged message text. Streaming normalizes
  * only the appended response tail; historical previews and the unaffected rail
  * retain their identity.
  */
@@ -155,19 +160,11 @@ export function computeTimelineMinimapState(
   rows: ReadonlyArray<MessagesTimelineRow>,
   previous: TimelineMinimapState,
 ): TimelineMinimapState {
-  const positionCount = Math.max(
-    1,
-    rows.reduce(
-      (count, row) => count + (row.kind === "message" && row.message.role === "user" ? 1 : 0),
-      0,
-    ),
-  );
   const previousUserById = new Map(previous.userItems.map((item) => [item.id, item]));
   const previousAssistantById = new Map(previous.assistantItems.map((item) => [item.id, item]));
   const nextPreviewByRowId = new Map<string, TimelineMinimapPreviewCacheEntry>();
   const userItems: TimelineMinimapItem[] = [];
   const assistantItems: TimelineMinimapItem[] = [];
-  let positionIndex = -1;
   let currentUserRow: MessageRow | null = null;
   let currentUserRowIndex = -1;
   let currentTurnLastAssistantRow: MessageRow | null = null;
@@ -180,8 +177,8 @@ export function computeTimelineMinimapState(
       reuseMinimapItem(previousUserById, {
         id: currentUserRow.id,
         rowIndex: currentUserRowIndex,
-        positionIndex: Math.max(0, positionIndex),
-        positionCount,
+        timestamp: currentUserRow.message.createdAt,
+        fromAgent: resolveUserMessagePresentation(currentUserRow.message).attribution === "agent",
         primaryText: resolveCachedPreview(currentUserRow, previous, nextPreviewByRowId),
         secondaryText:
           currentTurnLastAssistantRow === null
@@ -199,7 +196,6 @@ export function computeTimelineMinimapState(
 
     if (row.message.role === "user") {
       appendCurrentUserItem();
-      positionIndex += 1;
       currentUserRow = row;
       currentUserRowIndex = rowIndex;
       currentTurnLastAssistantRow = null;
@@ -216,8 +212,8 @@ export function computeTimelineMinimapState(
         reuseMinimapItem(previousAssistantById, {
           id: row.id,
           rowIndex,
-          positionIndex: Math.max(0, positionIndex),
-          positionCount,
+          timestamp: row.message.updatedAt,
+          fromAgent: false,
           primaryText: resolveCachedPreview(row, previous, nextPreviewByRowId),
           secondaryText: null,
         }),
@@ -241,54 +237,74 @@ export function deriveTimelineMinimapItems(
   return kind === "user-turn" ? state.userItems : state.assistantItems;
 }
 
-export function resolveTimelineMinimapTooltipTranslate(
-  positionIndex: number,
-  positionCount: number,
-): string {
-  if (positionIndex === 0) {
+export function resolveTimelineMinimapTooltipTranslate(index: number, itemCount: number): string {
+  if (index === 0) {
     return "0%";
   }
-  if (positionIndex === positionCount - 1) {
+  if (index === itemCount - 1) {
     return "-100%";
   }
   return "-50%";
 }
 
-export function resolveTimelineMinimapItemIndexFromPointer(input: {
-  readonly items: ReadonlyArray<Pick<TimelineMinimapItem, "positionCount" | "positionIndex">>;
-  readonly railTop: number;
+/** The strip a scrolled rail centers: the current one, or the first while reading above it. */
+export function resolveTimelineMinimapAnchorIndex(
+  input: Parameters<typeof resolveTimelineMinimapCurrentIndex>[0],
+): number | null {
+  const current = resolveTimelineMinimapCurrentIndex(input);
+  return current === null && input.visibleEnd != null && input.rowIndices.length > 0 ? 0 : current;
+}
+
+const TIMELINE_MINIMAP_MIN_ITEM_SPACING = 3;
+
+/** Squeezes strips toward the minimum spacing before a long rail starts scrolling. */
+export function resolveTimelineMinimapSpacing(itemCount: number, railHeight: number): number {
+  if (itemCount <= 1 || railHeight <= 0) {
+    return TIMELINE_MINIMAP_ITEM_SPACING;
+  }
+  return Math.max(
+    TIMELINE_MINIMAP_MIN_ITEM_SPACING,
+    Math.min(TIMELINE_MINIMAP_ITEM_SPACING, railHeight / (itemCount - 1)),
+  );
+}
+
+// Whole-pixel strip positions keep fractional spacing from blurring some strips brighter.
+export function resolveTimelineMinimapStripTop(index: number, spacing: number): number {
+  return Math.round(index * spacing);
+}
+
+/** Scrolls a rail taller than its box so the anchor strip stays centered. */
+export function resolveTimelineMinimapScrollOffset(input: {
+  readonly anchorIndex: number | null;
+  readonly itemCount: number;
   readonly railHeight: number;
-  readonly pointerY: number;
-}): number | null {
-  const firstItem = input.items[0];
-  if (!firstItem || input.railHeight <= 0) {
-    return null;
-  }
-  const progress = Math.max(0, Math.min(1, (input.pointerY - input.railTop) / input.railHeight));
-  const targetPosition = progress * Math.max(0, firstItem.positionCount - 1);
-
-  let low = 0;
-  let high = input.items.length;
-  while (low < high) {
-    const middle = low + Math.floor((high - low) / 2);
-    if (input.items[middle]!.positionIndex < targetPosition) {
-      low = middle + 1;
-    } else {
-      high = middle;
-    }
-  }
-
-  if (low === 0) {
+  readonly spacing: number;
+}): number {
+  if (input.railHeight <= 0) {
     return 0;
   }
-  if (low === input.items.length) {
-    return input.items.length - 1;
+  const overflow =
+    resolveTimelineMinimapStripTop(input.itemCount - 1, input.spacing) - input.railHeight;
+  if (overflow <= 0 || input.anchorIndex === null) {
+    return overflow > 0 ? overflow : 0;
   }
+  const centered =
+    resolveTimelineMinimapStripTop(input.anchorIndex, input.spacing) - input.railHeight / 2;
+  return Math.max(0, Math.min(overflow, Math.round(centered)));
+}
 
-  const previousIndex = low - 1;
-  const previousDistance = targetPosition - input.items[previousIndex]!.positionIndex;
-  const nextDistance = input.items[low]!.positionIndex - targetPosition;
-  return previousDistance <= nextDistance ? previousIndex : low;
+export function resolveTimelineMinimapItemIndexFromPointer(input: {
+  readonly itemCount: number;
+  readonly railTop: number;
+  readonly scrollOffset: number;
+  readonly spacing: number;
+  readonly pointerY: number;
+}): number | null {
+  if (input.itemCount <= 0) {
+    return null;
+  }
+  const index = Math.round((input.pointerY - input.railTop + input.scrollOffset) / input.spacing);
+  return Math.max(0, Math.min(input.itemCount - 1, index));
 }
 
 export function resolveTimelineMinimapAriaLabel(input: {

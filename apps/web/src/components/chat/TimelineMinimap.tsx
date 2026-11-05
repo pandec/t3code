@@ -1,20 +1,25 @@
 import {
   resolveTimelineMinimapAriaLabel,
   resolveTimelineMinimapItemIndexFromPointer,
+  resolveTimelineMinimapScrollOffset,
+  resolveTimelineMinimapSpacing,
+  resolveTimelineMinimapStripTop,
   resolveTimelineMinimapTooltipTranslate,
   type TimelineMinimapItem,
 } from "./MessagesTimeline.minimap";
 import { memo, useRef, useState, type MouseEvent } from "react";
 import { ChevronDownIcon, ChevronUpIcon } from "lucide-react";
+import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { Button } from "../ui/button";
 import {
   resolveTimelineMinimapHeightStyle,
   resolveTimelineMinimapInteractiveWidth,
   resolveTimelineMinimapNavigationInteractive,
-  resolveTimelineMinimapTopPercent,
   TIMELINE_MINIMAP_MIN_ITEMS,
 } from "./MessagesTimeline.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { formatDayAwareTimestamp } from "../../timestampFormat";
+import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 
 function timelineMinimapEventTargetsPreview(target: EventTarget): boolean {
@@ -39,6 +44,7 @@ function onMouseButtonsReleased(onRelease: () => void): () => void {
 }
 
 export const TimelineMinimap = memo(function TimelineMinimap({
+  anchorIndex,
   hasPersistentGutter,
   hitStripWidth,
   currentIndex = null,
@@ -47,9 +53,11 @@ export const TimelineMinimap = memo(function TimelineMinimap({
   side,
   stripMap,
   testId,
+  timestampFormat,
   onWheel,
   onSelect,
 }: {
+  anchorIndex: number | null;
   hasPersistentGutter: boolean;
   hitStripWidth: number;
   currentIndex?: number | null;
@@ -58,6 +66,7 @@ export const TimelineMinimap = memo(function TimelineMinimap({
   side: "left" | "right";
   stripMap: Map<string, HTMLSpanElement>;
   testId: string;
+  timestampFormat: TimestampFormat;
   onWheel: (event: WheelEvent) => void;
   onSelect: (item: TimelineMinimapItem) => void;
 }) {
@@ -71,41 +80,70 @@ export const TimelineMinimap = memo(function TimelineMinimap({
 
   const pressedOnStripRef = useRef(false);
   const [passThrough, setPassThrough] = useState(false);
+  const [keyboardNavigating, setKeyboardNavigating] = useState(false);
+  const [railHeight, setRailHeight] = useState(0);
+  const [railRef] = useState(() => (node: HTMLDivElement | null) => {
+    if (!node) return;
+    return observeResize(node, ([entry]) => {
+      if (entry) setRailHeight(entry.contentRect.height);
+    });
+  });
 
   const resolvedActiveIndex =
     activeIndex !== null && activeIndex < items.length ? activeIndex : null;
   const activeItem = resolvedActiveIndex === null ? null : (items[resolvedActiveIndex] ?? null);
   const navigationInteractive =
     resolveTimelineMinimapNavigationInteractive(hitStripWidth) && !passThrough;
-  const activeTopPercent =
+  const activeTooltipTranslate =
     resolvedActiveIndex === null
-      ? 0
-      : resolveTimelineMinimapTopPercent(
-          activeItem?.positionIndex ?? 0,
-          activeItem?.positionCount ?? items.length,
-        );
-  const activeTooltipTranslate = activeItem
-    ? resolveTimelineMinimapTooltipTranslate(activeItem.positionIndex, activeItem.positionCount)
-    : "-50%";
+      ? "-50%"
+      : resolveTimelineMinimapTooltipTranslate(resolvedActiveIndex, items.length);
   const resolvedCurrentIndex =
     currentIndex !== null && currentIndex >= 0 && currentIndex < items.length ? currentIndex : null;
+  const spacing = resolveTimelineMinimapSpacing(items.length, railHeight);
+  // Pointer hover must not move the rail under the cursor; only keyboard focus leads it.
+  const readingScrollOffset = resolveTimelineMinimapScrollOffset({
+    anchorIndex,
+    itemCount: items.length,
+    railHeight,
+    spacing,
+  });
+  const scrollOffset =
+    keyboardNavigating && resolvedActiveIndex !== null
+      ? resolveTimelineMinimapScrollOffset({
+          anchorIndex: resolvedActiveIndex,
+          itemCount: items.length,
+          railHeight,
+          spacing,
+        })
+      : readingScrollOffset;
+  const maxScrollOffset = resolveTimelineMinimapScrollOffset({
+    anchorIndex: null,
+    itemCount: items.length,
+    railHeight,
+    spacing,
+  });
+  const railFadeMask =
+    maxScrollOffset > 0
+      ? `linear-gradient(to bottom, ${scrollOffset > 0 ? "transparent, black 1rem" : "black"}, ${
+          scrollOffset < maxScrollOffset ? "black calc(100% - 1rem), transparent" : "black"
+        })`
+      : undefined;
   const previousItem =
     resolvedCurrentIndex === null ? null : (items[resolvedCurrentIndex - 1] ?? null);
   const nextItem = resolvedCurrentIndex === null ? null : (items[resolvedCurrentIndex + 1] ?? null);
 
-  const resolveActiveIndexFromPointer = (event: MouseEvent<HTMLElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
+  const resolveActiveIndexFromPointer = (
+    event: MouseEvent<HTMLElement>,
+    offset: number = scrollOffset,
+  ) => {
     return resolveTimelineMinimapItemIndexFromPointer({
-      items,
-      railTop: rect.top,
-      railHeight: rect.height,
+      itemCount: items.length,
+      railTop: event.currentTarget.getBoundingClientRect().top,
+      scrollOffset: offset,
+      spacing,
       pointerY: event.clientY,
     });
-  };
-
-  const updateActiveIndexFromPointer = (event: MouseEvent<HTMLElement>) => {
-    const nextIndex = resolveActiveIndexFromPointer(event);
-    setActiveIndex(nextIndex);
   };
 
   const moveActiveIndex = (delta: number) => {
@@ -152,10 +190,10 @@ export const TimelineMinimap = memo(function TimelineMinimap({
             setPassThrough(true);
             onMouseButtonsReleased(() => setPassThrough(false));
           }}
+          ref={railRef}
           style={{
-            // Both rails share the user-turn position space so a final answer
-            // lines up with the prompt it answers.
-            height: resolveTimelineMinimapHeightStyle(items[0]?.positionCount ?? items.length),
+            height: resolveTimelineMinimapHeightStyle(items.length),
+            maxHeight: "100%",
             width: resolveTimelineMinimapInteractiveWidth(hitStripWidth, activeItem !== null),
           }}
         >
@@ -177,7 +215,10 @@ export const TimelineMinimap = memo(function TimelineMinimap({
               side,
             })}
             className="absolute inset-y-0 left-0 w-full cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
-            onBlur={() => setActiveIndex(null)}
+            onBlur={() => {
+              setActiveIndex(null);
+              setKeyboardNavigating(false);
+            }}
             onClick={(event) => {
               if (timelineMinimapEventTargetsPreview(event.target)) {
                 return;
@@ -189,8 +230,13 @@ export const TimelineMinimap = memo(function TimelineMinimap({
               }
               event.currentTarget.blur();
             }}
-            onFocus={() => setActiveIndex((current) => current ?? resolvedCurrentIndex ?? 0)}
+            onFocus={() =>
+              setActiveIndex((current) => current ?? resolvedCurrentIndex ?? anchorIndex ?? 0)
+            }
             onKeyDown={(event) => {
+              if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+                setKeyboardNavigating(true);
+              }
               if (event.key === "ArrowDown") {
                 event.preventDefault();
                 moveActiveIndex(1);
@@ -213,7 +259,9 @@ export const TimelineMinimap = memo(function TimelineMinimap({
             onMouseLeave={() => setActiveIndex(null)}
             onMouseMove={(event) => {
               if (event.buttons !== 0 && !pressedOnStripRef.current) return;
-              updateActiveIndexFromPointer(event);
+              // The pointer ends keyboard leading, so hit-test against the reading offset it restores.
+              setKeyboardNavigating(false);
+              setActiveIndex(resolveActiveIndexFromPointer(event, readingScrollOffset));
             }}
             onMouseDown={(event) => {
               if (timelineMinimapEventTargetsPreview(event.target)) {
@@ -224,59 +272,73 @@ export const TimelineMinimap = memo(function TimelineMinimap({
             type="button"
           >
             <div
-              className={cn(
-                "absolute top-0 h-full w-px bg-border/15",
-                side === "left" ? "left-3" : "right-3",
-              )}
-            />
-            {items.map((item, index) => {
-              const top = `${resolveTimelineMinimapTopPercent(
-                item.positionIndex,
-                item.positionCount,
-              )}%`;
-              const activeDistance =
-                resolvedActiveIndex === null ? null : Math.abs(index - resolvedActiveIndex);
-              const pinned = pinnedIdSet.has(item.id);
-              return (
-                // Compositor-friendly on purpose: in-view state and the hover
-                // fisheye animate constantly (every scroll tick and streaming
-                // update flips a band of strips), so the strip animates only
-                // transform and opacity.
-                <span
-                  aria-hidden="true"
-                  className={cn(
-                    "pointer-events-none absolute h-0.5 w-6 -translate-y-1/2 rounded-full transition-transform duration-150 after:absolute after:inset-0 after:rounded-full after:opacity-0 after:transition-opacity after:duration-150 data-[in-view=true]:after:opacity-100",
-                    side === "left" ? "left-0 origin-left" : "right-0 origin-right",
-                    pinned
-                      ? activeDistance === 0
-                        ? "bg-warning-foreground"
-                        : "bg-warning-foreground/60"
-                      : activeDistance === 0
-                        ? "bg-muted-foreground/60"
-                        : "bg-muted-foreground/25",
-                    pinned ? "after:bg-warning-foreground" : "after:bg-foreground/55",
-                    activeDistance === 0
-                      ? "scale-x-100"
-                      : activeDistance === 1
-                        ? "scale-x-[0.667]"
-                        : activeDistance === 2
-                          ? "scale-x-[0.417]"
-                          : "scale-x-[0.333]",
-                  )}
-                  data-in-view="false"
-                  data-minimap-strip
-                  key={item.id}
-                  ref={(node) => {
-                    if (node) {
-                      stripMap.set(item.id, node);
-                    } else {
-                      stripMap.delete(item.id);
-                    }
-                  }}
-                  style={{ top }}
-                />
-              );
-            })}
+              className="absolute -inset-y-1 inset-x-0 overflow-y-clip"
+              style={{ maskImage: railFadeMask }}
+            >
+              <div
+                className={cn(
+                  "absolute inset-y-1 w-px bg-border/15",
+                  side === "left" ? "left-3" : "right-3",
+                )}
+              />
+              <div
+                className="absolute inset-x-0 top-1"
+                style={{ transform: `translateY(${-scrollOffset}px)` }}
+              >
+                {items.map((item, index) => {
+                  const activeDistance =
+                    resolvedActiveIndex === null ? null : Math.abs(index - resolvedActiveIndex);
+                  const pinned = pinnedIdSet.has(item.id);
+                  return (
+                    // Compositor-friendly on purpose: in-view state and the hover
+                    // fisheye animate constantly (every scroll tick and streaming
+                    // update flips a band of strips), so the strip animates only
+                    // transform and opacity.
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        "pointer-events-none absolute h-0.5 w-6 -translate-y-1/2 rounded-full transition-transform duration-150 after:absolute after:inset-0 after:rounded-full after:opacity-0 after:transition-opacity after:duration-150 data-[in-view=true]:after:opacity-100",
+                        side === "left" ? "left-0 origin-left" : "right-0 origin-right",
+                        pinned
+                          ? activeDistance === 0
+                            ? "bg-warning-foreground"
+                            : "bg-warning-foreground/60"
+                          : item.fromAgent
+                            ? activeDistance === 0
+                              ? "bg-info-foreground"
+                              : "bg-info-foreground/45"
+                            : activeDistance === 0
+                              ? "bg-muted-foreground/60"
+                              : "bg-muted-foreground/25",
+                        pinned
+                          ? "after:bg-warning-foreground"
+                          : item.fromAgent
+                            ? "after:bg-info-foreground"
+                            : "after:bg-foreground/55",
+                        activeDistance === 0
+                          ? "scale-x-100"
+                          : activeDistance === 1
+                            ? "scale-x-[0.667]"
+                            : activeDistance === 2
+                              ? "scale-x-[0.417]"
+                              : "scale-x-[0.333]",
+                      )}
+                      data-in-view="false"
+                      data-minimap-strip
+                      key={item.id}
+                      ref={(node) => {
+                        if (node) {
+                          stripMap.set(item.id, node);
+                        } else {
+                          stripMap.delete(item.id);
+                        }
+                      }}
+                      style={{ top: resolveTimelineMinimapStripTop(index, spacing) }}
+                    />
+                  );
+                })}
+              </div>
+            </div>
             {activeItem ? (
               <span
                 className={cn(
@@ -286,11 +348,17 @@ export const TimelineMinimap = memo(function TimelineMinimap({
                 data-minimap-preview
                 onMouseMove={(event) => event.stopPropagation()}
                 style={{
-                  top: `${activeTopPercent}%`,
+                  top:
+                    resolveTimelineMinimapStripTop(resolvedActiveIndex ?? 0, spacing) -
+                    scrollOffset,
                   transform: `translateY(${activeTooltipTranslate})`,
                 }}
               >
                 <span className="dropdown-glass block rounded-xl p-3 text-left text-popover-foreground shadow-xl shadow-black/25">
+                  <span className="mb-1 block text-muted-foreground text-xs leading-4">
+                    {activeItem.fromAgent ? "From an agent · " : null}
+                    {formatDayAwareTimestamp(activeItem.timestamp, timestampFormat)}
+                  </span>
                   <span className="block max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-sm font-medium leading-5">
                     {activeItem.primaryText ??
                       (side === "left" ? "User message" : "Agent response")}

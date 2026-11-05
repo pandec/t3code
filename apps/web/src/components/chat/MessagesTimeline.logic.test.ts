@@ -2596,13 +2596,11 @@ describe("deriveMessagesTimelineRows", () => {
       expect(
         deriveTimelineMinimapItems(rows, "final-assistant").map((item) => ({
           id: item.id,
-          positionIndex: item.positionIndex,
-          positionCount: item.positionCount,
           primaryText: item.primaryText,
         })),
       ).toEqual([
-        { id: "final-1-entry", positionIndex: 0, positionCount: 3, primaryText: "Done." },
-        { id: "final-3-entry", positionIndex: 2, positionCount: 3, primaryText: "Third answer." },
+        { id: "final-1-entry", primaryText: "Done." },
+        { id: "final-3-entry", primaryText: "Third answer." },
       ]);
       expect(
         deriveTimelineMinimapItems(rows, "user-turn").map((item) => [item.id, item.secondaryText]),
