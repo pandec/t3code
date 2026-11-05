@@ -28,10 +28,10 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
-import * as ProcessRunner from "../processRunner.ts";
 
 const makeProjectShell = (workspaceRoot: string): OrchestrationProjectShell => ({
   id: ProjectId.make("project-1"),
@@ -60,10 +60,16 @@ interface ScannerTestInput {
   readonly providerInstances?: ContractServerSettings["providerInstances"];
   /** Host environment the scanner sees; defaults to `process.env`. */
   readonly hostEnvironment?: NodeJS.ProcessEnv;
+  readonly processRunner?: Layer.Layer<ProcessRunner.ProcessRunner>;
 }
 
-const layerScannerTest = (input: ScannerTestInput, scannerLayer = AgentSessionScanner.layer) =>
-  scannerLayer.pipe(
+const layerScannerTest = (input: ScannerTestInput) =>
+  (input.processRunner === undefined
+    ? AgentSessionScanner.layer
+    : Layer.effect(AgentSessionScanner.AgentSessionScanner, AgentSessionScanner.make).pipe(
+        Layer.provide(input.processRunner),
+      )
+  ).pipe(
     Layer.provide(
       input.hostEnvironment === undefined
         ? Layer.empty
@@ -107,11 +113,11 @@ const layerScannerTest = (input: ScannerTestInput, scannerLayer = AgentSessionSc
     ),
   );
 
-const runScan = (input: ScannerTestInput, scannerLayer = AgentSessionScanner.layer) =>
+const runScan = (input: ScannerTestInput) =>
   Effect.gen(function* () {
     const scanner = yield* AgentSessionScanner.AgentSessionScanner;
     return yield* scanner.scan;
-  }).pipe(Effect.provide(layerScannerTest(input, scannerLayer)));
+  }).pipe(Effect.provide(layerScannerTest(input)));
 
 const runRecentThreadOutcomes = (input: ScannerTestInput & { readonly workspaceRoot: string }) =>
   Effect.gen(function* () {
@@ -2020,40 +2026,38 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           });
         }
 
-        const finishedReads = yield* Queue.unbounded<void>();
-        const processRunner = yield* ProcessRunner.make();
-        const healthyConfigs = new Set(
+        // The deadline fires for every read still in flight, so on a slow runner the
+        // neighbours' `cat` children must have exited before the clock moves.
+        const neighbourConfigs = new Set(
           [repos[0], repos[2]].map((repo) => path.join(repo, ".git", "config")),
         );
-        const scannerLayer = Layer.effect(
-          AgentSessionScanner.AgentSessionScanner,
-          AgentSessionScanner.make,
-        ).pipe(
-          Layer.provide(
-            Layer.succeed(ProcessRunner.ProcessRunner, {
-              run: (input) =>
-                processRunner
-                  .run(input)
-                  .pipe(
-                    Effect.tap(() =>
-                      healthyConfigs.has(input.args.at(-1) ?? "")
-                        ? Queue.offer(finishedReads, undefined)
-                        : Effect.void,
-                    ),
-                  ),
-            }),
-          ),
-        );
+        const finishedNeighbourReads = yield* Queue.unbounded<string>();
+        const processRunner = Layer.effect(
+          ProcessRunner.ProcessRunner,
+          Effect.gen(function* () {
+            const runner = yield* ProcessRunner.ProcessRunner;
+            return ProcessRunner.ProcessRunner.of({
+              run: (input) => {
+                const filePath = input.args.at(-1) ?? "";
+                return neighbourConfigs.has(filePath)
+                  ? runner
+                      .run(input)
+                      .pipe(Effect.ensuring(Queue.offer(finishedNeighbourReads, filePath)))
+                  : runner.run(input);
+              },
+            });
+          }),
+        ).pipe(Layer.provide(ProcessRunner.layer), Layer.provide(NodeServices.layer));
+
         for (let attempt = 1; attempt <= 2; attempt++) {
           const scan = yield* Effect.forkChild(
-            runScan({ claudeHomePath, codexHomePath }, scannerLayer),
+            runScan({ claudeHomePath, codexHomePath, processRunner }),
           );
           const result = yield* Effect.scoped(
             Effect.gen(function* () {
               yield* awaitGateReader(path.join(repos[1], ".git", "config"));
-              // Real subprocess reads must finish before advancing the blocked read's virtual deadline.
-              yield* Queue.take(finishedReads);
-              yield* Queue.take(finishedReads);
+              yield* Queue.take(finishedNeighbourReads);
+              yield* Queue.take(finishedNeighbourReads);
               yield* TestClock.adjust("2 seconds");
               return yield* Fiber.join(scan);
             }),

@@ -32,7 +32,7 @@ export const resolveSummaryProvenance = Effect.fn("resolveSummaryProvenance")(fu
     source.runModelSelection ?? storedModelSelectionJson ?? source.threadModelSelection;
   if (provenanceJson === null) return null;
   const modelSelection = yield* decodeModelSelection(provenanceJson);
-  // @effect-diagnostics-next-line preferSchemaOverJson:off
+  // @effect-diagnostics-next-line preferSchemaOverJson:off globalJsonInEffect:off
   const modelSelectionJson = JSON.stringify(modelSelection);
   return {
     modelSelection,

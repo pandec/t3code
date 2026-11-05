@@ -1,4 +1,3 @@
-import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -8,10 +7,12 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 export const MAC_DEV_APP_ID = "com.t3tools.t3code.dev";
 
-export class MacDevSigningError extends Data.TaggedError("MacDevSigningError")<{
-  readonly message: string;
-  readonly cause?: unknown;
-}> {}
+export class MacDevSigningError extends Schema.TaggedError<MacDevSigningError>()(
+  "MacDevSigningError",
+  { message: Schema.String, cause: Schema.optional(Schema.Defect()) },
+) {}
+
+const isMacDevSigningError = Schema.is(MacDevSigningError);
 
 const decodeTeamId = Schema.decodeUnknownEffect(
   Schema.String.check(Schema.isPattern(/^[A-Z0-9]{10}$/u)),
@@ -81,7 +82,7 @@ export const unlockMacDevKeychain = Effect.fn("unlockMacDevKeychain")(function* 
     }
   }).pipe(
     Effect.mapError((error) =>
-      error instanceof MacDevSigningError
+      isMacDevSigningError(error)
         ? error
         : new MacDevSigningError({
             message:

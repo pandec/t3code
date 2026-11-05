@@ -3,7 +3,6 @@
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
-import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -32,10 +31,12 @@ const ExpoUpdatesFingerprint = Schema.fromJsonString(
 );
 const decodeExpoUpdatesFingerprint = Schema.decodeUnknownEffect(ExpoUpdatesFingerprint);
 
-export class IosTestFlightError extends Data.TaggedError("IosTestFlightError")<{
-  readonly message: string;
-  readonly cause: unknown;
-}> {}
+export class IosTestFlightError extends Schema.TaggedError<IosTestFlightError>()(
+  "IosTestFlightError",
+  { message: Schema.String, cause: Schema.Defect() },
+) {}
+
+const isIosTestFlightError = Schema.is(IosTestFlightError);
 
 interface CommandOptions {
   readonly cwd?: string;
@@ -47,7 +48,7 @@ function formatCommand(command: string, args: ReadonlyArray<string>): string {
 }
 
 function asIosTestFlightError(message: string, cause: unknown): IosTestFlightError {
-  return cause instanceof IosTestFlightError ? cause : new IosTestFlightError({ message, cause });
+  return isIosTestFlightError(cause) ? cause : new IosTestFlightError({ message, cause });
 }
 
 export const runCommand = Effect.fn("iosTestFlight.runCommand")(

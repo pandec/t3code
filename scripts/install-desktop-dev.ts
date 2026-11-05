@@ -6,13 +6,13 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Cause from "effect/Cause";
-import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
   MAC_DEV_APP_ID,
@@ -43,10 +43,12 @@ const RELAUNCH_BACKOFF = Duration.seconds(2);
 const MAC_DIAGNOSTICS_HINT = `Inspect the launch with: log show --predicate 'process == "${MAC_APP_PROCESS}"' --last 5m`;
 const LINUX_DIAGNOSTICS_HINT = `Inspect the launch with: journalctl --user -u ${LINUX_APP_UNIT} -n 100`;
 
-export class DesktopInstallError extends Data.TaggedError("DesktopInstallError")<{
-  readonly message: string;
-  readonly cause: unknown;
-}> {}
+export class DesktopInstallError extends Schema.TaggedError<DesktopInstallError>()(
+  "DesktopInstallError",
+  { message: Schema.String, cause: Schema.Defect() },
+) {}
+
+const isDesktopInstallError = Schema.is(DesktopInstallError);
 
 interface DesktopInstallLifecycle {
   readonly isRunning: Effect.Effect<boolean, DesktopInstallError>;
@@ -82,7 +84,7 @@ function formatCommand(command: string, args: ReadonlyArray<string>): string {
 }
 
 function asDesktopInstallError(message: string, cause: unknown): DesktopInstallError {
-  return cause instanceof DesktopInstallError ? cause : new DesktopInstallError({ message, cause });
+  return isDesktopInstallError(cause) ? cause : new DesktopInstallError({ message, cause });
 }
 
 export function escapeProcessNameForExactMatch(processName: string): string {

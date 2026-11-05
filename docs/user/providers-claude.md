@@ -36,6 +36,10 @@ Both instances must use the same **CLAUDE_CONFIG_DIR path**. T3 Code prepares th
 so both accounts share sessions, skills, agents, commands, global settings, and `CLAUDE.md` while
 keeping credentials separate.
 
+On mobile, **Add Claude account** in **Settings > Providers** sets only the config folder;
+add the shadow config directory from web or desktop. The login itself still happens on the
+environment's machine.
+
 Some state remains private to each account. MCP server registrations and per-project prompt history
 live in that account's `.claude.json`, so changes made with `claude mcp add` do not carry across
 accounts.
@@ -82,6 +86,7 @@ sends your message. Click the chip to switch it to **Keep** and keep the full
 history; the choice holds for that thread until the message is sent. ⌘Enter
 (Ctrl+Enter) sends once with the chip's other choice. To start every old thread
 on **Keep**, set **Settings → Chat → Old thread send** to **Full history**.
+The mobile app shows no chip: an eligible message sent from it summarizes first.
 The cache lasts about an hour on a Claude subscription and 5 minutes with an API
 key, Bedrock, or Vertex. See [commands and skills](./composer.md#commands-and-skills) for using
 composer commands.

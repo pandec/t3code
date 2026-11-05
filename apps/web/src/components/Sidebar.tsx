@@ -182,7 +182,6 @@ import { useNowMinute } from "../hooks/useNowMinute";
 import {
   useEnvironmentIdentities,
   useConnectedEnvironmentIds,
-  useEnvironmentConnectionSummaries,
   useEnvironmentMachines,
   useEnvironments,
   usePrimaryEnvironmentId,
@@ -241,8 +240,6 @@ import {
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
   deleteSelectedThreadEntries,
-  belongsInSidebarWorkingShelf,
-  isSidebarEnvironmentDisconnected,
   isSidebarNestedLinkClick,
   isSidebarProjectScopeIsolated,
   isTrailingDoubleClick,
@@ -436,7 +433,6 @@ interface SidebarThreadPartitionInput {
   readonly includeDone: boolean;
   readonly threadLastVisitedAtById: Readonly<Record<string, string>>;
   readonly routeRowThreadKey: string | null;
-  readonly disconnectedEnvironmentIds: ReadonlySet<EnvironmentId>;
   // Snooze wakes, the queued-turn grace and the Working shelf's exit grace depend
   // on the clock, so the minute tick, the precise snooze-wake tick and the inbox
   // tracker's expiry version are inputs: a new key repartitions.
@@ -509,7 +505,6 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     includeDone,
     threadLastVisitedAtById,
     routeRowThreadKey,
-    disconnectedEnvironmentIds,
   } = input;
   const preciseNow = new Date().toISOString();
   // Subagent children live in the parent's Agents surface, not the roster. Each fork
@@ -546,11 +541,8 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
   const active: EnvironmentThreadShell[] = [];
   const working: EnvironmentThreadShell[] = [];
   const inbox = (thread: EnvironmentThreadShell, manuallyMoved = false) =>
-    belongsInSidebarWorkingShelf(thread, {
-      enabled: workingShelfEnabled,
-      disconnectedEnvironmentIds,
-      isWorking: manuallyMoved ? isThreadWorking : inboxObservation.isWorking,
-    })
+    workingShelfEnabled &&
+    (manuallyMoved ? isThreadWorking(thread) : inboxObservation.isWorking(thread))
       ? working
       : active;
   const snoozed: EnvironmentThreadShell[] = [];
@@ -1068,17 +1060,6 @@ function useSidebarThreads(input: {
     activeWorkFilter && includeDone ? s.threadLastVisitedAtById : NO_LOCAL_VISITS,
   );
   const liveEnvironmentIds = useAtomValue(liveShellEnvironmentIdsAtom);
-  const environmentConnections = useEnvironmentConnectionSummaries();
-  const disconnectedEnvironmentIds = new Set(
-    environmentConnections
-      .filter((environment) =>
-        isSidebarEnvironmentDisconnected(
-          environment.connectionState,
-          liveEnvironmentIds.has(environment.environmentId),
-        ),
-      )
-      .map((environment) => environment.environmentId),
-  );
   const activeWorkThreadKeys = useActiveWorkThreadKeys(
     activeWorkFilter,
     threads,
@@ -1102,7 +1083,6 @@ function useSidebarThreads(input: {
     includeDone,
     threadLastVisitedAtById,
     routeRowThreadKey,
-    disconnectedEnvironmentIds,
     clockKey: `${nowMinute}:${snoozeWakeClock}:${inboxReturnsVersion}`,
   });
   const { pinnedThreads, activeThreads, workingThreads, snoozedThreads, settledThreads } =

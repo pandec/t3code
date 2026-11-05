@@ -145,19 +145,19 @@ const voiceInputAtom = Atom.make((get) => {
           throwIfVoiceTranscriptionAborted(options.signal);
           const durationMs = Math.min(VOICE_TRANSCRIPTION_MAX_DURATION_MS, recordingDurationMs);
           if (durationMs < VOICE_TRANSCRIPTION_MIN_DURATION_MS) {
-            throw new VoiceTranscriptionError(
-              "transcription-failed",
-              "The recording was too short to transcribe.",
-            );
+            throw new VoiceTranscriptionError({
+              code: "transcription-failed",
+              message: "The recording was too short to transcribe.",
+            });
           }
 
           const file = new File(uri);
           const sizeBytes = file.size ?? 0;
           if (sizeBytes <= 0 || sizeBytes > VOICE_TRANSCRIPTION_MAX_BYTES) {
-            throw new VoiceTranscriptionError(
-              "transcription-failed",
-              "The recording was empty or too large to transcribe.",
-            );
+            throw new VoiceTranscriptionError({
+              code: "transcription-failed",
+              message: "The recording was empty or too large to transcribe.",
+            });
           }
           const dataUrl = `data:audio/mp4;base64,${await file.base64()}`;
           throwIfVoiceTranscriptionAborted(options.signal);
@@ -169,10 +169,10 @@ const voiceInputAtom = Atom.make((get) => {
           );
           throwIfVoiceTranscriptionAborted(options.signal);
           if (result._tag === "Success") return result.value.text;
-          throw new VoiceTranscriptionError(
-            "transcription-failed",
-            "Environment voice transcription failed.",
-          );
+          throw new VoiceTranscriptionError({
+            code: "transcription-failed",
+            message: "Environment voice transcription failed.",
+          });
         },
       };
     },

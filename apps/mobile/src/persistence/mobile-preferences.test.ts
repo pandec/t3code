@@ -2,7 +2,6 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 import { vi } from "vite-plus/test";
 
@@ -76,7 +75,7 @@ describe("mobile preferences persistence", () => {
       const database = MobileDatabase.MobileDatabase.of({
         loadPreferencesJson: Effect.suspend(() => {
           loadCount += 1;
-          return loadCount === 1 ? Effect.never : Effect.succeed(Option.none());
+          return loadCount === 1 ? Effect.never : Effect.succeedNone;
         }),
         savePreferencesJson: () => Effect.void,
       } as unknown as MobileDatabase.MobileDatabase["Service"]);

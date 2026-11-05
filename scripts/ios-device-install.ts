@@ -109,7 +109,7 @@ const main = Effect.fn("iosDeviceInstall.main")(function* () {
     devicesJsonPath,
     "--quiet",
   ]);
-  // @effect-diagnostics-next-line preferSchemaOverJson:off - devicectl output is sniffed as unknown and validated by selectDevice.
+  // @effect-diagnostics-next-line preferSchemaOverJson:off globalJsonInEffect:off - devicectl output is sniffed as unknown and validated by selectDevice.
   const devicesPayload: unknown = JSON.parse(yield* fs.readFileString(devicesJsonPath));
   const device = selectDevice(devicesPayload, requestedUdid);
   if ("error" in device) {

@@ -33,6 +33,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-sort";
 import { isListedThreadLineage, type EnvironmentId, type ProjectId } from "@t3tools/contracts";
 import type { SnoozePresetSetting } from "@t3tools/contracts/settings";
+import type { MenuAction } from "@react-native-menu/menu";
 
 import type { ThreadListProvider } from "../../state/thread-list-environments";
 import { threadGroupFold } from "../../state/thread-shelf-expansion";
@@ -81,26 +82,6 @@ export type ThreadListV2Status =
   | "limited"
   | "ready";
 export type ThreadListV2MenuActionId = "archive" | "delete" | "settle" | "unsettle";
-
-const CARD_MENU_ACTION_IDS: ReadonlyArray<ThreadListV2MenuActionId> = [
-  "settle",
-  "archive",
-  "delete",
-];
-const SLIM_MENU_ACTION_IDS: ReadonlyArray<ThreadListV2MenuActionId> = [
-  "unsettle",
-  "archive",
-  "delete",
-];
-const LEGACY_MENU_ACTION_IDS: ReadonlyArray<ThreadListV2MenuActionId> = ["archive", "delete"];
-
-export function resolveThreadListV2MenuActionIds(input: {
-  readonly settlementSupported: boolean;
-  readonly variant: "card" | "slim";
-}): ReadonlyArray<ThreadListV2MenuActionId> {
-  if (!input.settlementSupported) return LEGACY_MENU_ACTION_IDS;
-  return input.variant === "slim" ? SLIM_MENU_ACTION_IDS : CARD_MENU_ACTION_IDS;
-}
 
 export type ThreadListV2SwipeAction = "archive" | "settle" | "unsettle" | "snooze" | "unsnooze";
 
@@ -189,6 +170,42 @@ export function resolveThreadListV2SwipeActions(input: {
             "archive" as const,
           ],
   };
+}
+
+// Nested keeps iOS menus short: UIKit scrolls a taller menu, and that scroll
+// cancels press-drag-release selection.
+export function layoutThreadListV2RowMenuActions(input: {
+  readonly nested: boolean;
+  readonly direct: readonly MenuAction[];
+  readonly reorder: readonly MenuAction[];
+  readonly pin: readonly MenuAction[];
+  readonly secondary: readonly MenuAction[];
+}): MenuAction[] {
+  if (!input.nested) {
+    return [...input.direct, ...input.reorder, ...input.pin, ...input.secondary];
+  }
+  return [
+    ...input.direct,
+    ...input.pin,
+    {
+      id: "more",
+      title: "More",
+      image: "ellipsis.circle",
+      subactions: [
+        ...(input.reorder.length > 1
+          ? [
+              {
+                id: "arrange-menu",
+                title: "Arrange",
+                image: "arrow.up.arrow.down",
+                subactions: [...input.reorder],
+              },
+            ]
+          : input.reorder),
+        ...input.secondary,
+      ],
+    },
+  ];
 }
 
 /** The earliest `snoozedUntil` strictly after `nowMs`, in epoch ms. */

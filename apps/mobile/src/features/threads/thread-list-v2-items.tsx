@@ -79,7 +79,6 @@ import { canTurnThreadIntoProject, turnThreadIntoProject } from "./turnThreadInt
 import { threadCanArchive } from "../home/threadArchive";
 import {
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
-  resolveThreadListV2MenuActionIds,
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozePresets,
   threadHasUnseenCompletion,
@@ -87,6 +86,7 @@ import {
   resolveThreadListV2ProviderDrivers,
   resolveThreadListV2SwipeActions,
   type ThreadListV2MenuActionId,
+  layoutThreadListV2RowMenuActions,
   type ThreadListV2Status,
 } from "./threadListV2";
 import { QueuedMessageIcon } from "./queued-message-icon";
@@ -185,25 +185,8 @@ const MENU_ACTION_BY_ID: Readonly<Record<ThreadListV2MenuActionId, MenuAction>> 
   delete: { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
 };
 
-function menuActionsForRow(input: {
-  readonly settlementSupported: boolean;
-  readonly variant: "card" | "slim";
-}): MenuAction[] {
-  return resolveThreadListV2MenuActionIds(input).map((id) => MENU_ACTION_BY_ID[id]);
-}
-
-// Each list ends with Delete; rows splice their own items in before it.
-const CARD_MENU_ACTIONS = menuActionsForRow({ settlementSupported: true, variant: "card" });
-const SLIM_MENU_ACTIONS = menuActionsForRow({ settlementSupported: true, variant: "slim" });
-const LEGACY_MENU_ACTIONS = menuActionsForRow({ settlementSupported: false, variant: "card" });
 const ACTIVE_MARK_SYMBOL: AppSymbolName = { ios: "bolt.fill", android: "bolt" };
-// Archive rides along so the swipe-right gesture keeps a menu (and
-// VoiceOver) twin on the snoozed shelf.
-const SNOOZED_MENU_ACTIONS: MenuAction[] = [
-  { id: "unsnooze", title: "Wake thread", image: "clock" },
-  MENU_ACTION_BY_ID.archive,
-  MENU_ACTION_BY_ID.delete,
-];
+const UNSNOOZE_MENU_ACTION: MenuAction = { id: "unsnooze", title: "Wake thread", image: "clock" };
 
 /** Rounded-row radius for the sidebar rows. */
 const SIDEBAR_V2_ROW_RADIUS = 12;
@@ -1034,12 +1017,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     }),
     [archiveToggle],
   );
-  /** Replaces the static archive entry of a base menu list with the toggle-aware one. */
-  const withArchiveToggle = useCallback(
-    (actions: ReadonlyArray<MenuAction>) =>
-      actions.map((action) => (action.id === "archive" ? archiveMenuItem : action)),
-    [archiveMenuItem],
-  );
   const handleFork = useCallback(() => onForkThread(thread), [onForkThread, thread]);
   const forkable = canForkConversation(thread, {
     canForkImportedSession: canForkImportedSessionWith(thread.providerInstanceId, props.providers),
@@ -1104,9 +1081,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         : [],
     [props.activeMarkSupported, thread.activeMarkedAt],
   );
-  const arrangementMenuItems = useMemo<MenuAction[]>(
-    () => [
-      ...(props.reorderSupported === true
+  const reorderMenuItems = useMemo<MenuAction[]>(
+    () =>
+      props.reorderSupported === true
         ? [
             { id: "arrange", title: "Arrange threads…", image: "line.3.horizontal" },
             {
@@ -1122,24 +1099,19 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
               attributes: { disabled: props.canMoveDown !== true },
             } satisfies MenuAction,
           ]
-        : []),
-      ...(props.pinningSupported
+        : [],
+    [props.canMoveDown, props.canMoveUp, props.reorderSupported],
+  );
+  const pinMenuItems = useMemo<MenuAction[]>(
+    () =>
+      props.pinningSupported
         ? [
             thread.pinnedAt != null
               ? { id: "unpin", title: "Unpin", image: "pin.slash" }
               : { id: "pin", title: "Pin", image: "pin" },
           ]
-        : []),
-      ...activeMarkMenuItem,
-    ],
-    [
-      activeMarkMenuItem,
-      props.canMoveDown,
-      props.canMoveUp,
-      props.reorderSupported,
-      props.pinningSupported,
-      thread.pinnedAt,
-    ],
+        : [],
+    [props.pinningSupported, thread.pinnedAt],
   );
   // Menu twin for the swipe-right Fork action, so the gesture keeps a
   // long-press (and VoiceOver) equivalent wherever it is offered.
@@ -1194,74 +1166,97 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     ],
     [canTurnIntoProject, props.titleRegenerationSupported, thread.runtime, isRegeneratingTitle],
   );
-  const snoozableCardMenuActions = useMemo<MenuAction[]>(
-    () => [
-      { id: "settle", title: "Settle", image: "checkmark" },
-      {
-        id: "snooze",
-        title: "Snooze",
-        image: "clock",
-        subactions: snoozePresetActions,
-      },
-      archiveMenuItem,
-      ...arrangementMenuItems,
-      ...forkMenuItem,
-      ...titleMenuItems,
-      ...autoSettleMenuItems,
-      MENU_ACTION_BY_ID.delete,
-    ],
-    [
-      archiveMenuItem,
-      arrangementMenuItems,
-      autoSettleMenuItems,
-      forkMenuItem,
-      snoozePresetActions,
-      titleMenuItems,
-    ],
-  );
-  const cardMenuActions = useMemo<MenuAction[]>(
-    () => [
-      ...withArchiveToggle(CARD_MENU_ACTIONS.slice(0, -1)),
-      ...arrangementMenuItems,
-      ...forkMenuItem,
-      ...titleMenuItems,
-      ...autoSettleMenuItems,
-      CARD_MENU_ACTIONS.at(-1)!,
-    ],
-    [arrangementMenuItems, autoSettleMenuItems, forkMenuItem, titleMenuItems, withArchiveToggle],
-  );
-  const slimMenuActions = useMemo<MenuAction[]>(
-    () => [
-      ...withArchiveToggle(SLIM_MENU_ACTIONS.slice(0, -1)),
-      ...arrangementMenuItems.filter(
-        (action) => action.id !== "move-up" && action.id !== "move-down",
-      ),
-      ...forkMenuItem,
-      ...titleMenuItems,
-      ...autoSettleMenuItems,
-      SLIM_MENU_ACTIONS.at(-1)!,
-    ],
-    [arrangementMenuItems, autoSettleMenuItems, forkMenuItem, titleMenuItems, withArchiveToggle],
-  );
-  const snoozedMenuActions = useMemo<MenuAction[]>(
-    () => [
-      ...withArchiveToggle(SNOOZED_MENU_ACTIONS.slice(0, -1)),
-      ...activeMarkMenuItem,
-      ...titleMenuItems,
-      ...autoSettleMenuItems,
-      SNOOZED_MENU_ACTIONS.at(-1)!,
-    ],
-    [activeMarkMenuItem, autoSettleMenuItems, titleMenuItems, withArchiveToggle],
-  );
-  const legacyMenuActions = useMemo<MenuAction[]>(
-    () => [
-      ...withArchiveToggle(LEGACY_MENU_ACTIONS.slice(0, -1)),
-      ...arrangementMenuItems,
-      ...titleMenuItems,
-      LEGACY_MENU_ACTIONS.at(-1)!,
-    ],
-    [arrangementMenuItems, titleMenuItems, withArchiveToggle],
-  );
+  const menuActions = useMemo<MenuAction[]>(() => {
+    const nested = Platform.OS === "ios";
+    const direct: MenuAction[] = [
+      ...(thread.branch
+        ? [
+            {
+              id: "new-thread-on-branch",
+              title: getThreadListV2NewBranchMenuTitle(thread.branch),
+              image: "square.and.pencil",
+            },
+          ]
+        : []),
+      { id: "copy-thread", title: "Copy thread", image: "text.bubble" },
+      { id: "copy-thread-id", title: "Copy thread ID", image: "doc.on.doc" },
+    ];
+    const pin = [...pinMenuItems, ...activeMarkMenuItem];
+    if (snoozedRow) {
+      return layoutThreadListV2RowMenuActions({
+        nested,
+        direct: [...direct, UNSNOOZE_MENU_ACTION],
+        reorder: [],
+        pin: activeMarkMenuItem,
+        // Archive stays as the swipe-right gesture's menu and VoiceOver twin.
+        secondary: [
+          ...titleMenuItems,
+          ...autoSettleMenuItems,
+          archiveMenuItem,
+          MENU_ACTION_BY_ID.delete,
+        ],
+      });
+    }
+    if (!props.settlementSupported) {
+      return layoutThreadListV2RowMenuActions({
+        nested,
+        direct: [...direct, archiveMenuItem],
+        reorder: reorderMenuItems,
+        pin,
+        secondary: [...titleMenuItems, MENU_ACTION_BY_ID.delete],
+      });
+    }
+    if (canUnsettle) {
+      return layoutThreadListV2RowMenuActions({
+        nested,
+        direct: [...direct, MENU_ACTION_BY_ID.unsettle],
+        reorder: reorderMenuItems.filter(
+          (action) => action.id !== "move-up" && action.id !== "move-down",
+        ),
+        pin,
+        secondary: [
+          ...forkMenuItem,
+          ...titleMenuItems,
+          ...autoSettleMenuItems,
+          archiveMenuItem,
+          MENU_ACTION_BY_ID.delete,
+        ],
+      });
+    }
+    return layoutThreadListV2RowMenuActions({
+      nested,
+      direct: [
+        ...direct,
+        MENU_ACTION_BY_ID.settle,
+        ...(swipeActions.secondary === "snooze"
+          ? [{ id: "snooze", title: "Snooze", image: "clock", subactions: snoozePresetActions }]
+          : []),
+      ],
+      reorder: reorderMenuItems,
+      pin,
+      secondary: [
+        ...forkMenuItem,
+        ...titleMenuItems,
+        ...autoSettleMenuItems,
+        archiveMenuItem,
+        MENU_ACTION_BY_ID.delete,
+      ],
+    });
+  }, [
+    activeMarkMenuItem,
+    archiveMenuItem,
+    autoSettleMenuItems,
+    canUnsettle,
+    forkMenuItem,
+    pinMenuItems,
+    props.settlementSupported,
+    reorderMenuItems,
+    snoozePresetActions,
+    snoozedRow,
+    swipeActions.secondary,
+    thread.branch,
+    titleMenuItems,
+  ]);
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
       if (nativeEvent.event === "new-thread-on-branch") onNewThreadOnBranch(thread);
@@ -1915,32 +1910,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         threadTitle={thread.title}
       >
         {(close) => (
-          <Menu
-            actions={[
-              ...(thread.branch
-                ? [
-                    {
-                      id: "new-thread-on-branch",
-                      title: getThreadListV2NewBranchMenuTitle(thread.branch),
-                      image: "square.and.pencil",
-                    },
-                  ]
-                : []),
-              { id: "copy-thread", title: "Copy thread", image: "text.bubble" },
-              { id: "copy-thread-id", title: "Copy thread ID", image: "doc.on.doc" },
-              ...(snoozedRow
-                ? snoozedMenuActions
-                : !props.settlementSupported
-                  ? legacyMenuActions
-                  : canUnsettle
-                    ? slimMenuActions
-                    : swipeActions.secondary === "snooze"
-                      ? snoozableCardMenuActions
-                      : cardMenuActions),
-            ]}
-            onPressAction={handleMenuAction}
-            shouldOpenOnLongPress
-          >
+          <Menu actions={menuActions} onPressAction={handleMenuAction} shouldOpenOnLongPress>
             {rowContent(close)}
           </Menu>
         )}

@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Expo evaluates this config in plain Node to stamp git build info.
 import * as NodeChildProcess from "node:child_process";
 
 import type { ExpoConfig } from "expo/config";
@@ -17,6 +18,8 @@ type AppVariant = "development" | "preview" | "production";
 
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
+// Expo's TypeScript setup otherwise installs `typescript` on every start; we typecheck with tsrs.
+process.env.EXPO_NO_TYPESCRIPT_SETUP = "1";
 
 // Stamp the source commit into the bundle so the diagnostics journal's `meta` event can
 // map a build back to a commit. EAS build numbers are not recoverable locally and OTA

@@ -26,6 +26,7 @@ import * as ProviderRegistry from "../../../provider/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../../../secrets/SecretRequests.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
+import * as AssetSigner from "../../../assets/AssetSigner.ts";
 import * as LabsService from "../../../labs/LabsService.ts";
 import * as TelegramService from "../../../telegram/TelegramService.ts";
 import * as VcsStatusBroadcaster from "../../../vcs/VcsStatusBroadcaster.ts";
@@ -56,6 +57,7 @@ const StubServicesLive = Layer.mergeAll(
   Layer.mock(Orchestrator.OrchestratorV2)({}),
   Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
   Layer.mock(DeviceService.DeviceService)({}),
+  Layer.mock(AssetSigner.AssetSigner)({}),
   // voice_reply acts as the calling thread, so the caller needs a live run.
   Layer.mock(ThreadManagementService.ThreadManagementService)({
     getThreadShell: (id) =>

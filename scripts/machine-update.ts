@@ -193,6 +193,7 @@ export interface TerminalOutput {
   readonly write: (value: string) => void;
 }
 
+// @effect-diagnostics-next-line extendsNativeError:off - CLI exit error carrying the process exit code.
 export class MachineUpdateError extends Error {
   readonly exitCode: 2 | 130;
 

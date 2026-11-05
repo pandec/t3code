@@ -10,7 +10,6 @@ import type {
   ProviderInstanceUsageSource,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
-import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
@@ -139,33 +138,36 @@ export interface CliProxyApiUsagePayload {
   readonly modelProviders?: Readonly<Record<string, string>>;
 }
 
-class CliProxyApiAuthRejectedError extends Data.TaggedError("CliProxyApiAuthRejectedError")<{
-  readonly status: number;
-  readonly count: number;
-}> {
+class CliProxyApiAuthRejectedError extends Schema.TaggedError<CliProxyApiAuthRejectedError>()(
+  "CliProxyApiAuthRejectedError",
+  { status: Schema.Number, count: Schema.Number },
+) {
   override get message(): string {
     return `CLIProxyAPI management authentication rejected (HTTP ${this.status}).`;
   }
 }
 
-class CliProxyApiRequestFailedError extends Data.TaggedError("CliProxyApiRequestFailedError")<{
-  readonly detail: string;
-  readonly cause?: unknown;
-}> {
+class CliProxyApiRequestFailedError extends Schema.TaggedError<CliProxyApiRequestFailedError>()(
+  "CliProxyApiRequestFailedError",
+  { detail: Schema.String, cause: Schema.optional(Schema.Defect()) },
+) {
   override get message(): string {
     return this.detail;
   }
 }
+
+const isCliProxyApiAuthRejectedError = Schema.is(CliProxyApiAuthRejectedError);
+const isCliProxyApiRequestFailedError = Schema.is(CliProxyApiRequestFailedError);
 
 /**
  * Why a pool probe produced no snapshot. `detail` is a complete sentence safe
  * to show a user verbatim (the refresh coordinator reports it as the failure
  * reason).
  */
-export class CliProxyApiUsageProbeError extends Data.TaggedError("CliProxyApiUsageProbeError")<{
-  readonly detail: string;
-  readonly cause?: unknown;
-}> {
+export class CliProxyApiUsageProbeError extends Schema.TaggedError<CliProxyApiUsageProbeError>()(
+  "CliProxyApiUsageProbeError",
+  { detail: Schema.String, cause: Schema.optional(Schema.Defect()) },
+) {
   override get message(): string {
     return this.detail;
   }
@@ -460,8 +462,7 @@ export function makeCliProxyApiUsageProbe(
     },
     (effect, _request, timeoutMs) => Effect.timeout(effect, timeoutMs),
     Effect.mapError((cause) =>
-      cause instanceof CliProxyApiAuthRejectedError ||
-      cause instanceof CliProxyApiRequestFailedError
+      isCliProxyApiAuthRejectedError(cause) || isCliProxyApiRequestFailedError(cause)
         ? cause
         : new CliProxyApiRequestFailedError({
             detail: "CLIProxyAPI management request failed.",
