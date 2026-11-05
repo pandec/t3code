@@ -33,6 +33,7 @@ import * as NodeURL from "node:url";
 
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as BrowserImport from "../../preview/BrowserImport/BrowserImport.ts";
+import * as PreviewDashlane from "../../preview/Dashlane.ts";
 import * as PreviewManager from "../../preview/Manager.ts";
 import { normalizeCaptureFailure } from "../../preview/captureErrors.ts";
 import * as DesktopClientSettings from "../../settings/DesktopClientSettings.ts";
@@ -57,6 +58,22 @@ export const installPreviewEventForwarding = Effect.fn(
   yield* manager.subscribeOpenLinks((event) =>
     electronWindow.sendAll(IpcChannels.PREVIEW_OPEN_LINK_CHANNEL, event),
   );
+  yield* (yield* PreviewDashlane.PreviewDashlane).subscribe((event) => {
+    switch (event._tag) {
+      case "ActionsChanged":
+        return electronWindow.sendAll(
+          IpcChannels.PREVIEW_EXTENSION_ACTIONS_CHANGE_CHANNEL,
+          event.webContentsId,
+        );
+      case "InstallationsChanged":
+        return electronWindow.sendAll(IpcChannels.PREVIEW_EXTENSION_INSTALLATIONS_CHANGE_CHANNEL);
+      case "PopupRequested":
+        return electronWindow.sendAll(IpcChannels.PREVIEW_EXTENSION_POPUP_REQUEST_CHANNEL, {
+          webContentsId: event.webContentsId,
+          extensionId: event.extensionId,
+        });
+    }
+  });
 });
 
 const setForwardedShortcuts = DesktopIpc.makeIpcMethod({
@@ -310,7 +327,9 @@ const getPreviewConfig = DesktopIpc.makeIpcMethod({
     const manager = yield* PreviewManager.PreviewManager;
     const { scope, persistent, namespace } = resolvePartitionScope(environmentId, profileId);
     // Session creation installs UA and permission handlers before a guest can attach.
-    yield* manager.getBrowserSession(scope, persistent, namespace);
+    const session = yield* manager.getBrowserSession(scope, persistent, namespace);
+    // Content scripts only reach guests that attach after the extension loads.
+    yield* (yield* PreviewDashlane.PreviewDashlane).prepareSession(session, profileId);
     return {
       partition: yield* manager.getBrowserPartition(scope, persistent, namespace),
       webPreferences: PREVIEW_WEBVIEW_PREFERENCES,
@@ -426,6 +445,98 @@ const saveRecording = DesktopIpc.makeIpcMethod({
   }),
 });
 
+const listExtensionInstallations = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_EXTENSION_INSTALLATIONS_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      name: Schema.String,
+      directory: Schema.String,
+      version: Schema.NullOr(Schema.String),
+      update: Schema.optional(
+        Schema.Struct({
+          activity: Schema.Literals(["idle", "checking", "downloading", "updating"]),
+          checkedAt: Schema.NullOr(Schema.String),
+          readyVersion: Schema.NullOr(Schema.String),
+          error: Schema.NullOr(Schema.String),
+        }),
+      ),
+    }),
+  ),
+  handler: Effect.fn("desktop.ipc.preview.listExtensionInstallations")(function* () {
+    return yield* (yield* PreviewDashlane.PreviewDashlane).listInstallations;
+  }),
+});
+
+const ExtensionTarget = Schema.Struct({ extensionId: Schema.String });
+
+const checkExtensionUpdates = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_EXTENSION_CHECK_UPDATES_CHANNEL,
+  payload: ExtensionTarget,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.checkExtensionUpdates")(function* ({ extensionId }) {
+    yield* (yield* PreviewDashlane.PreviewDashlane).checkForUpdates(extensionId);
+  }),
+});
+
+const applyExtensionUpdate = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_EXTENSION_APPLY_UPDATE_CHANNEL,
+  payload: ExtensionTarget,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.applyExtensionUpdate")(function* ({ extensionId }) {
+    yield* (yield* PreviewDashlane.PreviewDashlane).applyUpdate(extensionId);
+  }),
+});
+
+const ExtensionGuestId = Schema.Int.check(Schema.isGreaterThan(0));
+
+const listExtensionActions = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_EXTENSION_ACTIONS_CHANNEL,
+  payload: Schema.Struct({ webContentsId: ExtensionGuestId }),
+  result: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      name: Schema.String,
+      title: Schema.String,
+      icon: Schema.NullOr(Schema.String),
+    }),
+  ),
+  handler: Effect.fn("desktop.ipc.preview.listExtensionActions")(function* (
+    { webContentsId },
+    event,
+  ) {
+    if (event === undefined) return [];
+    const dashlane = yield* PreviewDashlane.PreviewDashlane;
+    return yield* dashlane.listActions(event.sender.id, webContentsId);
+  }),
+});
+
+const AnchorCoordinate = Schema.Finite.check(Schema.isBetween({ minimum: -1e5, maximum: 1e5 }));
+
+const openExtensionPopup = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_EXTENSION_OPEN_POPUP_CHANNEL,
+  payload: Schema.Struct({
+    webContentsId: ExtensionGuestId,
+    extensionId: Schema.String,
+    anchor: Schema.Struct({
+      x: AnchorCoordinate,
+      y: AnchorCoordinate,
+      width: AnchorCoordinate,
+      height: AnchorCoordinate,
+    }),
+  }),
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.openExtensionPopup")(function* (
+    { webContentsId, extensionId, anchor },
+    event,
+  ) {
+    if (event === undefined) return;
+    const dashlane = yield* PreviewDashlane.PreviewDashlane;
+    yield* dashlane.openPopup(event.sender.id, webContentsId, extensionId, anchor);
+  }),
+});
+
 export const methods = [
   setForwardedShortcuts,
   createTab,
@@ -459,4 +570,9 @@ export const methods = [
   startRecording,
   stopRecording,
   saveRecording,
+  listExtensionInstallations,
+  checkExtensionUpdates,
+  applyExtensionUpdate,
+  listExtensionActions,
+  openExtensionPopup,
 ] as const;

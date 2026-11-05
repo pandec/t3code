@@ -39,6 +39,7 @@ import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
+import * as PreviewDashlane from "../preview/Dashlane.ts";
 import * as PreviewPasskeys from "../preview/Passkeys.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
@@ -134,6 +135,10 @@ it.effect(
           Effect.provideService(PreviewPasskeys.PreviewPasskeys, {
             configure: Effect.void,
           } as PreviewPasskeys.PreviewPasskeys["Service"]),
+          Effect.provideService(
+            PreviewDashlane.PreviewDashlane,
+            {} as PreviewDashlane.PreviewDashlane["Service"],
+          ),
           Effect.provideService(DesktopApplicationMenu.DesktopApplicationMenu, {
             configure: Effect.void,
           }),

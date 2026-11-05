@@ -117,6 +117,7 @@ import { searchableSetting } from "./settingsSearch";
 import { AdvancedSettings } from "./AdvancedSettings";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { BrowserImportWizard, type WizardTarget } from "./BrowserImportWizard";
+import { BrowserExtensionsSettings } from "./BrowserExtensionsSettings";
 import { TelegramIntegrationSettings } from "./TelegramSettings";
 import type { ImportOutcome } from "./browserImportWizard.logic";
 
@@ -1608,6 +1609,7 @@ export function BrowserSettingsPanel() {
           </SettingsUnavailableGroup>
         </AdvancedSettings>
       </SettingsSection>
+      <BrowserExtensionsSettings />
       <SettingsSection id="browser-recordings" title="Recordings">
         <SettingsUnavailableGroup message={desktopOnlyMessage}>
           <BrowserRecordingFrameRateSetting disabled={desktopOnly} />

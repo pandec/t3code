@@ -448,5 +448,53 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       return () =>
         ipcRenderer.removeListener(IpcChannels.PREVIEW_OPEN_LINK_CHANNEL, wrappedListener);
     },
+    extensions: {
+      listInstallations: () =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_EXTENSION_INSTALLATIONS_CHANNEL),
+      checkForUpdates: (extensionId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_EXTENSION_CHECK_UPDATES_CHANNEL, { extensionId }),
+      applyUpdate: (extensionId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_EXTENSION_APPLY_UPDATE_CHANNEL, { extensionId }),
+      onInstallationsChange: (listener) => {
+        const wrappedListener = () => listener();
+        ipcRenderer.on(IpcChannels.PREVIEW_EXTENSION_INSTALLATIONS_CHANGE_CHANNEL, wrappedListener);
+        return () =>
+          ipcRenderer.removeListener(
+            IpcChannels.PREVIEW_EXTENSION_INSTALLATIONS_CHANGE_CHANNEL,
+            wrappedListener,
+          );
+      },
+      listActions: (webContentsId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_EXTENSION_ACTIONS_CHANNEL, { webContentsId }),
+      openPopup: (webContentsId, extensionId, anchor) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_EXTENSION_OPEN_POPUP_CHANNEL, {
+          webContentsId,
+          extensionId,
+          anchor,
+        }),
+      onActionsChange: (listener) => {
+        const wrappedListener = (_event: Electron.IpcRendererEvent, webContentsId: unknown) => {
+          if (typeof webContentsId === "number" || webContentsId === null) listener(webContentsId);
+        };
+        ipcRenderer.on(IpcChannels.PREVIEW_EXTENSION_ACTIONS_CHANGE_CHANNEL, wrappedListener);
+        return () =>
+          ipcRenderer.removeListener(
+            IpcChannels.PREVIEW_EXTENSION_ACTIONS_CHANGE_CHANNEL,
+            wrappedListener,
+          );
+      },
+      onPopupRequest: (listener) => {
+        const wrappedListener = (_event: Electron.IpcRendererEvent, request: unknown) => {
+          if (typeof request !== "object" || request === null) return;
+          listener(request as Parameters<typeof listener>[0]);
+        };
+        ipcRenderer.on(IpcChannels.PREVIEW_EXTENSION_POPUP_REQUEST_CHANNEL, wrappedListener);
+        return () =>
+          ipcRenderer.removeListener(
+            IpcChannels.PREVIEW_EXTENSION_POPUP_REQUEST_CHANNEL,
+            wrappedListener,
+          );
+      },
+    },
   },
 } satisfies DesktopBridge);

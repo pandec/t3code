@@ -1,5 +1,6 @@
 import type { DesktopPreviewColorScheme } from "@t3tools/contracts";
-import { Minus, MoreVertical, Plus as PlusIcon, RotateCcw } from "lucide-react";
+import { Minus, MoreVertical, Pin, PinOff, Plus as PlusIcon, RotateCcw } from "lucide-react";
+import type { RefObject } from "react";
 
 import { Button } from "~/components/ui/button";
 import {
@@ -17,6 +18,7 @@ import {
   MenuTrigger,
 } from "~/components/ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
+import { PreviewExtensionIcon, type PreviewExtensions } from "./PreviewExtensions";
 
 const COLOR_SCHEME_OPTIONS: ReadonlyArray<{
   value: DesktopPreviewColorScheme;
@@ -49,14 +51,23 @@ interface Props {
   nativePictureInPicture: boolean;
   profileName: string | undefined;
   move?: { readonly label: string; readonly onMove: () => void };
+  extensions?: PreviewExtensions | null;
 }
 
-const MenuTriggerButton = () => (
+const MenuTriggerButton = ({ anchorRef }: { anchorRef?: RefObject<HTMLButtonElement | null> }) => (
   <Tooltip>
     <TooltipTrigger
       render={
         <MenuTrigger
-          render={<Button variant="ghost" size="icon-xs" type="button" aria-label="Preview menu" />}
+          render={
+            <Button
+              ref={anchorRef}
+              variant="ghost"
+              size="icon-xs"
+              type="button"
+              aria-label="Preview menu"
+            />
+          }
         />
       }
     >
@@ -76,12 +87,13 @@ export function PreviewMoreMenu({
   nativePictureInPicture,
   profileName,
   move,
+  extensions,
 }: Props) {
   const zoomLabel = `${Math.round(zoomFactor * 100)}%`;
   const disabled = !enabled;
   return (
     <Menu>
-      <MenuTriggerButton />
+      <MenuTriggerButton {...(extensions ? { anchorRef: extensions.menuAnchorRef } : {})} />
       <MenuPopup align="end" sideOffset={6}>
         <MenuItem onClick={actions.hardReload} disabled={disabled}>
           Hard reload
@@ -117,6 +129,39 @@ export function PreviewMoreMenu({
             </MenuRadioGroup>
           </MenuSubPopup>
         </MenuSub>
+        {extensions && extensions.items.length > 0 ? (
+          <MenuSub>
+            <MenuSubTrigger>Extensions</MenuSubTrigger>
+            <MenuSubPopup>
+              {extensions.items.map((item) => (
+                <MenuItem
+                  key={item.id}
+                  onClick={() => {
+                    const anchor = extensions.menuAnchorRef.current;
+                    if (anchor) extensions.open(item.id, anchor);
+                  }}
+                >
+                  <PreviewExtensionIcon item={item} />
+                  <span className="min-w-0 flex-1 truncate">{item.name}</span>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    type="button"
+                    aria-label={item.pinned ? `Unpin ${item.name}` : `Pin ${item.name}`}
+                    aria-pressed={item.pinned}
+                    onClick={(event: React.MouseEvent) => {
+                      // Pinning keeps the menu open, like Chrome's extensions menu.
+                      event.stopPropagation();
+                      extensions.setPinned(item.id, !item.pinned);
+                    }}
+                  >
+                    {item.pinned ? <PinOff /> : <Pin />}
+                  </Button>
+                </MenuItem>
+              ))}
+            </MenuSubPopup>
+          </MenuSub>
+        ) : null}
         <MenuSeparator />
         <MenuItem
           closeOnClick={false}
