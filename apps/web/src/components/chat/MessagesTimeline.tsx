@@ -10,6 +10,7 @@ import { TimelinePendingApprovalRow } from "./TimelinePendingApprovalRow";
 import type { WorktreeSetupSnapshot } from "@t3tools/contracts";
 import {
   computeTimelineMinimapState,
+  resolveTimelineMinimapAnchorIndex,
   EMPTY_TIMELINE_MINIMAP_STATE,
   type TimelineMinimapItem,
   type TimelineMinimapState,
@@ -733,6 +734,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const userMinimapItems = minimapState.userItems;
   const assistantMinimapItems = minimapState.assistantItems;
   const minimapRowIndices = userMinimapItems.map((item) => item.rowIndex);
+  const assistantMinimapRowIndices = assistantMinimapItems.map((item) => item.rowIndex);
   const restoreRowIndex =
     restoringThreadPosition && rememberedPosition?.atEnd === false
       ? rows.findIndex((row) => row.id === rememberedPosition.rowId)
@@ -841,6 +843,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
         };
   const [minimapHitStripWidth, setMinimapHitStripWidth] = useState(0);
   const [minimapCurrentIndex, setMinimapCurrentIndex] = useState<number | null>(null);
+  const [userMinimapAnchorIndex, setUserMinimapAnchorIndex] = useState<number | null>(null);
+  const [assistantMinimapAnchorIndex, setAssistantMinimapAnchorIndex] = useState<number | null>(
+    null,
+  );
   const handleAnchorReady = (info: { anchorIndex: number | undefined }) => {
     if (anchorMessageId !== null && info.anchorIndex !== undefined) {
       onAnchorReady(anchorMessageId, info.anchorIndex);
@@ -915,8 +921,20 @@ const ConversationTimeline = memo(function ConversationTimeline({
       visibleEnd: visibleRange.end,
       rowIndices: minimapRowIndices,
     });
-    setMinimapCurrentIndex((current) =>
-      current === nextCurrentIndex ? current : nextCurrentIndex,
+    setMinimapCurrentIndex(nextCurrentIndex);
+    setUserMinimapAnchorIndex(
+      resolveTimelineMinimapAnchorIndex({
+        visibleStart: visibleRange.start,
+        visibleEnd: visibleRange.end,
+        rowIndices: minimapRowIndices,
+      }),
+    );
+    setAssistantMinimapAnchorIndex(
+      resolveTimelineMinimapAnchorIndex({
+        visibleStart: visibleRange.start,
+        visibleEnd: visibleRange.end,
+        rowIndices: assistantMinimapRowIndices,
+      }),
     );
   });
 
@@ -1411,9 +1429,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
               pinnedIds={pinnedMessageIds}
               hasPersistentGutter={minimapHasPersistentGutter}
               hitStripWidth={minimapHitStripWidth}
+              anchorIndex={userMinimapAnchorIndex}
               currentIndex={minimapCurrentIndex}
               side="left"
               stripMap={userMinimapStripMap}
+              timestampFormat={timestampFormat}
               testId="timeline-minimap"
               onWheel={forwardMinimapWheel}
               onSelect={handleMinimapSelect}
@@ -1423,8 +1443,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
               pinnedIds={pinnedMessageIds}
               hasPersistentGutter={minimapHasPersistentGutter}
               hitStripWidth={minimapHitStripWidth}
+              anchorIndex={assistantMinimapAnchorIndex}
               side="right"
               stripMap={assistantMinimapStripMap}
+              timestampFormat={timestampFormat}
               testId="timeline-agent-minimap"
               onWheel={forwardMinimapWheel}
               onSelect={handleMinimapSelect}

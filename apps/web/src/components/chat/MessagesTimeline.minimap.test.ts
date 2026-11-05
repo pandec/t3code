@@ -5,8 +5,11 @@ import {
   computeTimelineMinimapState,
   deriveTimelineMinimapItems,
   EMPTY_TIMELINE_MINIMAP_STATE,
+  resolveTimelineMinimapAnchorIndex,
   resolveTimelineMinimapAriaLabel,
   resolveTimelineMinimapItemIndexFromPointer,
+  resolveTimelineMinimapScrollOffset,
+  resolveTimelineMinimapSpacing,
   resolveTimelineMinimapTooltipTranslate,
   TIMELINE_MINIMAP_PREVIEW_MAX_LENGTH,
 } from "./MessagesTimeline.minimap";
@@ -17,6 +20,7 @@ function messageRow(input: {
   text: string;
   final?: boolean;
   streaming?: boolean;
+  createdBy?: "user" | "agent";
 }): Extract<MessagesTimelineRow, { kind: "message" }> {
   return {
     kind: "message",
@@ -26,6 +30,7 @@ function messageRow(input: {
       role: input.role,
       text: input.text,
       streaming: input.streaming ?? false,
+      ...(input.createdBy ? { createdBy: input.createdBy } : {}),
     },
     isFinalAssistantResponse: input.final ?? false,
   } as never;
@@ -55,7 +60,7 @@ describe("resolveTimelineMinimapAriaLabel", () => {
 });
 
 describe("resolveTimelineMinimapTooltipTranslate", () => {
-  it("only edge-clamps markers at the endpoints of the full turn space", () => {
+  it("only edge-clamps markers at the endpoints of the rail", () => {
     expect(resolveTimelineMinimapTooltipTranslate(0, 5)).toBe("0%");
     expect(resolveTimelineMinimapTooltipTranslate(1, 5)).toBe("-50%");
     expect(resolveTimelineMinimapTooltipTranslate(3, 5)).toBe("-50%");
@@ -64,7 +69,7 @@ describe("resolveTimelineMinimapTooltipTranslate", () => {
 });
 
 describe("deriveTimelineMinimapItems", () => {
-  it("keeps sparse agent replies aligned with their user-turn positions", () => {
+  it("lists replies in order without gaps and flags messages from other agents", () => {
     const rows = [
       messageRow({ id: "user-1", role: "user", text: "user-1" }),
       messageRow({ id: "assistant-1", role: "assistant", text: "assistant-1", final: true }),
@@ -74,17 +79,20 @@ describe("deriveTimelineMinimapItems", () => {
         role: "assistant",
         text: "assistant-commentary",
       }),
-      messageRow({ id: "user-3", role: "user", text: "user-3" }),
+      messageRow({ id: "user-3", role: "user", text: "user-3", createdBy: "agent" }),
       messageRow({ id: "assistant-3", role: "assistant", text: "assistant-3", final: true }),
     ];
 
+    expect(deriveTimelineMinimapItems(rows, "final-assistant").map(({ id }) => id)).toEqual([
+      "assistant-1",
+      "assistant-3",
+    ]);
     expect(
-      deriveTimelineMinimapItems(rows, "final-assistant").map(
-        ({ id, positionIndex, positionCount }) => ({ id, positionIndex, positionCount }),
-      ),
+      deriveTimelineMinimapItems(rows, "user-turn").map(({ id, fromAgent }) => [id, fromAgent]),
     ).toEqual([
-      { id: "assistant-1", positionIndex: 0, positionCount: 3 },
-      { id: "assistant-3", positionIndex: 2, positionCount: 3 },
+      ["user-1", false],
+      ["user-2", false],
+      ["user-3", true],
     ]);
   });
 
@@ -243,78 +251,57 @@ describe("computeTimelineMinimapState", () => {
   });
 });
 
+describe("resolveTimelineMinimapAnchorIndex", () => {
+  it("anchors the first strip while reading above it, and nothing before layout", () => {
+    const rowIndices = [4, 9, 14];
+
+    expect(resolveTimelineMinimapAnchorIndex({ visibleStart: 0, visibleEnd: 2, rowIndices })).toBe(
+      0,
+    );
+    expect(
+      resolveTimelineMinimapAnchorIndex({ visibleStart: 10, visibleEnd: 12, rowIndices }),
+    ).toBe(1);
+    expect(
+      resolveTimelineMinimapAnchorIndex({ visibleStart: null, visibleEnd: null, rowIndices }),
+    ).toBeNull();
+  });
+});
+
+describe("resolveTimelineMinimapSpacing", () => {
+  it("squeezes strips to fit the rail, down to the minimum before scrolling", () => {
+    expect(resolveTimelineMinimapSpacing(11, 200)).toBe(8);
+    expect(resolveTimelineMinimapSpacing(11, 50)).toBe(5);
+    expect(resolveTimelineMinimapSpacing(101, 100)).toBe(3);
+    expect(resolveTimelineMinimapSpacing(11, 0)).toBe(8);
+  });
+});
+
+describe("resolveTimelineMinimapScrollOffset", () => {
+  it("keeps a fitting rail still and centers the anchor of an overflowing one", () => {
+    // 11 strips at 8px span 80px.
+    const input = { itemCount: 11, railHeight: 40, spacing: 8 };
+
+    expect(resolveTimelineMinimapScrollOffset({ ...input, anchorIndex: 5, railHeight: 80 })).toBe(
+      0,
+    );
+    expect(resolveTimelineMinimapScrollOffset({ ...input, anchorIndex: 5 })).toBe(20);
+    expect(resolveTimelineMinimapScrollOffset({ ...input, anchorIndex: 0 })).toBe(0);
+    expect(resolveTimelineMinimapScrollOffset({ ...input, anchorIndex: 10 })).toBe(40);
+    expect(resolveTimelineMinimapScrollOffset({ ...input, anchorIndex: null })).toBe(40);
+  });
+});
+
 describe("resolveTimelineMinimapItemIndexFromPointer", () => {
-  it("selects the nearest rendered reply in the full turn-position space", () => {
-    const items = [
-      { positionIndex: 0, positionCount: 4 },
-      { positionIndex: 3, positionCount: 4 },
-    ];
+  it("maps the pointer to the nearest strip in the scrolled rail", () => {
+    const input = { itemCount: 11, railTop: 100, scrollOffset: 20, spacing: 8 };
 
+    expect(resolveTimelineMinimapItemIndexFromPointer({ ...input, pointerY: 100 })).toBe(3);
+    expect(resolveTimelineMinimapItemIndexFromPointer({ ...input, pointerY: 103 })).toBe(3);
+    expect(resolveTimelineMinimapItemIndexFromPointer({ ...input, pointerY: 109 })).toBe(4);
+    expect(resolveTimelineMinimapItemIndexFromPointer({ ...input, pointerY: 0 })).toBe(0);
+    expect(resolveTimelineMinimapItemIndexFromPointer({ ...input, pointerY: 900 })).toBe(10);
     expect(
-      resolveTimelineMinimapItemIndexFromPointer({
-        items,
-        railTop: 100,
-        railHeight: 300,
-        pointerY: 360,
-      }),
-    ).toBe(1);
-    expect(
-      resolveTimelineMinimapItemIndexFromPointer({
-        items,
-        railTop: 100,
-        railHeight: 300,
-        pointerY: 160,
-      }),
-    ).toBe(0);
-  });
-
-  it("compares sparse markers against the continuous pointer position", () => {
-    expect(
-      resolveTimelineMinimapItemIndexFromPointer({
-        items: [
-          { positionIndex: 0, positionCount: 4 },
-          { positionIndex: 2, positionCount: 4 },
-        ],
-        railTop: 0,
-        railHeight: 24,
-        pointerY: 11,
-      }),
-    ).toBe(1);
-  });
-
-  it("uses logarithmic lookup in the sorted turn-position space", () => {
-    let positionReads = 0;
-    const itemCount = 1_024;
-    const items = Array.from({ length: itemCount }, (_, index) => ({
-      positionCount: itemCount,
-      get positionIndex() {
-        positionReads += 1;
-        return index;
-      },
-    }));
-
-    expect(
-      resolveTimelineMinimapItemIndexFromPointer({
-        items,
-        railTop: 0,
-        railHeight: itemCount - 1,
-        pointerY: 713.4,
-      }),
-    ).toBe(713);
-    expect(positionReads).toBeLessThan(30);
-  });
-
-  it("keeps the earlier marker on an exact midpoint tie", () => {
-    expect(
-      resolveTimelineMinimapItemIndexFromPointer({
-        items: [
-          { positionCount: 4, positionIndex: 0 },
-          { positionCount: 4, positionIndex: 2 },
-        ],
-        railTop: 0,
-        railHeight: 2,
-        pointerY: 2 / 3,
-      }),
-    ).toBe(0);
+      resolveTimelineMinimapItemIndexFromPointer({ ...input, itemCount: 0, pointerY: 100 }),
+    ).toBeNull();
   });
 });
