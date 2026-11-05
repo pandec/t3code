@@ -158,10 +158,6 @@ type ProviderUsageSheetProps = {
   /** Driver-derived label ("Claude", "Codex") for the sheet title. */
   readonly providerLabel: string;
   readonly accounts: ReadonlyArray<ProviderUsageMeterAccount>;
-  readonly fableUsage: {
-    readonly accountName: string;
-    readonly window: ProviderUsageWindow;
-  } | null;
   readonly nowMs: number;
   /** Age of the panel as a whole — its oldest account read. */
   readonly panelObservedAt: number | null;
@@ -237,9 +233,6 @@ export function ProviderUsageSheet(
 
   const title = `${props.providerLabel} usage`;
   const showCurrentBadge = props.accounts.length > 1;
-  const fableResetTime = props.fableUsage
-    ? formatProviderUsageResetTime(props.fableUsage.window.resetsAt, props.nowMs)
-    : null;
 
   return (
     // react-native-screens lays out a form sheet natively only when its container holds the
@@ -305,26 +298,6 @@ export function ProviderUsageSheet(
             </Pressable>
           )}
         </View>
-        {props.fableUsage ? (
-          <View className="flex-row items-center gap-2 px-5 pb-2">
-            <Text className="text-2xs font-t3-medium text-foreground-muted">Fable next</Text>
-            <Text className="shrink text-2xs text-foreground-muted" numberOfLines={1}>
-              {props.fableUsage.accountName}
-            </Text>
-            <View className="flex-1" />
-            <Text
-              className={cn(
-                "text-2xs font-t3-medium tabular-nums",
-                STATUS_TEXT_CLASS[props.fableUsage.window.status],
-              )}
-            >
-              {describeProviderUsageWindowValue(props.fableUsage.window)}
-              {fableResetTime ? (
-                <Text className="text-foreground-tertiary"> · resets {fableResetTime}</Text>
-              ) : null}
-            </Text>
-          </View>
-        ) : null}
       </View>
       <ScrollView
         className="flex-1"

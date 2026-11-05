@@ -4,6 +4,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -105,6 +106,7 @@ export const MuseDriver: ProviderDriver<
       continuationGroupKey: continuationIdentity.continuationKey,
     });
     const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
+    const pokeNotBeforeMs = yield* Ref.make(0);
     const resolveInstallation = yield* makeCachedProviderMaintenanceResolution(
       resolveProviderMaintenanceCapabilitiesEffect(museMaintenance, {
         binaryPath: effectiveConfig.binaryPath,
@@ -145,7 +147,13 @@ export const MuseDriver: ProviderDriver<
       haveSettingsChanged: haveProviderSnapshotSettingsChanged,
       initialSnapshot: (settings) =>
         makePendingMuseProvider(settings.provider).pipe(Effect.map(stampIdentity)),
-      checkProvider: checkMuseProviderStatus(effectiveConfig, processEnvironment, cwd).pipe(
+      checkProvider: checkMuseProviderStatus(
+        effectiveConfig,
+        processEnvironment,
+        cwd,
+        undefined,
+        pokeNotBeforeMs,
+      ).pipe(
         Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(FileSystem.FileSystem, fileSystem),

@@ -3,13 +3,15 @@ import { MuseSettings } from "../settings.ts";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Clock from "effect/Clock";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as ChildProcess from "effect/process/ChildProcess";
 
 import { createMuseSdkHost, makeMuseEnvironment } from "./sdk.ts";
 import { parseMuseVersion } from "./maintenance.ts";
-import { museUsageOutputToLimits } from "./usageLimits.ts";
+import { isMuseUsageIdle, museUsageOutputToLimits } from "./usageLimits.ts";
 import { discoverMuseModels, museModelCapabilities } from "./modelCatalog.ts";
 import {
   buildServerProvider,
@@ -30,6 +32,9 @@ const MUSE_PRESENTATION = {
 } as const;
 
 const FALLBACK_CAPABILITIES = museModelCapabilities();
+// One Meta session window: a working poke keeps usage readable this long, and a
+// poke that cannot recover the meter is not repeated every refresh.
+const MUSE_POKE_COOLDOWN_MS = 5 * 60 * 60 * 1000;
 
 export const makePendingMuseProvider = Effect.fn("makePendingMuseProvider")(function* (
   settings: MuseSettings,
@@ -57,6 +62,7 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
   environment?: NodeJS.ProcessEnv,
   cwd?: string,
   createHost: typeof createMuseSdkHost = createMuseSdkHost,
+  pokeNotBeforeMs?: Ref.Ref<number>,
 ) {
   if (!settings.enabled) return yield* makePendingMuseProvider(settings);
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
@@ -81,6 +87,8 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
       ChildProcess.make(spawnCommand.command, spawnCommand.args, {
         env: museEnvironment,
         shell: spawnCommand.shell,
+        // A child that ignores SIGTERM would otherwise hold a timed-out probe open forever.
+        forceKillAfter: "2 seconds",
         ...(cwd ? { cwd } : {}),
       }),
     );
@@ -123,7 +131,34 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
     });
   }
 
-  // `muse usage` reads the subscription allowance without a model turn.
+  const readUsage = runMuse(["usage", "--json"]).pipe(
+    Effect.timeout(15_000),
+    Effect.map((output) => (output.code === 0 ? output.stdout : "")),
+  );
+  // An idle window has no allowance to read; one tiny unlogged turn opens it.
+  const pokeUsage = runMuse([
+    "exec",
+    "--no-session-log",
+    "--preset",
+    "empty",
+    "--model",
+    "muse-spark-1.3",
+    "--reasoning-effort",
+    "minimal",
+    "Reply with: hi",
+  ]).pipe(Effect.timeout(60_000));
+  // Claimed before the turn so failed or unrecoverable pokes back off too.
+  const claimPoke =
+    pokeNotBeforeMs === undefined
+      ? Effect.succeed(true)
+      : Clock.currentTimeMillis.pipe(
+          Effect.flatMap((nowMs) =>
+            Ref.modify(pokeNotBeforeMs, (notBeforeMs) =>
+              nowMs >= notBeforeMs ? [true, nowMs + MUSE_POKE_COOLDOWN_MS] : [false, notBeforeMs],
+            ),
+          ),
+        );
+
   const [catalog, usageLimits] = yield* Effect.all(
     [
       discoverMuseModels(settings, museEnvironment, cwd, createHost).pipe(
@@ -131,11 +166,17 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
         Effect.timeoutOption(12_000),
         Effect.result,
       ),
-      runMuse(["usage", "--json"]).pipe(
-        Effect.timeout(15_000),
-        Effect.map((output) =>
-          museUsageOutputToLimits(output.code === 0 ? output.stdout : "", checkedAt),
+      readUsage.pipe(
+        Effect.filterOrElse(
+          (stdout) => !isMuseUsageIdle(stdout),
+          (idle) =>
+            claimPoke.pipe(
+              Effect.flatMap((claimed) =>
+                claimed ? pokeUsage.pipe(Effect.andThen(readUsage)) : Effect.succeed(idle),
+              ),
+            ),
         ),
+        Effect.map((stdout) => museUsageOutputToLimits(stdout, checkedAt)),
         Effect.orElseSucceed(() => museUsageOutputToLimits("", checkedAt)),
       ),
     ],
