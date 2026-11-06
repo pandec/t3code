@@ -83,8 +83,10 @@ const TIMEOUTS = {
   quick: Duration.seconds(60),
 } as const;
 
+/** `source` is optional: older sp-labs checkouts do not print it. */
 const StatusOutput = Schema.Struct({
   checkedAt: Schema.String,
+  source: Schema.optional(Schema.NullOr(Schema.String)),
   environments: Schema.Array(LabEnvironmentSchema),
 });
 /** `handoff` and `personaPlans` are optional: older sp-labs checkouts do not print them. */
@@ -364,8 +366,10 @@ const make = Effect.gen(function* () {
         });
         return yield* publish;
       }
+      // A host other than the primary lists no Main / Staging, only the source checkout.
       const sourceCheckout =
         status.value.environments.find((environment) => environment.kind === "staging")?.worktree ??
+        status.value.source ??
         null;
       const projectId =
         settings.projectId ??
