@@ -14,6 +14,7 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -96,6 +97,8 @@ const makeFakeCli = Effect.gen(function* () {
   /** Fields a newer CLI adds to `acquire`; empty is an older CLI's output. */
   const acquireExtra = yield* Ref.make<Record<string, unknown>>({});
   const statusFails = yield* Ref.make(false);
+  /** A host other than the primary: no Main / Staging entry, only `source`. */
+  const remoteHost = yield* Ref.make(false);
   /** A lab someone else reserves just before this acquire reaches it. */
   const stolenOnAcquire = yield* Ref.make<string | null>(null);
   const releaseAfterStatus = yield* Ref.make<string | null>(null);
@@ -117,12 +120,17 @@ const makeFakeCli = Effect.gen(function* () {
           if (release !== null && all[release]?.lease?.threadId === "someone-else") {
             yield* setLab(release, (lab) => ({ ...lab, lease: null }));
           }
+          const labEnvironments = Object.entries(all).map(([id, lab]) => environment(id, lab));
+          if (yield* Ref.get(remoteHost)) {
+            return {
+              checkedAt: "2026-10-14T00:00:00.000Z",
+              source: SOURCE,
+              environments: labEnvironments,
+            };
+          }
           return {
             checkedAt: "2026-10-14T00:00:00.000Z",
-            environments: [
-              environment("staging", null),
-              ...Object.entries(all).map(([id, lab]) => environment(id, lab)),
-            ],
+            environments: [environment("staging", null), ...labEnvironments],
           };
         }
         case "acquire": {
@@ -170,6 +178,7 @@ const makeFakeCli = Effect.gen(function* () {
     up,
     acquireExtra,
     statusFails,
+    remoteHost,
     leaseAfterDown,
     stolenOnAcquire,
     releaseAfterStatus,
@@ -335,6 +344,27 @@ describe("LabsService", () => {
             .prepareAgentThread(input)
             .pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => null }));
           assert.equal(failed?.reason, "cli_failed");
+        }),
+      );
+    }),
+  );
+
+  it.effect("a host without Main / Staging takes the source checkout from status", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeCli;
+      yield* Ref.set(fake.remoteHost, true);
+      yield* withService(
+        fake,
+        Effect.gen(function* () {
+          const labs = yield* LabsService.LabsService;
+          const snapshot = yield* labs.subscribe.pipe(Stream.take(1), Stream.runHead);
+          assert.isTrue(Option.isSome(snapshot));
+          const first = Option.getOrThrow(snapshot);
+          assert.equal(first.sourceCheckout, SOURCE);
+          assert.deepEqual(
+            first.environments.map((env) => env.id),
+            ["sp-lab-1"],
+          );
         }),
       );
     }),
