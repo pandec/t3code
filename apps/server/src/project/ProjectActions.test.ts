@@ -134,6 +134,27 @@ it.effect("an edit keeps the action's settle role", () =>
   }).pipe(Effect.provide(makeLayer())),
 );
 
+it.effect("an edit keeps automatic stopping on settle", () =>
+  Effect.gen(function* () {
+    const actions = yield* service;
+    const settingsService = yield* ServerSettings.ServerSettingsService;
+    const listed = (yield* actions.list(projectId)).actions;
+    yield* settingsService.updateSettings({
+      projectScriptUpdate: {
+        projectId,
+        expectedScripts: Array.from(listed),
+        scripts: listed.map((action) =>
+          action.id === dev.id ? { ...action, stopOnSettle: true } : action,
+        ),
+      },
+    });
+
+    const edited = yield* actions.upsert({ projectId, actionId: "dev", command: "pnpm dev:web" });
+
+    expect(edited.projectAction).toEqual({ ...dev, command: "pnpm dev:web", stopOnSettle: true });
+  }).pipe(Effect.provide(makeLayer())),
+);
+
 it.effect("keeps a single worktree setup action and reports the cleared one", () =>
   Effect.gen(function* () {
     const actions = yield* service;

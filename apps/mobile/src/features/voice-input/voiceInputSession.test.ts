@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { PreparedVoiceTranscription } from "@t3tools/client-runtime/voice-input";
-import { EnvironmentId } from "@t3tools/contracts";
 import { Atom, AtomRegistry } from "effect/reactivity";
 import { resetVoiceInputGlobalsForTests } from "../../../../../packages/client-runtime/src/voice-input/controller";
 import {
@@ -410,20 +409,5 @@ describe("global voice input", () => {
     expect(listener).toHaveBeenCalledTimes(1);
     session.setOwnerFocused("first", false);
     expect(session.getSnapshot().focusedOwners.size).toBe(0);
-  });
-
-  it("keeps the starting transcription environment when another composer starts", async () => {
-    const { session } = createSession();
-    await session.start({
-      ...createTarget("first", () => "first", vi.fn(), { start: 5, end: 5 }),
-      transcriptionEnvironmentId: EnvironmentId.make("environment-a"),
-    });
-    await session.start({
-      ...createTarget("second", () => "second", vi.fn(), { start: 6, end: 6 }),
-      transcriptionEnvironmentId: EnvironmentId.make("environment-b"),
-    });
-    expect(session.controller.currentState.phase).toBe("recording");
-    expect(session.ownerKey).toBe("first");
-    expect(session.transcriptionEnvironmentId).toBe("environment-a");
   });
 });

@@ -118,6 +118,7 @@ export interface TimelineRowActivityState {
   /** User messages steered into the running turn that the agent has not read yet. */
   steerPendingMessageIds: ReadonlySet<MessageId>;
   backgroundWorktreeSetup: WorktreeSetupSnapshot | null;
+  liveAnswerPreview: string | null;
 }
 
 export const TimelineRowCtx = createContext<TimelineRowSharedState>(null!);

@@ -13,6 +13,7 @@ export interface ProjectScriptInput {
   readonly async?: ProjectScript["async"];
   readonly waitForSetup?: boolean;
   readonly runOnSettle?: boolean;
+  readonly stopOnSettle?: boolean;
   readonly previewUrl: Exclude<ProjectScript["previewUrl"], undefined> | null;
   readonly autoOpenPreview: boolean;
 }
@@ -30,6 +31,7 @@ export function buildProjectScript(id: string, input: ProjectScriptInput): Proje
         ? { async: false }
         : {}),
     ...(input.runOnSettle ? { runOnSettle: true } : {}),
+    ...(input.stopOnSettle ? { stopOnSettle: true } : {}),
     ...(input.previewUrl === null
       ? {}
       : {

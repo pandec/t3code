@@ -190,6 +190,7 @@ const makeServices = Effect.fn("makeServices")(function* (
     generateBranchName: () => Effect.die("unused"),
     generateThreadTitle: () => Effect.die("unused"),
     generateReviewGuide: () => Effect.die("unused"),
+    generateTranscriptionPostProcessing: () => Effect.die("unused"),
     generateMessageSummary: () => Effect.die("unused"),
     generateSpeechScript: () => Effect.die("unused"),
   });

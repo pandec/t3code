@@ -1,5 +1,5 @@
 import { ArrowDownIcon, ArrowUpIcon } from "lucide-react";
-import { type ComponentProps, type ReactNode } from "react";
+import { type ComponentProps, type ReactNode, type RefObject } from "react";
 
 import { Command, CommandFooter, CommandInput, CommandPanel } from "./ui/command";
 import { Kbd, KbdGroup } from "./ui/kbd";
@@ -9,8 +9,7 @@ import { Kbd, KbdGroup } from "./ui/kbd";
  * left there by the removed input. Claim it so typing cannot reach the composer
  * behind the modal. On first open the dialog's own initial focus handles it.
  */
-function claimFocusInOpenDialog(input: HTMLInputElement | null) {
-  if (!input) return;
+function claimFocusInOpenDialog(input: HTMLInputElement) {
   const active = input.ownerDocument.activeElement;
   if (
     active === null ||
@@ -21,9 +20,27 @@ function claimFocusInOpenDialog(input: HTMLInputElement | null) {
   }
 }
 
-function claimFocusAndSelectInOpenDialog(input: HTMLInputElement | null) {
+function claimFocusAndSelectInOpenDialog(input: HTMLInputElement) {
   claimFocusInOpenDialog(input);
-  if (input && input.ownerDocument.activeElement === input) input.select();
+  if (input.ownerDocument.activeElement === input) input.select();
+}
+
+export interface PendingInputSelection {
+  readonly value: string;
+  readonly start: number | null;
+  readonly end: number | null;
+  readonly direction: "forward" | "backward" | "none" | null;
+}
+
+function restorePendingSelection(
+  input: HTMLInputElement,
+  pendingSelectionRef: RefObject<PendingInputSelection | null> | undefined,
+) {
+  const selection = pendingSelectionRef?.current;
+  if (!pendingSelectionRef || !selection) return;
+  pendingSelectionRef.current = null;
+  if (input.value !== selection.value) return;
+  input.setSelectionRange(selection.start, selection.end, selection.direction ?? undefined);
 }
 
 type CommandPaletteContentProps = Omit<ComponentProps<typeof Command>, "children"> & {
@@ -33,6 +50,7 @@ type CommandPaletteContentProps = Omit<ComponentProps<typeof Command>, "children
   readonly footerTrailing?: ReactNode;
   readonly inputAccessory?: ReactNode;
   readonly inputProps: ComponentProps<typeof CommandInput>;
+  readonly pendingSelectionRef?: RefObject<PendingInputSelection | null>;
   readonly panelSize?: "list" | "tall-list" | "fill";
   /** Select the prefilled query on mount so typing replaces it (rename view). */
   readonly selectInputOnMount?: boolean;
@@ -47,6 +65,7 @@ export function CommandPaletteContent({
   footerTrailing,
   inputAccessory,
   inputProps,
+  pendingSelectionRef,
   panelSize = "list",
   selectInputOnMount = false,
   showBackHint,
@@ -60,7 +79,12 @@ export function CommandPaletteContent({
           <CommandInput
             autoFocus={false}
             {...inputProps}
-            ref={selectInputOnMount ? claimFocusAndSelectInOpenDialog : claimFocusInOpenDialog}
+            ref={(input) => {
+              if (!input) return;
+              restorePendingSelection(input, pendingSelectionRef);
+              if (selectInputOnMount) claimFocusAndSelectInOpenDialog(input);
+              else claimFocusInOpenDialog(input);
+            }}
           />
           {inputAccessory}
         </div>

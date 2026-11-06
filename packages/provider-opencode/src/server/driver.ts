@@ -1,4 +1,4 @@
-import { ProviderDriverKind } from "@t3tools/contracts";
+import { ProviderDriverKind, settingsSecretLiteral } from "@t3tools/contracts";
 import { OpenCodeSettings } from "../settings.ts";
 import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -165,6 +165,11 @@ function selectOpenCodeRuntimeTextGeneration(
         v1: v1.generateReviewGuide(input),
         v2: v2.generateReviewGuide(input),
       }),
+    generateTranscriptionPostProcessing: (input) =>
+      byOpenCodeRuntime(probe.get, {
+        v1: v1.generateTranscriptionPostProcessing(input),
+        v2: v2.generateTranscriptionPostProcessing(input),
+      }),
   };
 }
 
@@ -225,6 +230,8 @@ export const OpenCodeDriver: ProviderDriver<
       {
         ...config,
         enabled,
+        // The instance registry has already read a referenced password from its secret provider.
+        serverPassword: settingsSecretLiteral(config.serverPassword),
       } satisfies OpenCodeSettings,
       yield* HostProcess.HomeDirectory,
     );

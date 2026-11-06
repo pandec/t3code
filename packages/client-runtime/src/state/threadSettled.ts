@@ -83,6 +83,7 @@ export interface ThreadSnoozeShell extends QueuedThreadShell {
   readonly pendingBackgroundTasks?: ReadonlyArray<{ readonly kind: string }> | undefined;
   readonly hasPendingApprovals: boolean;
   readonly hasPendingUserInput: boolean;
+  readonly pendingUserInputAt?: string | null;
   readonly pendingSubagentRequest?: PendingSubagentRequest | null;
   readonly pendingGuestMessageCount?: number;
 }
@@ -95,6 +96,14 @@ function isWakeTimelessSnooze(
     shell.snoozedUntil == null &&
     shell.snoozedAt != null &&
     !Number.isNaN(Date.parse(shell.snoozedAt))
+  );
+}
+
+function pendingQuestionAt(shell: ThreadSnoozeShell): string | null {
+  const request = shell.source?.pendingRuntimeRequest;
+  return (
+    shell.pendingUserInputAt ??
+    (request?.kind === "user_input" ? DateTime.formatIso(request.createdAt) : null)
   );
 }
 
@@ -142,8 +151,13 @@ function untilDoneWorkContinues(
  * preset on quiet threads. Callers also gate on threadSnoozeUntilDone.
  */
 export function canSnoozeUntilDone(
-  shell: Pick<ThreadSnoozeShell, "latestRun" | "latestTurn" | "pendingBackgroundTasks">,
+  shell: Pick<
+    ThreadSnoozeShell,
+    "latestRun" | "latestTurn" | "pendingBackgroundTasks" | "hasPendingUserInput" | "source"
+  >,
 ): boolean {
+  // A pending question blocks the work an "until it's done" snooze waits on.
+  if (shell.hasPendingUserInput || shell.source?.pendingRuntimeRequest != null) return false;
   const latestRunId = runIdOf(latestRunOf(shell));
   return (
     latestRunId !== null && untilDoneWorkContinues({ ...shell, snoozedUntilRunId: latestRunId })
@@ -174,8 +188,21 @@ function runEndedAfterSnooze(shell: ThreadSnoozeShell): string | null {
  * until its timer. Fork: an "until it's done" snooze also wakes when its work ends.
  */
 export function threadRaisedHandWhileSnoozed(shell: ThreadSnoozeShell): boolean {
-  if (shell.hasPendingApprovals || shell.hasPendingUserInput) return true;
-  if (shell.source?.pendingRuntimeRequest != null) return true;
+  const request = shell.source?.pendingRuntimeRequest;
+  if (shell.hasPendingApprovals || (request != null && request.kind !== "user_input")) return true;
+  const questionAt = pendingQuestionAt(shell);
+  // Snoozing an existing question means "ask me later". Only a new question
+  // wakes it early; missing or invalid timestamps keep the request visible.
+  // Fork: "until it's done" always wakes for a question.
+  if (
+    (shell.hasPendingUserInput || request?.kind === "user_input") &&
+    (isUntilDoneSnooze(shell) ||
+      shell.snoozedAt == null ||
+      questionAt == null ||
+      !(Date.parse(questionAt) <= Date.parse(shell.snoozedAt)))
+  ) {
+    return true;
+  }
   if (shell.pendingSubagentRequest != null) return true;
   if ((shell.pendingGuestMessageCount ?? 0) > 0) return true;
   const failedAt = failureEdgeAt(shell);
@@ -220,9 +247,9 @@ export function canSnooze(
     | "source"
   >,
 ): boolean {
-  if (shell.hasPendingApprovals || shell.hasPendingUserInput) return false;
-  // The server rejects snoozing for any pending request.
-  if (shell.source?.pendingRuntimeRequest != null) return false;
+  if (shell.hasPendingApprovals) return false;
+  const request = shell.source?.pendingRuntimeRequest;
+  if (request != null && request.kind !== "user_input") return false;
   if (shell.pendingSubagentRequest != null) return false;
   // A waiting guest message would wake it at once.
   if ((shell.pendingGuestMessageCount ?? 0) > 0) return false;
@@ -259,14 +286,19 @@ export function threadWokeAt(
   // indicator the user already cleared by visiting (snoozedUntil is newer
   // than that visit's lastVisitedAt).
   if (threadRaisedHandWhileSnoozed(shell)) {
-    // An old failure must not replace the activity time of an approval or input wake.
     const failedAt = failureEdgeAt(shell);
-    if (
+    const questionAt = pendingQuestionAt(shell);
+    const freshFailure =
       failedAt != null &&
-      (shell.snoozedAt == null || Date.parse(failedAt) > Date.parse(shell.snoozedAt))
-    ) {
+      (shell.snoozedAt == null || Date.parse(failedAt) > Date.parse(shell.snoozedAt));
+    const freshQuestion =
+      questionAt != null &&
+      shell.snoozedAt != null &&
+      Date.parse(questionAt) > Date.parse(shell.snoozedAt);
+    if (freshFailure && (!freshQuestion || Date.parse(failedAt) >= Date.parse(questionAt))) {
       return failedAt;
     }
+    if (freshQuestion) return questionAt;
     const runtime = shell.runtime ?? shell.session ?? null;
     return runEndedAfterSnooze(shell) ?? runtime?.updatedAt ?? shell.snoozedAt ?? null;
   }

@@ -216,8 +216,9 @@ const applyUpsert = Effect.fn("ProjectActions.applyUpsert")(function* (
       icon: input.icon ?? current?.icon ?? "play",
       runOnWorktreeCreate: input.runOnWorktreeCreate ?? current?.runOnWorktreeCreate ?? false,
       ...(async === undefined ? {} : { async }),
-      // Not editable here; an edit keeps the action's settle role.
+      // Not editable here; an edit keeps the action's settle options.
       runOnSettle: current?.runOnSettle === true,
+      stopOnSettle: current?.stopOnSettle === true,
       previewUrl,
       autoOpenPreview:
         previewUrl === null ? false : (input.autoOpenPreview ?? current?.autoOpenPreview ?? false),

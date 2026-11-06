@@ -4,6 +4,7 @@ import {
   AntigravitySettings,
   ProviderDriverKind,
   ProviderSetupError,
+  settingsSecretLiteral,
   ThreadId,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -134,7 +135,8 @@ export const AntigravityDriver: ProviderDriver<
     );
     const auth: AntigravityAuthConfig = {
       authMethod: settings.authMethod,
-      apiKey: settings.apiKey,
+      // The instance registry has already read a referenced key from its secret provider.
+      apiKey: settingsSecretLiteral(settings.apiKey),
       gcpProject: settings.gcpProject,
       gcpLocation: settings.gcpLocation,
     };

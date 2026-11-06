@@ -1,4 +1,3 @@
-import type { EnvironmentId } from "@t3tools/contracts";
 import {
   VOICE_RECORDING_LIMIT_SECONDS,
   VoiceInputController,
@@ -18,12 +17,6 @@ const SILENT_LEVELS: ReadonlyArray<number> = Array<number>(VOICE_WAVEFORM_SAMPLE
 export type VoiceInputTarget = {
   readonly ownerKey: string;
   readonly label?: string;
-  /**
-   * Environment whose server transcriber backs this target when on-device
-   * transcription is unavailable or cannot prepare. Captured at start so a
-   * later navigation cannot move an active recording to another environment.
-   */
-  readonly transcriptionEnvironmentId?: EnvironmentId | null;
   readonly readDraft: () => VoiceDraftSnapshot | null;
   readonly commitDraft: VoiceInputControllerDependencies["commitDraft"];
   readonly subscribe: () => () => void;
@@ -52,8 +45,6 @@ export type VoiceInputSessionDependencies = Omit<
   readonly publishAudioLevels: (levels: ReadonlyArray<number>) => void;
   /** Holds the screen awake while recording; returns the release. */
   readonly keepAwake: () => () => void;
-  /** Fork: the active transcriber's recording cap, read on each metering tick. */
-  readonly recordingLimitSeconds?: () => number;
 };
 
 export function createVoiceInputTarget(
@@ -122,10 +113,6 @@ export class VoiceInputSession {
 
   get label(): string | null {
     return this.target?.label ?? null;
-  }
-
-  get transcriptionEnvironmentId(): EnvironmentId | null {
-    return this.target?.transcriptionEnvironmentId ?? null;
   }
 
   readonly subscribe = (listener: () => void): (() => void) => {
@@ -216,7 +203,7 @@ export class VoiceInputSession {
     }
 
     const elapsedSeconds = Math.min(
-      this.dependencies.recordingLimitSeconds?.() ?? VOICE_RECORDING_LIMIT_SECONDS,
+      VOICE_RECORDING_LIMIT_SECONDS,
       Math.max(0, Math.floor(sample.durationMillis / 1_000)),
     );
     if (elapsedSeconds !== this.snapshot.elapsedSeconds) {

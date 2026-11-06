@@ -11,7 +11,7 @@ import {
 export const VOICE_TRANSCRIPTION_MAX_DURATION_MS = 3 * 60 * 1_000;
 export const VOICE_TRANSCRIPTION_MIN_DURATION_MS = 100;
 export const VOICE_TRANSCRIPTION_MAX_BYTES = 6 * 1_024 * 1_024;
-export const VOICE_TRANSCRIPTION_MAX_DATA_URL_CHARS =
+const VOICE_TRANSCRIPTION_MAX_DATA_URL_CHARS =
   Math.ceil(VOICE_TRANSCRIPTION_MAX_BYTES / 3) * 4 + 128;
 
 export const VoiceAudioMimeType = Schema.Literals([

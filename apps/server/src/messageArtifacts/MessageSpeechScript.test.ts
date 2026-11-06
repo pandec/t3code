@@ -41,6 +41,7 @@ const makeScriptService = Effect.fn("makeScriptService")(function* (
         generateBranchName: () => Effect.die("unused"),
         generateThreadTitle: () => Effect.die("unused"),
         generateReviewGuide: () => Effect.die("unused"),
+        generateTranscriptionPostProcessing: () => Effect.die("unused"),
         generateMessageSummary: () => Effect.die("unused"),
         generateSpeechScript: (input) =>
           Ref.update(calls, (current) => [...current, input]).pipe(Effect.andThen(generate(input))),

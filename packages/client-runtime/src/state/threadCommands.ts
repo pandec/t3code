@@ -441,7 +441,8 @@ export function createThreadEnvironmentAtoms<R, E>(
     })),
     snooze: optimistic.wrap(commands.snooze, (thread, input, now, accepted) =>
       (!accepted &&
-        (thread.pendingRuntimeRequest !== null ||
+        ((thread.pendingRuntimeRequest !== null &&
+          thread.pendingRuntimeRequest.kind !== "user_input") ||
           ["preparing", "queued", "starting"].includes(thread.status))) ||
       // Fork: a null wake time is the "until it's done" snooze.
       (input.snoozedUntil !== null &&
@@ -451,7 +452,6 @@ export function createThreadEnvironmentAtoms<R, E>(
         ? thread
         : {
             ...thread,
-            pendingRuntimeRequest: null,
             snoozedUntil:
               input.snoozedUntil === null ? null : DateTime.makeUnsafe(input.snoozedUntil),
             ...(input.untilDone === true

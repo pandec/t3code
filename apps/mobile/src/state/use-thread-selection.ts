@@ -13,8 +13,8 @@ import { visibilityParentKey } from "@t3tools/client-runtime/state/threads";
 import * as Option from "effect/Option";
 
 import { scopedThreadKey } from "../lib/scopedEntities";
-import { useProject, useQuietThreadShell } from "../state/entities";
-import { environmentThreadShells, useEnvironmentThread } from "../state/threads";
+import { useProject, useQuietThreadShell } from "./entities";
+import { environmentThreadShells, useEnvironmentThread } from "./threads";
 import {
   resolvePendingThreadCreation,
   pendingThreadCreationOutcomesAtom,

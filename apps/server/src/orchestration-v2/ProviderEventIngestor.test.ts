@@ -260,6 +260,7 @@ it.effect("refreshes the failing instance snapshot after a committed usage_limit
           generateReviewGuide: () => Effect.die("unused"),
           generateSpeechScript: () => Effect.die("unused"),
           generateMessageSummary: () => Effect.die("unused"),
+          generateTranscriptionPostProcessing: () => Effect.die("unused"),
         },
         snapshot: {
           refreshUsage: Deferred.succeed(refreshed, undefined).pipe(Effect.asVoid),
@@ -547,8 +548,12 @@ layer("ProviderEventIngestorV2", (it) => {
           event: { type: "node.updated", driver: CODEX_DRIVER, node: sent },
         });
 
-      assert.lengthOf(yield* ingestNode(node), 1);
-      assert.isEmpty(yield* ingestNode({ ...node }));
+      yield* eventSink.withProviderBatch(
+        Effect.gen(function* () {
+          assert.lengthOf(yield* ingestNode(node), 1);
+          assert.isEmpty(yield* ingestNode({ ...node }));
+        }),
+      );
       yield* eventSink.write({
         events: [
           {

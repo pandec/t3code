@@ -40,6 +40,7 @@ import * as ServerConfig from "./config.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
+import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
 import { threadHasQueuedTurnStart } from "./orchestration-v2/ThreadSettlementService.ts";
 import { forkParked } from "./serverActivation.ts";
@@ -401,6 +402,7 @@ const make = Effect.gen(function* () {
   const projectStore = yield* ProjectStore.ProjectStoreV2;
   const engine = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
+  const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
   const sql = yield* SqlClient.SqlClient;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const gitManager = yield* GitManager.GitManager;
@@ -1644,8 +1646,14 @@ const make = Effect.gen(function* () {
             )
               return;
           }
-          if (anyWorktreePolicy(lastSettings, (rules) => rules.worktreeOnDelete))
-            yield* requestSweep;
+          if (!anyWorktreePolicy(lastSettings, (rules) => rules.worktreeOnDelete)) return;
+          if (
+            event.type === "provider-session.updated" &&
+            event.payload.status === "error" &&
+            (yield* providerSessions.isLive(event.payload.id))
+          )
+            return;
+          yield* requestSweep;
         }),
       ).pipe(
         Effect.catchCause((cause) =>

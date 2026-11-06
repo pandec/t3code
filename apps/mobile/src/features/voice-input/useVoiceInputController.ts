@@ -1,4 +1,3 @@
-import { AuthOrchestrationOperateScope, type EnvironmentId } from "@t3tools/contracts";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useEffect, useRef } from "react";
 import {
@@ -7,8 +6,7 @@ import {
 } from "@t3tools/client-runtime/voice-input";
 
 import type { ComposerEditorSelection } from "../../components/ComposerEditor";
-import { useEnvironmentScope } from "../../state/session";
-import { useDeviceVoiceInputAvailable, useGlobalVoiceInput } from "./VoiceInputProvider";
+import { useGlobalVoiceInput } from "./VoiceInputProvider";
 import { createVoiceInputTarget } from "./voiceInputSession";
 
 const IDLE_STATE: VoiceInputState = { phase: "idle", error: null, errorAction: null };
@@ -16,13 +14,6 @@ const IDLE_STATE: VoiceInputState = { phase: "idle", error: null, errorAction: n
 export function useVoiceInputController(input: {
   readonly ownerKey: string | null;
   readonly label: string;
-  /**
-   * Environment whose server transcriber backs this composer when on-device
-   * transcription is unavailable or fails to prepare. Captured with the target
-   * when dictation starts, so navigation cannot retarget an active recording.
-   */
-  readonly environmentId: EnvironmentId | null;
-  readonly environmentTranscriptionAvailable: boolean;
   readonly readDraftMessage: () => string | null;
   readonly subscribeToDraftChanges: (onChange: () => void) => () => void;
   readonly selection: ComposerEditorSelection;
@@ -36,18 +27,10 @@ export function useVoiceInputController(input: {
   readonly onChangeSelection: (selection: ComposerEditorSelection) => void;
 }) {
   const global = useGlobalVoiceInput();
-  const isDeviceAvailable = useDeviceVoiceInputAvailable();
   const { session } = global;
-  // Server transcription operates the environment; on-device dictation needs no grant.
-  const canOperateEnvironment = useEnvironmentScope(
-    input.environmentId,
-    AuthOrchestrationOperateScope,
-  );
-  const environmentTranscriptionAvailable =
-    input.environmentTranscriptionAvailable && canOperateEnvironment;
-  const latestInput = useRef({ ...input, environmentTranscriptionAvailable });
+  const latestInput = useRef(input);
   // oxlint-disable-next-line react/refs -- Transcription finishes asynchronously and must reach the composer's current selection setter, not the one captured at start.
-  latestInput.current = { ...input, environmentTranscriptionAvailable };
+  latestInput.current = input;
   const mounted = useRef(true);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- tracks mount so async transcription results skip a composer that has unmounted
   useEffect(() => {
@@ -83,17 +66,12 @@ export function useVoiceInputController(input: {
         captured.subscribeToDraftChanges,
       ),
       label: captured.label,
-      transcriptionEnvironmentId: captured.environmentTranscriptionAvailable
-        ? captured.environmentId
-        : null,
     });
   }, [session]);
   const state = global.ownerKey === input.ownerKey ? global.state : IDLE_STATE;
   const isBusy = voiceInputBlocksSubmission(state);
-  const canTranscribe =
-    isDeviceAvailable || (input.environmentId !== null && environmentTranscriptionAvailable);
   return {
-    isAvailable: canTranscribe && (!global.isBusy || global.ownerKey === input.ownerKey),
+    isAvailable: global.isAvailable && (!global.isBusy || global.ownerKey === input.ownerKey),
     state,
     audioLevels: global.audioLevels,
     elapsedSeconds: global.elapsedSeconds,

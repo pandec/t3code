@@ -1370,7 +1370,7 @@ export function ChatSettingsPanel() {
         />
         <SettingsRow
           {...searchableSetting("stale-session-send")}
-          description="Choose the default of the Compact chip shown when sending to an old Claude thread would re-read a long history. Clicking the chip changes it for that thread until the next send; the secondary send shortcut sends once with the other choice."
+          description="Default for the Compact chip on old Claude threads with a long history. Clicking the chip changes it until the next send; the secondary send shortcut sends once with the other choice."
           resetAction={
             settings.staleSessionSend !== DEFAULT_UNIFIED_SETTINGS.staleSessionSend ? (
               <SettingResetButton

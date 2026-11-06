@@ -123,6 +123,8 @@ const browserTestProject = {
       "pdfjs-dist",
       "sql.js",
       "tiff",
+      "@effect/vitest",
+      "effect/testing",
     ],
   },
   test: {

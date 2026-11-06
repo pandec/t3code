@@ -35,7 +35,7 @@ import {
   userInputDraftKey,
 } from "@t3tools/client-runtime/state/thread-requests";
 
-import { environmentThreadDetails, threadEnvironment } from "../state/threads";
+import { environmentThreadDetails, threadEnvironment } from "./threads";
 import { buildPendingUserInputAnswers } from "@t3tools/client-runtime/state/pending-user-input";
 import { appAtomRegistry } from "./atom-registry";
 import {

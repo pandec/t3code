@@ -377,7 +377,7 @@ function ProviderUsageExtrasSection() {
         <>
           <SettingsRow
             title="OpenRouter management key"
-            description="A management key from openrouter.ai/settings/management-keys (the credits endpoint rejects regular inference keys). Stored in each environment's secret store, only used server-side to read the balance, and applied to every connected environment on save."
+            description="A management key from openrouter.ai/settings/management-keys; regular inference keys don't work. Saved to every connected environment's secret store and used only server-side to read the balance."
             resetAction={
               <SettingResetButton
                 label="OpenRouter management key"
@@ -411,7 +411,7 @@ function ProviderUsageExtrasSection() {
           </div>
           <SettingsRow
             title="OpenRouter budget"
-            description="The starting balance to measure spend against. With a budget set, the usage meter shows how much of it you have spent, coloured by the warning and critical thresholds above. Leave empty or enter 0 to show the dollar amount only; budgets under $1 count as none."
+            description="Starting balance to measure spend against. The usage meter then shows the share spent, coloured by the thresholds above. Leave empty or 0 to show dollars only; under $1 counts as none."
             resetAction={
               settings.openRouterCreditsBudgetUsd !==
               DEFAULT_UNIFIED_SETTINGS.openRouterCreditsBudgetUsd ? (
@@ -556,7 +556,7 @@ function LinearExtrasSection() {
     <SettingsSection {...searchableSetting("extras-linear")}>
       <SettingsRow
         title="Linear API key"
-        description="A personal API key from linear.app/settings/account/security. Stored in each environment's secret store and only used server-side to read issues and post comments. Applied to every connected environment on save."
+        description="A personal API key from linear.app/settings/account/security. Saved to every connected environment's secret store and used only server-side to read issues and post comments."
         resetAction={
           <SettingResetButton label="Linear API key" onClick={() => void applyLinearApiKey("")} />
         }

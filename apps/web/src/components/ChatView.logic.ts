@@ -1546,18 +1546,24 @@ export function planComposerTurn(input: {
   readonly steerGraceWindowMs: number;
   readonly phase: SessionPhase;
   readonly dispatchMode: ComposerDispatchMode;
+  /** The turn starts a new provider session, so it neither compacts first nor steers. */
+  readonly freshContext: boolean;
 }) {
   const isFirstMessage =
     !input.sendQueuesBehindSetup && (!input.isServerThread || input.activeMessageCount === 0);
   const shouldCreateWorktree =
     isFirstMessage && input.sendEnvMode === "worktree" && !input.worktreePath;
+  // A fresh session neither compacts the old history first nor steers into the running turn.
   const dispatch = resolveSendDispatch({
-    resumeCompactionTokens: input.resumeCompactionTokens,
+    resumeCompactionTokens: input.freshContext ? null : input.resumeCompactionTokens,
     keepFullHistory: input.keepFullHistory,
     messageText: input.messageText,
     hasPendingOutboxSubmission: input.hasPendingOutboxSubmission,
     running: input.phase === "running",
-    dispatchMode: input.dispatchMode,
+    dispatchMode:
+      input.freshContext && (input.dispatchMode === "steer" || input.dispatchMode === "restart")
+        ? "queue"
+        : input.dispatchMode,
     steerGraceWindowMs: input.steerGraceWindowMs,
     queueBehindSetup: input.sendQueuesBehindSetup,
   });

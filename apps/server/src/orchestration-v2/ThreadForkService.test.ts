@@ -319,12 +319,25 @@ it.effect("titles an untitled fork with the fork marker and leaves pin and order
   }),
 );
 
-it.effect("marks only requested forks as supervised side chats", () =>
+it.effect("marks only requested forks as side chats and inherits parent permissions", () =>
   Effect.gen(function* () {
     const sourceRun = makeSourceRun("completed");
     const sideChat = yield* planFork(sourceRun, { sideChat: true });
     assert.isTrue(sideChat.targetThread.lineage.sideChat);
-    assert.equal(sideChat.targetThread.runtimeMode, "approval-required");
+    assert.equal(sideChat.targetThread.runtimeMode, "full-access");
+    for (const runtimeMode of [
+      "approval-required",
+      "auto-accept-edits",
+      "auto",
+      "full-access",
+    ] as const) {
+      const source = makeSourceProjection(sourceRun);
+      const inherited = yield* planFork(sourceRun, {
+        sourceProjection: { ...source, thread: { ...source.thread, runtimeMode } },
+        sideChat: true,
+      });
+      assert.equal(inherited.targetThread.runtimeMode, runtimeMode);
+    }
 
     const sideChatSource = makeSourceProjection(sourceRun);
     const sideChatProjection = {

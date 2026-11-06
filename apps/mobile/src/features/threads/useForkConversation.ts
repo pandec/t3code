@@ -15,7 +15,7 @@ import { readEnvironmentScope } from "../../state/session";
 import { sessionImportEnvironment } from "../../state/sessionImport";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { waitForThreadShellReady } from "./threadForkNavigation";
+import { waitForThreadShell } from "./threadForkNavigation";
 
 // One fork per source thread at a time across every surface (row swipe, row
 // menu, thread header), so a double tap cannot create two copies.
@@ -86,12 +86,8 @@ export function useForkConversation(
         return;
       }
       const targetThreadId = forked.threadId;
-      const targetShell = environmentThreadShells.threadShellAtom(
-        scopeThreadRef(thread.environmentId, targetThreadId),
-      );
-      const ready = await waitForThreadShellReady({
-        read: () => appAtomRegistry.get(targetShell) !== null,
-      });
+      const targetRef = scopeThreadRef(thread.environmentId, targetThreadId);
+      const ready = await waitForThreadShell(targetRef);
       if (!ready) {
         Dialog.alert(
           "Fork created",
@@ -99,7 +95,7 @@ export function useForkConversation(
         );
         return;
       }
-      const shell = appAtomRegistry.get(targetShell);
+      const shell = appAtomRegistry.get(environmentThreadShells.threadShellAtom(targetRef));
       if (openThread !== undefined && shell !== null) {
         openThread(shell);
         return;

@@ -299,6 +299,11 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
           detail: "Managed Codex instances do not provide message summary generation.",
         }),
       ),
+    generateTranscriptionPostProcessing: (value) =>
+      protect(
+        "generateTranscriptionPostProcessing",
+        nativeGeneration.generateTranscriptionPostProcessing(value),
+      ),
   };
   return {
     instanceId,

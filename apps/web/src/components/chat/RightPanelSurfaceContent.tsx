@@ -52,6 +52,7 @@ interface RightPanelPullRequestProps {
 }
 
 interface RightPanelFileProps {
+  readonly projectId?: ProjectId | undefined;
   readonly projectName: string | null;
   /** Fork: scopes file mentions to the project, so drops cannot cross projects. */
   readonly mentionScope: string | undefined;
@@ -231,6 +232,7 @@ export function RightPanelSurfaceContent(props: {
             cwd={files.workspaceRoot ?? ""}
             projectName={files.projectName ?? ""}
             mentionScope={files.mentionScope}
+            projectId={files.projectId}
             threadRef={threadRef}
             composerDraftTarget={props.composerDraftTarget}
             keybindings={props.keybindings}
