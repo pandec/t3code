@@ -305,6 +305,8 @@ it("constructs and classifies the remote desktop command", () => {
   );
   assert.include(script, "pnpm run install:desktop:dev || exit 44");
   assert.include(script, "pnpm run release:fork || exit 44");
+  assert.include(script, "systemctl --user cat t3code.service");
+  assert.include(script, "~/Library/LaunchAgents/com.t3tools.t3code.service.plist");
   assert.isUndefined(classifyRemoteExit(0));
   assert.equal(classifyRemoteExit(42), "pull");
   assert.equal(classifyRemoteExit(46), "preflight");

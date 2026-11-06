@@ -188,7 +188,7 @@ function isAlive(pid: number | undefined): boolean {
 
 // `t3 update` reports the restart, not whether the new server came up: another server that owns
 // the T3 home leaves the service idle.
-async function verifyServiceServes(version: string) {
+async function verifyServiceServes(version: string, restartCommand: string) {
   const runtimeFile = NodePath.join(t3Home, "userdata/server-runtime.json");
   const stateFile = NodePath.join(t3Home, "runtime/service-state.json");
   const deadline = Date.now() + SERVICE_SWITCH_TIMEOUT_MS;
@@ -206,7 +206,7 @@ async function verifyServiceServes(version: string) {
     if (failed || Date.now() > deadline || interrupted !== undefined) {
       const owner =
         alive && runtime?.serviceManaged !== true
-          ? ` PID ${String(runtime?.pid)} (t3@${runtime?.serverVersion ?? "unknown"}) owns ${t3Home} outside the service; stop it, then run \`systemctl --user restart t3code.service\`.`
+          ? ` PID ${String(runtime?.pid)} (t3@${runtime?.serverVersion ?? "unknown"}) owns ${t3Home} outside the service; stop it, then run \`${restartCommand}\`.`
           : "";
       throw new Error(
         `The background service is not serving t3@${version}${failed ? ` (update ${String(update.status)}: ${update.reason ?? "no reason"})` : ""}.${owner}`,
@@ -225,6 +225,36 @@ function unitHomeOf(unit: string): string | undefined {
       ? raw.slice(1, -1).replaceAll('\\"', '"').replaceAll("\\\\", "\\")
       : raw;
   return NodePath.resolve(value.replaceAll("%%", "%"));
+}
+
+const LAUNCH_AGENT = NodePath.join(
+  NodeOS.homedir(),
+  "Library/LaunchAgents/com.t3tools.t3code.service.plist",
+);
+
+function installedService(target: HostTarget) {
+  if (target.platform === "linux") {
+    const unit = NodeChildProcess.spawnSync("systemctl", ["--user", "cat", "t3code.service"], {
+      encoding: "utf8",
+    });
+    if (unit.status !== 0) return undefined;
+    return {
+      name: "t3code.service",
+      home: unitHomeOf(unit.stdout),
+      restartCommand: "systemctl --user restart t3code.service",
+    };
+  }
+  if (!NodeFS.existsSync(LAUNCH_AGENT)) return undefined;
+  const home = NodeChildProcess.spawnSync(
+    "plutil",
+    ["-extract", "EnvironmentVariables.T3CODE_HOME", "raw", "-o", "-", LAUNCH_AGENT],
+    { encoding: "utf8" },
+  );
+  return {
+    name: "com.t3tools.t3code.service",
+    home: home.status === 0 ? NodePath.resolve(home.stdout.trim()) : undefined,
+    restartCommand: `launchctl kickstart -k gui/${String(process.getuid?.())}/com.t3tools.t3code.service`,
+  };
 }
 
 function pruneReleases() {
@@ -263,20 +293,14 @@ try {
 await run("apps/server/dist-exe/t3", ["update", version, "--yes", "--allow-downgrade"], {
   [CLI_RELEASE_BASE_URL_ENV]: NodeURL.pathToFileURL(releaseRoot).href,
 });
-const unit =
-  target.platform === "linux"
-    ? NodeChildProcess.spawnSync("systemctl", ["--user", "cat", "t3code.service"], {
-        encoding: "utf8",
-      })
-    : undefined;
-if (unit?.status === 0) {
-  // `update` leaves a unit that serves another home alone.
-  const unitHome = unitHomeOf(unit.stdout);
-  if (unitHome === t3Home) {
-    await verifyServiceServes(version);
+const service = installedService(target);
+if (service !== undefined) {
+  // `update` leaves a service that serves another home alone.
+  if (service.home === t3Home) {
+    await verifyServiceServes(version, service.restartCommand);
   } else {
     console.log(
-      `t3code.service serves ${unitHome ?? "an unknown home"}, not ${t3Home}; not verified.`,
+      `${service.name} serves ${service.home ?? "an unknown home"}, not ${t3Home}; not verified.`,
     );
   }
 }

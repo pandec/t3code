@@ -682,8 +682,9 @@ export function buildRemoteScript(checkout?: string, expectedBranch = "dev"): st
     "pnpm install --frozen-lockfile --config.confirmModulesPurge=false || exit 43",
     'printf "__T3_STAGE__ desktop\\n"',
     "pnpm run install:desktop:dev || exit 44",
-    // Linux hosts also serve through t3code.service, which runs its own pinned runtime.
-    'if [[ "$(uname -s)" == Linux ]] && systemctl --user cat t3code.service >/dev/null 2>&1; then',
+    // A background service (systemd or launchd) runs its own pinned runtime, not the desktop app.
+    'if { [[ "$(uname -s)" == Linux ]] && systemctl --user cat t3code.service >/dev/null 2>&1; } ||',
+    '  { [[ "$(uname -s)" == Darwin ]] && [[ -f ~/Library/LaunchAgents/com.t3tools.t3code.service.plist ]]; }; then',
     "  pnpm run release:fork || exit 44",
     "fi",
   ].join("\n");
