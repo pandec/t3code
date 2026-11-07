@@ -6,7 +6,7 @@ import {
   CommandId,
   type TerminalSummary,
   type ChatAttachment,
-  type MessageId,
+  MessageId,
   type ModelSelection,
   type OrchestrationV2Actor,
   type OrchestrationV2CreationSource,
@@ -61,6 +61,7 @@ import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import type * as Orchestrator from "./Orchestrator.ts";
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
+import { reportLabel } from "@t3tools/provider-core/server/notification";
 import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 import { DispatchModeLimit } from "./DispatchModeLimit.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
@@ -877,6 +878,49 @@ const make = Effect.gen(function* () {
     );
   });
 
+  // Fork: launch returns before preparation runs, so wake the thread that sent the first message.
+  // Delegated children are skipped; their parent hears through the task's completion.
+  const notifyLauncher = Effect.fn("ThreadLaunchService.notifyLauncher")(function* (
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    detail: string,
+  ) {
+    const { thread, runs } = yield* threads.getThreadRecords(threadId, ["runs"], {
+      runIds: [runId],
+    });
+    const run = runs.find((candidate) => candidate.id === runId);
+    if (run === undefined || thread.lineage.parentThreadId !== null) return;
+    const { messages } = yield* threads.getThreadRecords(threadId, ["messages"], {
+      messageIds: [run.userMessageId],
+    });
+    const senderThreadId = messages.find(
+      (message) => message.id === run.userMessageId,
+    )?.senderThreadId;
+    if (senderThreadId === undefined || senderThreadId === threadId) return;
+    const sender = yield* threads.getThreadShell(senderThreadId);
+    if (sender === null || sender.archivedAt !== null || sender.deletedAt !== null) return;
+    const label = reportLabel(thread.title);
+    const text = `Thread${label === undefined ? "" : ` "${label}"`} (threadId ${threadId}), which you launched, failed before its agent started. ${detail} Fix the cause, then call t3_thread_launch again with a new clientRequestId; the old one returns this failed thread.`;
+    yield* threads.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make(`${commandId}:notify-launcher`),
+      threadId: senderThreadId,
+      messageId: MessageId.make(`message:launch-preparation-failed:${commandId}`),
+      text,
+      notification: {
+        source: { kind: "system" },
+        outcome: "failed",
+        summary: `Thread${label === undefined ? "" : ` "${label}"`} failed to start`,
+        detail: text,
+      },
+      attachments: [],
+      dispatchMode: { type: "queue_after_active" },
+      createdBy: "agent",
+      creationSource: "server",
+    });
+  });
+
   const failPreparedRun = (
     input: Pick<PreparationInput, "commandId">,
     threadId: ThreadId,
@@ -903,6 +947,17 @@ const make = Effect.gen(function* () {
             }),
           })
           .pipe(
+            Effect.andThen(
+              notifyLauncher(input.commandId, threadId, runId, failureDetail(cause)).pipe(
+                Effect.catchCause((notifyCause) =>
+                  Effect.logWarning("Failed to notify the launcher of a preparation failure", {
+                    commandId: input.commandId,
+                    threadId,
+                    cause: notifyCause,
+                  }),
+                ),
+              ),
+            ),
             Effect.catchCause((persistCause) =>
               Effect.logWarning("Failed to persist thread workspace preparation failure", {
                 commandId: input.commandId,

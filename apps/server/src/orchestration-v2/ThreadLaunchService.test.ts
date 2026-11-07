@@ -1273,20 +1273,31 @@ it.effect("shows the fetch diagnosis when preparing a worktree from origin fails
   return Effect.gen(function* () {
     const launches = yield* ThreadLaunch.ThreadLaunchService;
     const threads = yield* ThreadManagement.ThreadManagementService;
-    const launched = yield* launches.launch(
-      launchInput({
-        command: "command:launch:fetch-failure",
-        thread: "thread:launch:fetch-failure",
-        message: "Start from origin",
-        workspace: { type: "worktree", baseRef: "main", startFromOrigin: true },
-      }),
+    const sender = yield* launches.launch(
+      launchInput({ command: "command:launch:sender", thread: "thread:launch:sender" }),
     );
-    yield* threads.streamStoredEventsFrom({ threadId: launched.threadId }).pipe(
-      Stream.filter(
-        (stored) => stored.event.type === "run.updated" && stored.event.payload.status === "failed",
+    const failing = launchInput({
+      command: "command:launch:fetch-failure",
+      thread: "thread:launch:fetch-failure",
+      message: "Start from origin",
+      workspace: { type: "worktree", baseRef: "main", startFromOrigin: true },
+    });
+    const launched = yield* launches.launch({
+      ...failing,
+      initialMessage: { ...failing.initialMessage!, senderThreadId: sender.threadId },
+    });
+    const notice = yield* threads.streamStoredEventsFrom({ threadId: sender.threadId }).pipe(
+      Stream.filterMap((stored) =>
+        stored.event.type === "message.updated" && stored.event.payload.notification !== undefined
+          ? Result.succeed(stored.event.payload)
+          : Result.failVoid,
       ),
       Stream.runHead,
+      Effect.map(Option.getOrThrow),
     );
+    assert.equal(notice.notification?.outcome, "failed");
+    assert.include(notice.text, launched.threadId);
+    assert.include(notice.text, detail);
     const projection = yield* threads.getThreadProjection(launched.threadId);
     assert.equal(projection.messages[0]?.text, "Start from origin");
     assert.equal(projection.runs[0]?.status, "failed");
