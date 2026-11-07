@@ -926,6 +926,7 @@ const make = Effect.gen(function* () {
     threadId: ThreadId,
     runId: RunId | null,
     cause: unknown,
+    notify = true,
   ) =>
     runId === null
       ? Effect.logWarning("Thread workspace preparation failed", {
@@ -948,7 +949,10 @@ const make = Effect.gen(function* () {
           })
           .pipe(
             Effect.andThen(
-              notifyLauncher(input.commandId, threadId, runId, failureDetail(cause)).pipe(
+              (notify
+                ? notifyLauncher(input.commandId, threadId, runId, failureDetail(cause))
+                : Effect.void
+              ).pipe(
                 Effect.catchCause((notifyCause) =>
                   Effect.logWarning("Failed to notify the launcher of a preparation failure", {
                     commandId: input.commandId,
@@ -1017,14 +1021,16 @@ const make = Effect.gen(function* () {
       yield* Effect.raceFirst(prepare, interruption);
     });
     yield* preparation.pipe(
-      Effect.onError((cause) =>
-        failPreparedRun(
+      Effect.onError((cause) => {
+        const cancelled = Cause.hasInterruptsOnly(cause);
+        return failPreparedRun(
           input,
           threadId,
           runId,
-          Cause.hasInterruptsOnly(cause) ? "Worktree setup cancelled." : Cause.squash(cause),
-        ),
-      ),
+          cancelled ? "Worktree setup cancelled." : Cause.squash(cause),
+          !cancelled,
+        );
+      }),
       Effect.ignoreCause,
       Effect.ensuring(releasePreparation(input.commandId)),
       Effect.forkIn(preparationScope),
