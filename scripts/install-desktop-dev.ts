@@ -20,6 +20,11 @@ import {
   unlockMacDevKeychain,
   verifyMacDevSignature,
 } from "./lib/mac-dev-signing.ts";
+import {
+  defaultT3Home,
+  installedBackgroundService,
+  serviceOwnsHome,
+} from "./lib/background-service.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
 
 const MAC_APP_PATH = "/Applications/T3 Code (Dev).app";
@@ -637,7 +642,17 @@ const main = Effect.fn("installDesktopDev.main")(function* () {
       cause: undefined,
     });
   }
-  yield* runDesktopInstallLifecycle(lifecycle);
+  // The app's backend exits when the service owns its T3 home, leaving only an error dialog.
+  const service = installedBackgroundService(hostPlatform);
+  const home = defaultT3Home();
+  yield* runDesktopInstallLifecycle(
+    service !== undefined && serviceOwnsHome(service, home)
+      ? {
+          ...lifecycle,
+          start: Effect.log(`${service.name} owns ${home}; not launching the desktop app.`),
+        }
+      : lifecycle,
+  );
 });
 
 if (import.meta.main) {

@@ -22,15 +22,14 @@ import {
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 
+import { defaultT3Home, installedBackgroundService } from "./lib/background-service.ts";
 import { releasePackageFiles } from "./update-release-package-versions.ts";
 
 const KEEP_RELEASES = 3;
 // Covers the launcher's database backup and the new server's migrations.
 const SERVICE_SWITCH_TIMEOUT_MS = 120_000;
 const repoRoot = NodePath.resolve(import.meta.dirname, "..");
-const t3Home = NodePath.resolve(
-  process.env["T3CODE_HOME"] || NodePath.join(NodeOS.homedir(), ".t3"),
-);
+const t3Home = defaultT3Home();
 const releaseRoot = NodePath.join(t3Home, "fork-releases");
 const releaseDirPattern = new RegExp(
   `^v\\d+\\.\\d+\\.\\d+-${FORK_RELEASE_PRERELEASE_ID}\\.\\d{8}\\.(\\d+)$`,
@@ -216,47 +215,6 @@ async function verifyServiceServes(version: string, restartCommand: string) {
   }
 }
 
-// Mirrors `bootServiceBaseDirOf` in apps/server/src/cloud/bootService.ts, which scripts can't import.
-function unitHomeOf(unit: string): string | undefined {
-  const raw = /^Environment=T3CODE_HOME=(.*)$/m.exec(unit)?.[1]?.trim();
-  if (raw === undefined) return undefined;
-  const value =
-    raw.startsWith('"') && raw.endsWith('"')
-      ? raw.slice(1, -1).replaceAll('\\"', '"').replaceAll("\\\\", "\\")
-      : raw;
-  return NodePath.resolve(value.replaceAll("%%", "%"));
-}
-
-const LAUNCH_AGENT = NodePath.join(
-  NodeOS.homedir(),
-  "Library/LaunchAgents/com.t3tools.t3code.service.plist",
-);
-
-function installedService(target: HostTarget) {
-  if (target.platform === "linux") {
-    const unit = NodeChildProcess.spawnSync("systemctl", ["--user", "cat", "t3code.service"], {
-      encoding: "utf8",
-    });
-    if (unit.status !== 0) return undefined;
-    return {
-      name: "t3code.service",
-      home: unitHomeOf(unit.stdout),
-      restartCommand: "systemctl --user restart t3code.service",
-    };
-  }
-  if (!NodeFS.existsSync(LAUNCH_AGENT)) return undefined;
-  const home = NodeChildProcess.spawnSync(
-    "plutil",
-    ["-extract", "EnvironmentVariables.T3CODE_HOME", "raw", "-o", "-", LAUNCH_AGENT],
-    { encoding: "utf8" },
-  );
-  return {
-    name: "com.t3tools.t3code.service",
-    home: home.status === 0 ? NodePath.resolve(home.stdout.trim()) : undefined,
-    restartCommand: `launchctl kickstart -k gui/${String(process.getuid?.())}/com.t3tools.t3code.service`,
-  };
-}
-
 function pruneReleases() {
   const releases = NodeFS.readdirSync(releaseRoot)
     .filter((name) => releaseDirPattern.test(name))
@@ -267,9 +225,10 @@ function pruneReleases() {
   }
 }
 
-const target = hostTarget(
-  ...(await Effect.runPromise(Effect.all([HostProcess.Platform, HostProcess.Architecture]))),
+const [hostPlatform, hostArch] = await Effect.runPromise(
+  Effect.all([HostProcess.Platform, HostProcess.Architecture]),
 );
+const target = hostTarget(hostPlatform, hostArch);
 // build-cli-archive needs it only at the end, after the long build.
 if (target.platform === "linux" && NodeChildProcess.spawnSync("patchelf", ["--version"]).error) {
   throw new Error("patchelf is missing; install it with `sudo apt install patchelf`.");
@@ -293,7 +252,7 @@ try {
 await run("apps/server/dist-exe/t3", ["update", version, "--yes", "--allow-downgrade"], {
   [CLI_RELEASE_BASE_URL_ENV]: NodeURL.pathToFileURL(releaseRoot).href,
 });
-const service = installedService(target);
+const service = installedBackgroundService(hostPlatform);
 if (service !== undefined) {
   // `update` leaves a service that serves another home alone.
   if (service.home === t3Home) {
