@@ -7,6 +7,7 @@ import {
 } from "@t3tools/client-runtime/state/provider-instance-display";
 
 import { ProviderDriverKind } from "@t3tools/contracts";
+import { AnthropicIcon, Icon, OllamaIcon, OpenAI, OpenRouterIcon } from "../Icons";
 
 import { cn } from "~/lib/utils";
 import { providerClients } from "../settings/providerDriverMeta";
@@ -18,10 +19,22 @@ import {
 } from "../settings/AcpRegistryIcon";
 import { MODEL_ICON_BY_ID, PROVIDER_ICON_BY_PROVIDER } from "./providerIconUtils";
 
+// Text generators, by the service they reach (see textGeneratorBrand).
+const TEXT_GENERATOR_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>> = {
+  [ProviderDriverKind.make("openai")]: OpenAI,
+  [ProviderDriverKind.make("anthropic")]: AnthropicIcon,
+  [ProviderDriverKind.make("openrouter")]: OpenRouterIcon,
+  [ProviderDriverKind.make("ollama")]: OllamaIcon,
+};
+
 const PROVIDER_TEXT_COLOR_BY_PROVIDER: Partial<Record<ProviderDriverKind, string>> = {
   [ProviderDriverKind.make("codex")]: "text-black dark:text-white",
   [ProviderDriverKind.make("claudeAgent")]: "text-[#d97757]",
   [ProviderDriverKind.make("antigravity")]: "text-[#5b87bf]",
+  [ProviderDriverKind.make("openai")]: "text-black dark:text-white",
+  [ProviderDriverKind.make("anthropic")]: "text-black dark:text-white",
+  [ProviderDriverKind.make("openrouter")]: "text-black dark:text-white",
+  [ProviderDriverKind.make("ollama")]: "text-black dark:text-white",
 };
 
 export function providerTextColor(driverKind: ProviderDriverKind): {
@@ -72,7 +85,11 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   indicatorBackground?: string;
 }) {
   const ModelOverrideIcon = props.modelIcon ? MODEL_ICON_BY_ID[props.modelIcon] : undefined;
-  const Icon = ModelOverrideIcon ?? PROVIDER_ICON_BY_PROVIDER[props.driverKind] ?? null;
+  const Icon =
+    ModelOverrideIcon ??
+    PROVIDER_ICON_BY_PROVIDER[props.driverKind] ??
+    TEXT_GENERATOR_ICON_BY_PROVIDER[props.driverKind] ??
+    null;
   // A per-model override wins over the driver's package glyph.
   const packageIcon = ModelOverrideIcon ? undefined : providerClients.get(props.driverKind)?.icon;
   const indicatorBackground = props.indicatorBackground ?? "var(--card)";
@@ -86,6 +103,8 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   const badgeContent = props.badgeContent ?? "initials";
   const iconClassName = cn(props.size === "compact" && "size-3.5", props.iconClassName);
   const isAcpRegistry = props.driverKind === "acpRegistry";
+  // A custom OpenAI-compatible endpoint has no brand: show its name, marked with the protocol.
+  const isCustomEndpoint = props.driverKind === "openaiCompatible";
   const acpRegistryIconUrl = resolveProviderInstanceAcpRegistryIconUrl({
     driverKind: props.driverKind,
     agentId: props.acpRegistryAgentId,
@@ -107,6 +126,29 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
           fallbackClassName="size-full"
           icon={acpRegistryIconUrl}
         />
+      ) : isCustomEndpoint ? (
+        // The tile is a size container: below ~18px it keeps one letter and drops the mark.
+        <span
+          className={cn(
+            "@container relative flex size-5 shrink-0 items-center justify-center rounded-md border bg-card text-4xs font-semibold leading-none text-foreground",
+            iconClassName,
+          )}
+          aria-hidden
+        >
+          {Array.from(providerInstanceInitials(props.displayName))[0]}
+          <span className="@max-[1.1rem]:hidden">
+            {Array.from(providerInstanceInitials(props.displayName)).slice(1).join("")}
+          </span>
+          <span
+            className={cn(
+              "pointer-events-none absolute right-[-0.3125rem] bottom-[-0.3125rem] z-10 flex size-3 items-center justify-center rounded-full border bg-card text-foreground shadow-sm @max-[1.1rem]:hidden",
+              props.badgeClassName,
+            )}
+            style={{ borderColor: indicatorBackground }}
+          >
+            <OpenAI className="size-2" />
+          </span>
+        </span>
       ) : packageIcon ? (
         <ProviderPackageIcon
           icon={packageIcon}
@@ -120,7 +162,7 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
           {providerInstanceInitials(props.displayName)}
         </span>
       )}
-      {props.showBadge ? (
+      {isCustomEndpoint ? null : props.showBadge ? (
         <span
           className={cn(
             "pointer-events-none absolute right-0 bottom-0 z-10 flex h-3.5 min-w-3.5 items-center justify-center rounded-full border px-0.5 text-4xs font-semibold leading-none shadow-sm",

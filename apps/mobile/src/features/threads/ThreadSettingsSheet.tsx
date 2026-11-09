@@ -1221,7 +1221,7 @@ function ThreadSettingsModelsScreen() {
           session.hasLegacyModels,
         ]}
         confirm={{
-          label: session.pendingModel ? "Save thread settings" : "Done",
+          label: session.pendingModel ? "Save" : "Done",
           onPress: commitAndClose,
         }}
         hideBottomBorder
@@ -1341,12 +1341,7 @@ export function ExistingThreadSettingsRouteScreen({
         option.selection.model === modelSelection.model,
     ) ?? null;
   const updateModelSelection = (selection: ModelSelection) =>
-    updateThreadDraftModelSelection(
-      threadKey,
-      selection,
-      serverConfig?.providers ?? [],
-      selectedThread,
-    );
+    updateThreadDraftModelSelection(threadKey, selection, selectedThread);
 
   return (
     <ThreadSettingsPickerScreen

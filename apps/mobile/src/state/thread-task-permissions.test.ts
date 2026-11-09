@@ -192,6 +192,7 @@ vi.mock("../lib/copyTextWithHaptic", () => ({ copyTextWithHaptic: vi.fn() }));
 vi.mock("../lib/composerContextClipboard", () => ({ downloadServerAttachmentToDraft: vi.fn() }));
 vi.mock("./use-remote-environment-registry", () => ({ setPendingConnectionError: vi.fn() }));
 
+import { Alert } from "react-native";
 import { appAtomRegistry } from "./atom-registry";
 import { useThreadComposerState } from "./use-thread-composer-state";
 import { useSelectedThreadRequests } from "./use-selected-thread-requests";
@@ -273,11 +274,7 @@ describe("mobile task permissions", () => {
     expect(state.enqueue).not.toHaveBeenCalled();
     expect(state.clearDraft).not.toHaveBeenCalled();
     composer.onChangeDraftMessage("Edited locally");
-    composer.onUpdateInteractionMode("plan");
     expect(state.draft.text).toBe("Edited locally");
-    expect(state.updateSettings).toHaveBeenCalledWith("secondary:thread", {
-      interactionMode: "plan",
-    });
   });
 
   it("keeps an armed fresh session for the message after an approval redirect", async () => {
@@ -355,6 +352,21 @@ describe("mobile task permissions", () => {
       ...state.serverConfig,
       environment: { capabilities: { sideChats: true } },
     } as ServerConfig;
+    // The thread gets the staged mode and model only on its next send.
+    const selection: ModelSelection = {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.4",
+      options: [{ id: "reasoningEffort", value: "xhigh" }],
+    };
+    appAtomRegistry.set(threadStagedSettingsAtom, {
+      [`${state.thread.environmentId}:${state.thread.id}`]: {
+        modelSelection: {
+          value: selection,
+          baseline: state.thread.modelSelection as ModelSelection,
+        },
+        runtimeMode: { value: "approval-required", baseline: "full-access" },
+      },
+    });
     state.draft = { ...state.draft, text: "/side why does this fail?" };
     const startSideChat = vi.fn(async () => true);
     const composer = useThreadComposerState({ startSideChat });
@@ -363,6 +375,7 @@ describe("mobile task permissions", () => {
     expect(startSideChat).toHaveBeenCalledExactlyOnceWith(
       { environmentId: "secondary", threadId: "thread" },
       "why does this fail?",
+      { runtimeMode: "approval-required", modelSelection: selection },
     );
     expect(state.enqueue).not.toHaveBeenCalled();
     expect(state.clearDraft).toHaveBeenCalled();
@@ -380,6 +393,16 @@ describe("mobile task permissions", () => {
     expect(await useThreadComposerState({ startSideChat }).onSendMessage()).toBeNull();
     expect(startSideChat).toHaveBeenCalledOnce();
     expect(state.clearDraft).not.toHaveBeenCalled();
+    // A model the send would refuse does not start a side chat either.
+    vi.clearAllMocks();
+    state.serverConfig = {
+      ...state.serverConfig,
+      providers: [{ instanceId: "codex", driver: "codex", enabled: false }],
+    } as unknown as ServerConfig;
+    state.draft = { ...state.draft, attachments: [] };
+    expect(await useThreadComposerState({ startSideChat }).onSendMessage()).toBeNull();
+    expect(startSideChat).not.toHaveBeenCalled();
+    expect(Alert.alert).toHaveBeenCalledOnce();
   });
 
   it("rechecks a retained send callback before clearing or queueing the draft", async () => {

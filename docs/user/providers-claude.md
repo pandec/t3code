@@ -74,10 +74,9 @@ tool calls**, the default, lets the running command or subagent finish and hands
 before its next step. **Interrupt running tool** cancels the running tool so Claude reads the
 message at once.
 
-You can also send `/compact` in an existing conversation. Web and desktop offer
-**Compact context** from the context meter. The meter is off by default; see
-[commands and skills](./composer.md#commands-and-skills) to enable it. Claude Code
-compacts automatically whether the meter is on or off.
+You can also send `/compact` in an existing conversation. Claude Code also
+compacts automatically. To see context usage, see
+[commands and skills](./composer.md#commands-and-skills).
 
 When you return to a large thread after Claude's prompt cache expires, a
 **Compact** chip with the thread's token count shows

@@ -33,7 +33,7 @@ export function ThreadListFilters(props: {
     <ScrollView
       horizontal
       showsHorizontalScrollIndicator={false}
-      style={{ marginHorizontal: -props.gutter }}
+      style={{ marginHorizontal: -props.gutter, overflow: "visible" }}
       contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 2, paddingBottom: 10, gap: 8 }}
     >
       <Chip

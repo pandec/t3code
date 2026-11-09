@@ -27,10 +27,8 @@ import {
   type EnvironmentId,
   type MessageInputOrigin,
   type ModelSelection,
-  type ProviderInteractionMode,
   type RuntimeMode,
   type ScopedThreadRef,
-  type ServerProvider,
   type ThreadId,
 } from "@t3tools/contracts";
 
@@ -57,7 +55,6 @@ import {
   describeUnavailableModelSelection,
   isModelSelectionUnavailable,
 } from "../lib/modelOptions";
-import { resolveProviderInteractionMode } from "./legacy-plan-mode";
 
 import type { DraftComposerImageAttachment } from "../lib/composerImages";
 import { scopedThreadKey } from "../lib/scopedEntities";
@@ -195,27 +192,13 @@ export function useThreadDraftForThread(input: {
   };
 }
 
-/**
- * Fork: existing-thread picks are staged against the thread's settings (`baseline`), not
- * kept on the draft. A provider without the interaction-mode toggle runs in the default mode.
- */
+/** Fork: existing-thread picks are staged against the thread's settings (`baseline`), not the draft. */
 export function updateThreadDraftModelSelection(
   threadKey: string,
   value: ModelSelection,
-  providers: ReadonlyArray<ServerProvider>,
   baseline: ThreadSettings,
 ): void {
-  const provider = providers.find((candidate) => candidate.instanceId === value.instanceId);
-  stageThreadSettings(
-    threadKey,
-    {
-      modelSelection: value,
-      ...(provider?.showInteractionModeToggle === false
-        ? { interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE }
-        : {}),
-    },
-    baseline,
-  );
+  stageThreadSettings(threadKey, { modelSelection: value }, baseline);
 }
 
 export function updateThreadRuntimeMode(
@@ -228,7 +211,11 @@ export function updateThreadRuntimeMode(
 
 export function useThreadComposerState(input: {
   /** Forks the thread into a side chat that gets `prompt`; resolves false when it did not start. */
-  readonly startSideChat: (source: ScopedThreadRef, prompt: string) => Promise<boolean>;
+  readonly startSideChat: (
+    source: ScopedThreadRef,
+    prompt: string,
+    settings: { readonly runtimeMode: RuntimeMode; readonly modelSelection: ModelSelection },
+  ) => Promise<boolean>;
 }) {
   const {
     selectedThread: selectedThreadShell,
@@ -353,12 +340,9 @@ export function useThreadComposerState(input: {
   const selectedThreadQueueCount = selectedThreadQueuedMessages.length;
   const selectedThread = selectedThreadShell;
   // Fork: a picker pick holds only while the thread still has the value it was made against;
-  // once the thread moves on it expires for good, so a later return to that value cannot revive
-  // it. The ref keeps the picker callbacks' identity stable across thread updates.
-  const latestThreadRef = useRef(selectedThread);
+  // once the thread moves on it expires for good, so a later return to that value cannot revive it.
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- prunes staged picks once the thread projection moves past them
   useEffect(() => {
-    latestThreadRef.current = selectedThread;
     if (selectedThreadKey && selectedThread) {
       pruneExpiredStagedThreadSettings(selectedThreadKey, selectedThread);
     }
@@ -376,12 +360,8 @@ export function useThreadComposerState(input: {
       : modelSelection,
     serverConfig?.providers ?? [],
   );
-  const selectedProvider = selectedEnvironmentRuntime?.serverConfig?.providers.find(
-    (provider) => provider.instanceId === modelSelection?.instanceId,
-  );
-  const interactionMode = resolvedThreadSettings
-    ? resolveProviderInteractionMode(selectedProvider, resolvedThreadSettings.interactionMode)
-    : null;
+  // Plan mode is not offered to users; every send runs in build mode.
+  const interactionMode = selectedThread ? DEFAULT_PROVIDER_INTERACTION_MODE : null;
   const canSwitchThreadProvider = threadAllowsProviderSwitch({
     thread: selectedThreadShell,
     projection: selectedThreadProjection?.projection,
@@ -616,6 +596,21 @@ export function useThreadComposerState(input: {
     if (text.length === 0 && attachments.length === 0) {
       return null;
     }
+    pruneExpiredStagedThreadSettings(threadKey, thread);
+    const threadSettings = resolveStagedThreadSettings(getStagedThreadSettings(threadKey), thread);
+    const modelSelection = threadSettings.modelSelection;
+    const serverConfig = selectedEnvironmentRuntime?.serverConfig;
+    const modelUnavailable =
+      selectedEnvironmentRuntime?.connectionState === "connected" &&
+      isModelSelectionUnavailable(serverConfig, modelSelection, thread.projectId);
+    const alertModelUnavailable = () => {
+      const { title, detail } = describeUnavailableModelSelection(
+        serverConfig,
+        modelSelection,
+        thread.projectId,
+      );
+      Dialog.alert(title, detail);
+    };
     // A redirect's text answers its approval, so `/side` there is that text, not the command.
     const sideChatCommand = beforeDispatch === undefined ? parseSideChatCommand(text) : null;
     if (sideChatCommand) {
@@ -628,12 +623,18 @@ export function useThreadComposerState(input: {
         );
       } else if (sideChatCommand.prompt.length === 0) {
         Dialog.alert("Ask a side question", "Type the question after /side, then send it.");
+      } else if (modelUnavailable) {
+        alertModelUnavailable();
       } else if (!startingSideChatRef.current) {
         startingSideChatRef.current = true;
         const started = await input
           .startSideChat(
             { environmentId: thread.environmentId, threadId: thread.id },
             sideChatCommand.prompt,
+            {
+              runtimeMode: threadSettings.runtimeMode,
+              modelSelection,
+            },
           )
           .finally(() => {
             startingSideChatRef.current = false;
@@ -722,20 +723,8 @@ export function useThreadComposerState(input: {
       return null;
     }
 
-    pruneExpiredStagedThreadSettings(threadKey, thread);
-    const threadSettings = resolveStagedThreadSettings(getStagedThreadSettings(threadKey), thread);
-    const modelSelection = threadSettings.modelSelection;
-    const serverConfig = selectedEnvironmentRuntime?.serverConfig;
-    if (
-      selectedEnvironmentRuntime?.connectionState === "connected" &&
-      isModelSelectionUnavailable(serverConfig, modelSelection, thread.projectId)
-    ) {
-      const { title, detail } = describeUnavailableModelSelection(
-        serverConfig,
-        modelSelection,
-        thread.projectId,
-      );
-      Dialog.alert(title, detail);
+    if (modelUnavailable) {
+      alertModelUnavailable();
       return null;
     }
     const provider = serverConfig?.providers.find(
@@ -865,7 +854,7 @@ export function useThreadComposerState(input: {
       context: draft.context,
       modelSelection,
       runtimeMode: threadSettings.runtimeMode,
-      interactionMode: resolveProviderInteractionMode(provider, threadSettings.interactionMode),
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
       ...(compactBeforeSend
         ? { compactBeforeSend, dispatchMode: "queue" as const }
         : followUpDispatchMode === null
@@ -947,25 +936,6 @@ export function useThreadComposerState(input: {
     removeComposerDraftAttachment(threadKey, imageId);
   };
 
-  const onUpdateInteractionMode = (value: ProviderInteractionMode) => {
-    const baseline = latestThreadRef.current;
-    if (!selectedThreadKey || !baseline) {
-      return;
-    }
-    const modelSelection = resolveStagedThreadSettings(
-      getStagedThreadSettings(selectedThreadKey),
-      baseline,
-    ).modelSelection;
-    const provider = selectedEnvironmentRuntime?.serverConfig?.providers.find(
-      (candidate) => candidate.instanceId === modelSelection.instanceId,
-    );
-    stageThreadSettings(
-      selectedThreadKey,
-      { interactionMode: resolveProviderInteractionMode(provider, value) },
-      baseline,
-    );
-  };
-
   return {
     feedbackSubmissions,
     dismissFeedback,
@@ -1004,7 +974,6 @@ export function useThreadComposerState(input: {
     onNativePasteText,
     onRemoveDraftImage,
     onSendMessage,
-    onUpdateInteractionMode,
     sideChatUnavailableReason,
   };
 }

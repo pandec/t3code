@@ -31,8 +31,8 @@ import { formatContextWindowTokens } from "~/lib/contextWindow";
 import { formatProviderUsageEmail } from "~/providerUsageEmail";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import {
-  formatContextWindowCompactionMessage,
   formatContextWindowCost,
+  formatMeterCompactionMessage,
   openRouterCreditsBudgetWindow,
 } from "./ContextWindowMeter.logic";
 import { composerFloatingLayerProps } from "./composerEventScope";
@@ -719,10 +719,7 @@ export function ContextWindowMeter(props: {
                 ) : null}
                 {usage.compactsAutomatically ? (
                   <div className="mt-1 text-pretty text-secondary-label text-2xs font-medium">
-                    {formatContextWindowCompactionMessage(
-                      modelDisplayName,
-                      usage.autoCompactThreshold,
-                    )}
+                    {formatMeterCompactionMessage(modelDisplayName, usage.autoCompactThreshold)}
                   </div>
                 ) : null}
                 {onCompact ? (

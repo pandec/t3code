@@ -45,7 +45,6 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as CodexUsageHistory from "./CodexUsageHistory.ts";
 import * as CursorAccountReader from "@t3tools/provider-cursor/server/CursorAccountReader";
-import * as CursorKeychain from "@t3tools/provider-cursor/server/CursorKeychain";
 import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsageAccounts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
@@ -118,7 +117,7 @@ const httpClientStub = HttpClient.make((request) =>
  * host process, for suites that build `UsageService.make` by hand.
  */
 const layerUsageReaders = Layer.fresh(CursorUsageAccounts.layer).pipe(
-  Layer.provide(CursorAccountReader.layer.pipe(Layer.provide(CursorKeychain.layer))),
+  Layer.provide(CursorAccountReader.layer),
   Layer.provideMerge(AntigravityUsage.layer),
   Layer.provideMerge(MuseUsageHome.layer),
   Layer.provideMerge(ProviderHostLive.layer),
@@ -583,9 +582,7 @@ const layerService = (input: {
   readonly hostname?: string;
   readonly secretStore?: Partial<ServerSecretStore.ServerSecretStore["Service"]>;
 }) =>
-  layerCursorUsageAccounts(
-    CursorAccountReader.layer.pipe(Layer.provide(CursorKeychain.layer)),
-  ).pipe(
+  layerCursorUsageAccounts(CursorAccountReader.layer).pipe(
     Layer.provideMerge(AntigravityUsage.layer),
     Layer.provideMerge(MuseUsageHome.layer),
     Layer.provideMerge(ProviderHostLive.layer),
@@ -714,13 +711,6 @@ function makeFakeCursor() {
     });
   return { state, read };
 }
-
-const writeCursorLogin = (home: string) =>
-  Effect.promise(async () => {
-    const authPath = NodePath.join(home, "config", "cursor", "auth.json");
-    await NodeFSP.mkdir(NodePath.dirname(authPath), { recursive: true });
-    await NodeFSP.writeFile(authPath, "{}");
-  });
 
 function cursorSource(summary: { readonly sources: readonly UsageSource[] }) {
   return summary.sources.find((source) => source.fingerprint.provider === "cursor");
@@ -1892,29 +1882,9 @@ describe("UsageService", () => {
       }).pipe(Effect.scoped),
   );
 
-  it.live("keeps Cursor credential errors visible when a saved login cannot be read", () =>
-    Effect.gen(function* () {
-      const { settings, home } = yield* setup;
-      const authPath = NodePath.join(home, "config", "cursor", "auth.json");
-      yield* Effect.promise(async () => {
-        await NodeFSP.mkdir(NodePath.dirname(authPath), { recursive: true });
-        await NodeFSP.writeFile(authPath, "invalid json");
-      });
-      const service = yield* UsageService.make.pipe(
-        Effect.provide(
-          layerService({ prefix: "usage-service-cursor-invalid-login", home, settings }),
-        ),
-      );
-      const summary = yield* service.readSummary({ ...WINDOW, awaitRefresh: true });
-      const cursor = summary.sources.find((source) => source.fingerprint.provider === "cursor");
-      assert.strictEqual(cursor?.message, "Cursor credentials could not be read.");
-    }).pipe(Effect.scoped),
-  );
-
   it.live("restores the Cursor account cache after a restart", () =>
     Effect.gen(function* () {
       const { settings, home } = yield* setup;
-      yield* writeCursorLogin(home);
       yield* TestClock.setTime(CURSOR_NOW);
       const before = makeFakeCursor();
       before.state.events = [
@@ -1942,114 +1912,16 @@ describe("UsageService", () => {
           { sinceMs: CURSOR_NOW - HOUR_MS, untilMs: CURSOR_NOW + 2 * 60 * 1000 },
         ]);
       }).pipe(
-        Effect.provide(layerService({ prefix: "usage-service-cursor-restart", home, settings })),
-      );
-    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
-  );
-
-  it.live("does not read the macOS Cursor Keychain before account usage is enabled", () =>
-    Effect.gen(function* () {
-      const { settings, home } = yield* setup;
-      const service = yield* UsageService.make.pipe(
         Effect.provide(
           layerService({
-            prefix: "usage-service-cursor-keychain-disabled",
+            prefix: "usage-service-cursor-restart",
             home,
             settings,
-            platform: "darwin",
-            environment: {},
+            environment: { CURSOR_API_KEY: "test-key" },
           }),
         ),
       );
-      const summary = yield* service.readSummary(WINDOW);
-      const cursor = summary.sources.find((source) => source.fingerprint.provider === "cursor");
-      assert.strictEqual(cursor?.status, "missing");
-      assert.strictEqual(cursor?.action, "enableCursorKeychain");
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("ignores a stale macOS Keychain login when Cursor is not installed", () =>
-    Effect.gen(function* () {
-      const { settings, home } = yield* setup;
-      const cursor = makeFakeCursor();
-      cursor.state.error = "Sign in to Cursor again to read account usage.";
-      const readCursorSource = Effect.gen(function* () {
-        const service = yield* makeWithCursor(cursor.read);
-        const summary = yield* service.readSummary({ ...WINDOW, awaitRefresh: true });
-        yield* service.awaitPersisted;
-        return cursorSource(summary);
-      }).pipe(
-        Effect.provide(
-          layerService({
-            prefix: "usage-service-cursor-keychain-uninstalled",
-            home,
-            settings: { ...settings, cursorKeychainUsageEnabled: true },
-            platform: "darwin",
-            environment: {},
-          }),
-        ),
-      );
-
-      assert.isUndefined(yield* readCursorSource);
-      assert.lengthOf(cursor.state.calls, 0);
-
-      yield* Effect.promise(() => NodeFSP.mkdir(NodePath.join(home, ".cursor")));
-      const installed = yield* readCursorSource;
-      assert.strictEqual(installed?.message, "Sign in to Cursor again to read account usage.");
-      assert.lengthOf(cursor.state.calls, 1);
-
-      // Fork: uninstalling Cursor stops the Keychain probe but keeps retained account history.
-      cursor.state.error = null;
-      const history = yield* readCursorSource;
-      assert.strictEqual(history?.fingerprint.resolvedHomePath, "cursor-account:account-a");
-      yield* Effect.promise(() => NodeFSP.rm(NodePath.join(home, ".cursor"), { recursive: true }));
-      yield* TestClock.adjust(Duration.minutes(2));
-      assert.deepStrictEqual(yield* readCursorSource, history);
-      assert.lengthOf(cursor.state.calls, 2);
-    }).pipe(Effect.scoped),
-  );
-
-  it.live("ignores stale Cursor file logins when the active credential store differs", () =>
-    Effect.gen(function* () {
-      const { settings, home } = yield* setup;
-      for (const [index, testCase] of [
-        {
-          platform: "darwin" as const,
-          environment: { AGENT_CLI_CREDENTIAL_STORE: "memory" },
-          authPath: [".cursor", "auth.json"],
-        },
-        {
-          platform: "linux" as const,
-          environment: { AGENT_CLI_CREDENTIAL_STORE: "memory" },
-          authPath: ["config", "cursor", "auth.json"],
-        },
-      ].entries()) {
-        const authPath = NodePath.join(home, ...testCase.authPath);
-        yield* Effect.promise(async () => {
-          await NodeFSP.mkdir(NodePath.dirname(authPath), { recursive: true });
-          await NodeFSP.writeFile(
-            authPath,
-            encodeUnknownJsonString({ accessToken: "stale-token" }),
-          );
-        });
-        const service = yield* UsageService.make.pipe(
-          Effect.provide(
-            layerService({
-              prefix: `usage-service-cursor-store-${index}`,
-              home,
-              settings,
-              platform: testCase.platform,
-              environment: testCase.environment,
-            }),
-          ),
-        );
-        const summary = yield* service.readSummary(WINDOW);
-        const cursor = summary.sources.find((source) => source.fingerprint.provider === "cursor");
-        assert.strictEqual(cursor?.status, "missing");
-        assert.include(cursor?.message ?? "", "Cursor CLI login");
-        assert.isFalse(summary.buckets.some((bucket) => bucket.provider === "cursor"));
-      }
-    }).pipe(Effect.scoped),
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 
   it.live("reads the Cursor account of an API key or T3 sign-in instead of a CLI login", () =>
@@ -2063,9 +1935,17 @@ describe("UsageService", () => {
           createdAtMs: 0,
         }),
       );
+      yield* Effect.promise(async () => {
+        await NodeFSP.mkdir(NodePath.join(home, ".cursor"), { recursive: true });
+        await NodeFSP.writeFile(
+          NodePath.join(home, ".cursor", "auth.json"),
+          '{"accessToken":"stale-cli-token"}',
+        );
+      });
       for (const [index, testCase] of [
         { environment: { CURSOR_API_KEY: "environment-key" }, stored: Option.none() },
         { environment: {}, stored: Option.some(signIn) },
+        { environment: {}, stored: Option.none() },
       ].entries()) {
         const cursor = makeFakeCursor();
         const summary = yield* Effect.gen(function* () {
@@ -2083,6 +1963,11 @@ describe("UsageService", () => {
             }),
           ),
         );
+        if (index === 2) {
+          assert.deepStrictEqual(cursor.state.credentials, []);
+          assert.isUndefined(cursorSource(summary));
+          continue;
+        }
         assert.deepStrictEqual(cursor.state.credentials, [
           { kind: "apiKey", apiKey: index === 0 ? "environment-key" : "signed-in-key" },
         ]);
@@ -2114,18 +1999,6 @@ describe("UsageService", () => {
         const first = yield* service.readSummary({ ...WINDOW, awaitRefresh: true });
         assert.isTrue(first.buckets.some((bucket) => bucket.provider === "cursor"));
 
-        const config = yield* ServerConfig.ServerConfig;
-        const authPath = NodePath.join(home, ".cursor", "auth.json");
-        yield* Effect.promise(() =>
-          NodeFSP.writeFile(
-            NodePath.join(config.stateDir, "usage-scan-cache-v6.json"),
-            encodeUnknownJsonString({
-              sources: {
-                [`cursor\0${authPath}`]: { dir: "cursor-account:account-a", volumeId: "account-a" },
-              },
-            }),
-          ),
-        );
         apiKey = "second-account-key";
         cursor.state.error = "Cursor account usage could not be read.";
         const second = yield* service.readSummary({ ...WINDOW, awaitRefresh: true });
@@ -2183,7 +2056,6 @@ describe("UsageService", () => {
                 environment: { CURSOR_API_KEY: "new-key" },
               },
             ],
-            keychainUsageEnabled: false,
             windowStartMs: 0,
             retentionCutoffMs: 0,
             awaitRefresh,
@@ -2385,14 +2257,12 @@ describe("UsageService", () => {
         await NodeFSP.writeFile(NodePath.join(home, "opencode", "opencode.db"), "broken");
         await NodeFSP.mkdir(NodePath.join(home, "antigravity"));
         await NodeFSP.writeFile(NodePath.join(home, "antigravity", "conversation.db"), "broken");
-        await NodeFSP.mkdir(NodePath.join(home, "config", "cursor"), { recursive: true });
-        await NodeFSP.writeFile(NodePath.join(home, "config", "cursor", "auth.json"), "broken");
       });
       const service = yield* UsageService.make.pipe(
         Effect.provide(layerService({ prefix: "usage-service-reader-errors", home, settings })),
       );
       const summary = yield* service.readSummary({ ...WINDOW, awaitRefresh: true });
-      for (const provider of ["opencode", "antigravity", "cursor"]) {
+      for (const provider of ["opencode", "antigravity"]) {
         const source = summary.sources.find((entry) => entry.fingerprint.provider === provider);
         assert.strictEqual(source?.status, "partial");
         assert.strictEqual(source?.malformedRecords, 0);
@@ -3274,97 +3144,6 @@ describe("UsageService", () => {
         ),
       );
     }).pipe(Effect.scoped),
-  );
-
-  it.live(
-    "retains Cursor tier pricing and savings after restart when credentials cannot be read",
-    () =>
-      Effect.gen(function* () {
-        const { settings, home } = yield* setup;
-        const authPath = NodePath.join(home, "config", "cursor", "auth.json");
-        yield* Effect.promise(async () => {
-          await NodeFSP.mkdir(NodePath.dirname(authPath), { recursive: true });
-          await NodeFSP.writeFile(authPath, "invalid credentials JSON");
-        });
-        yield* Effect.gen(function* () {
-          const config = yield* ServerConfig.ServerConfig;
-          const source = "cursor-account:retained-account";
-          const now = DateTime.toEpochMillis(yield* DateTime.now);
-          const cache = makeScanCacheWriter()(
-            new Map([
-              [
-                source,
-                {
-                  provider: "cursor",
-                  size: 0,
-                  mtimeMs: now,
-                  malformedRecords: 0,
-                  tailMalformedRecords: 0,
-                  tailRecords: [],
-                  position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
-                  records: [
-                    {
-                      provider: "cursor",
-                      model: "display-name",
-                      rateModel: "tiered-rate",
-                      timestampMs: Date.parse("2026-08-01T10:00:00Z"),
-                      sessionId: "one",
-                      speed: "standard",
-                      reportedCostUsd: null,
-                      dedupeKey: "one",
-                      totals: {
-                        uncachedInputTokens: 10,
-                        cachedInputTokens: 100,
-                        cacheCreationTokens: 0,
-                        outputTokens: 5,
-                        reasoningTokens: 0,
-                      },
-                    },
-                  ],
-                },
-              ],
-            ]),
-            {
-              sources: { [`cursor\0${authPath}`]: { dir: source, volumeId: "retained-account" } },
-            },
-          );
-          yield* Effect.promise(() =>
-            NodeFSP.writeFile(NodePath.join(config.stateDir, SCAN_CACHE_FILE_NAME), cache),
-          );
-          const service = yield* UsageService.make;
-          const summary = yield* service.readSummary({ ...WINDOW, awaitRefresh: true });
-          const bucket = summary.buckets.find((entry) => entry.provider === "cursor")!;
-          assert.strictEqual(bucket.costSource, "modelPriced");
-          assert.closeTo(bucket.costUsd, 0.03, 1e-10);
-          assert.closeTo(bucket.cacheSavingsUsd, 0.09, 1e-10);
-          assert.strictEqual(
-            summary.sources.find((entry) => entry.fingerprint.provider === "cursor")?.status,
-            "partial",
-          );
-          yield* service.awaitPersisted;
-          const restarted = yield* UsageService.make;
-          assert.deepStrictEqual(
-            (yield* restarted.readSummary({ ...WINDOW, awaitRefresh: true })).buckets,
-            summary.buckets,
-          );
-          yield* restarted.awaitPersisted;
-        }).pipe(
-          Effect.provide(
-            layerService({
-              prefix: "usage-cursor-tier-retention",
-              home,
-              settings,
-              ratesDocument: {
-                "tiered-rate": {
-                  input_cost_per_token: 0.001,
-                  output_cost_per_token: 0.002,
-                  cache_read_input_token_cost: 0.0001,
-                },
-              },
-            }),
-          ),
-        );
-      }).pipe(Effect.scoped),
   );
 
   it.live(

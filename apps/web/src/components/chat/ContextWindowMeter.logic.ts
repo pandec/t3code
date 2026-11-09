@@ -1,39 +1,19 @@
 import type { ProviderUsageWindow } from "@t3tools/client-runtime/state/provider-usage";
-import type { ModelSelection, ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import type { ModelSelection, ProviderInstanceId } from "@t3tools/contracts";
 import { formatUsd } from "@t3tools/shared/usageFormat";
-import {
-  resolveSelectableProviderInstanceEntry,
-  type ProviderInstanceEntry,
-} from "../../providerInstances";
+import { formatContextWindowCompactionMessage } from "./compaction.logic";
 import { getDisplayModelName, type ModelEsque } from "./providerIconUtils";
 
-export function providerSupportsManualCompaction(
-  provider: ProviderInstanceEntry | null | undefined,
+export function threadShellHasStarted(
+  shell:
+    | Pick<EnvironmentThreadShell, "latestRun" | "latestUserMessageAt" | "runtime">
+    | null
+    | undefined,
 ): boolean {
-  return provider?.snapshot.slashCommands.some((command) => command.name === "compact") ?? false;
-}
-
-export function hasAvailableCompactionProvider(input: {
-  readonly providers: ReadonlyArray<ProviderInstanceEntry>;
-  readonly driverKind: ProviderDriverKind;
-  readonly instanceId: ProviderInstanceId | null;
-  readonly lockedInstanceId: ProviderInstanceId | null;
-}): boolean {
-  const driverProviders = input.providers.filter(
-    (provider) => provider.driverKind === input.driverKind,
-  );
-  const lockedContinuationGroupKey = input.lockedInstanceId
-    ? driverProviders.find((provider) => provider.instanceId === input.lockedInstanceId)
-        ?.continuationGroupKey
-    : undefined;
-  const compatibleProviders = lockedContinuationGroupKey
-    ? driverProviders.filter(
-        (provider) => provider.continuationGroupKey === lockedContinuationGroupKey,
-      )
-    : driverProviders;
-
-  return providerSupportsManualCompaction(
-    resolveSelectableProviderInstanceEntry(compatibleProviders, input.instanceId ?? undefined),
+  return Boolean(
+    shell &&
+    (shell.latestRun !== null || shell.latestUserMessageAt !== null || shell.runtime !== null),
   );
 }
 
@@ -52,16 +32,14 @@ export function resolveContextWindowModelDisplayName(
   return selectedModel ? getDisplayModelName(selectedModel) : selection.model;
 }
 
-export function formatContextWindowCompactionMessage(
+export function formatMeterCompactionMessage(
   modelDisplayName: string | null | undefined,
   autoCompactThreshold?: number | null,
 ): string {
-  if (typeof autoCompactThreshold === "number" && autoCompactThreshold > 0) {
-    return `Compacts automatically at about ${autoCompactThreshold.toLocaleString("en-US")} tokens.`;
+  if (modelDisplayName && !(typeof autoCompactThreshold === "number" && autoCompactThreshold > 0)) {
+    return `Context for ${modelDisplayName} compacts automatically when needed.`;
   }
-  return modelDisplayName
-    ? `Context for ${modelDisplayName} compacts automatically when needed.`
-    : "Context compacts automatically when needed.";
+  return formatContextWindowCompactionMessage(autoCompactThreshold);
 }
 
 /**

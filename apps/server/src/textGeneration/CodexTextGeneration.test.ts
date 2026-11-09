@@ -27,6 +27,8 @@ import { CodexSettings, ProviderInstanceId } from "@t3tools/contracts";
 import * as ServerConfig from "../config.ts";
 import { makeProcessProbe, processProbeSource } from "../testUtils/processProbe.ts";
 import * as TextGeneration from "./TextGeneration.ts";
+import * as TextGenerators from "./TextGenerators.ts";
+import * as TextGenerationOperations from "@t3tools/provider-core/server/textGenerationOperations";
 import { makeCodexTextGeneration } from "./CodexTextGeneration.ts";
 import { writeFakeCli } from "@t3tools/provider-testing/fakeCli";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
@@ -654,6 +656,7 @@ it.effect.each(PREFLIGHT_PRIMARY_STATES)("text generation preflight: %s", (prima
               [fallback]: { driver: ProviderDriverKind.make("claudeAgent"), config: {} },
             },
           }),
+          Layer.mock(TextGenerators.TextGenerators)({ runner: () => Effect.undefined }),
           Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
             resolveLink: () => Effect.die("unused"),
           }),
@@ -680,4 +683,110 @@ it.effect.each(PREFLIGHT_PRIMARY_STATES)("text generation preflight: %s", (prima
           },
     ]);
   }),
+);
+
+it.effect(
+  "a text generator rewrites messages, but a review guide falls back to an agent that can read the checkout",
+  () =>
+    Effect.gen(function* () {
+      const claude = ProviderInstanceId.make("claudeAgent");
+      const driver = ProviderDriverKind.make("claudeAgent");
+      const calls: ModelSelection[] = [];
+      const instance = {
+        instanceId: claude,
+        driverKind: driver,
+        continuationIdentity: { driverKind: driver, continuationKey: claude },
+        displayName: undefined,
+        enabled: true,
+        snapshot: {
+          getSnapshot: Effect.succeed<ServerProvider>({
+            instanceId: claude,
+            driver,
+            enabled: true,
+            installed: true,
+            status: "ready",
+            auth: { status: "authenticated" },
+            version: null,
+            checkedAt: "1970-01-01T00:00:00Z",
+            models: [],
+            slashCommands: [],
+            skills: [],
+          }),
+        } as ProviderInstance["snapshot"],
+        orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+        textGeneration: TextGeneration.TextGeneration.of({
+          generateCommitMessage: () => Effect.die("unused"),
+          generatePrContent: () => Effect.die("unused"),
+          generateBranchName: () => Effect.die("unused"),
+          generateThreadTitle: () => Effect.die("unused"),
+          generateTranscriptionPostProcessing: () => Effect.die("unused"),
+          generateSpeechScript: () => Effect.die("unused"),
+          generateMessageSummary: () => Effect.die("unused"),
+          generateReviewGuide: (input) =>
+            Effect.sync(() => {
+              calls.push(input.modelSelection);
+              return {} as TextGeneration.ReviewGuideGenerationResult;
+            }),
+        }),
+      } satisfies ProviderInstance;
+      const serviceWith = (instances: ReadonlyArray<ProviderInstance>) =>
+        TextGeneration.make.pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+                listInstances: Effect.succeed(instances),
+                getInstance: (id) =>
+                  Effect.succeed(instances.find((candidate) => candidate.instanceId === id)),
+              }),
+              ServerSettings.layerTest({}),
+              Layer.mock(TextGenerators.TextGenerators)({
+                runner: (id) =>
+                  Effect.succeed(
+                    id === "openrouter"
+                      ? (request) =>
+                          request.investigate
+                            ? Effect.die("a text generator cannot investigate")
+                            : TextGenerationOperations.decodeJsonReply(
+                                request,
+                                "OpenRouter",
+                                '{"script":" Spoken. ","summary":" Short. "}',
+                              )
+                      : undefined,
+                  ),
+              }),
+              Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+                resolveLink: () => Effect.die("unused"),
+              }),
+            ),
+          ),
+        );
+      const input = {
+        cwd: "/tmp",
+        number: 1,
+        title: "Change",
+        description: "",
+        baseBranch: "main",
+        baseCommit: "abc",
+        settledReview: "",
+        modelSelection: { instanceId: ProviderInstanceId.make("openrouter"), model: "some/model" },
+      };
+      yield* (yield* serviceWith([instance])).generateReviewGuide(input);
+      expect(calls.map((selection) => selection.instanceId)).toEqual([claude]);
+
+      // With no agent ready, it says what is missing instead of looking up a provider by that id.
+      const failure = yield* Effect.flip((yield* serviceWith([])).generateReviewGuide(input));
+      expect(failure.detail).toMatch(
+        /^Review guides need a coding agent that can read the checkout/,
+      );
+
+      // Speech scripts and summaries reach the text generator, so they need no provider instance.
+      const rewrite = { cwd: "/tmp", message: "Done.", modelSelection: input.modelSelection };
+      const service = yield* serviceWith([]);
+      expect(yield* service.generateSpeechScript({ ...rewrite, maxScriptChars: 100 })).toEqual({
+        script: "Spoken.",
+      });
+      expect(yield* service.generateMessageSummary({ ...rewrite, maxSummaryChars: 100 })).toEqual({
+        summary: "Short.",
+      });
+    }),
 );

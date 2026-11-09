@@ -8,11 +8,7 @@ import {
   type UsageProviderKind,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
-import {
-  needsCursorKeychainAccess,
-  refreshUsage,
-  usageSummaryInput,
-} from "@t3tools/client-runtime/state/usage";
+import { refreshUsage, usageSummaryInput } from "@t3tools/client-runtime/state/usage";
 import { resolveUsageAccess } from "@t3tools/client-runtime/state/usage-access";
 import {
   attributeGatewayBucket,
@@ -44,7 +40,6 @@ export interface EnvironmentUsageStatus {
   readonly summary: UsageSummary | null;
   /** Rich coverage classification layered over upstream's progressive status fields. */
   readonly state?: EnvironmentUsageState;
-  readonly needsCursorKeychainAccess: boolean;
 }
 
 function environmentUsageState(environment: EnvironmentUsageStatus): EnvironmentUsageState {
@@ -89,7 +84,6 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
             failed: session !== null || hasSessionError,
             summary: null,
           }),
-          needsCursorKeychainAccess: false,
         });
         continue;
       }
@@ -117,10 +111,6 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
         error: state.kind === "failed" ? "This environment could not report usage." : null,
         summary,
         state,
-        needsCursorKeychainAccess: needsCursorKeychainAccess(
-          state.kind === "reported" ? state.summary : null,
-          get(serverEnvironment.providersValueAtom(environmentId)),
-        ),
       });
     }
     return statuses;

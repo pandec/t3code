@@ -20,15 +20,7 @@ import { resolveShortcutCommand, type ShortcutEventLike } from "./keybindings";
 export { parseComposerArchiveCommand } from "@t3tools/shared/composerTrigger";
 
 export type ComposerTriggerKind = "path" | "pull-request" | "slash-command" | "skill";
-export type ComposerSlashCommand =
-  | "model"
-  | "plan"
-  | "default"
-  | "prompt"
-  | "t3-archive"
-  | "side"
-  | "btw"
-  | "clear";
+export type ComposerSlashCommand = "model" | "prompt" | "t3-archive" | "side" | "btw" | "clear";
 export type ComposerSubmissionIntent = "foreground" | "background" | "alternate";
 
 export interface ComposerTrigger {
@@ -346,18 +338,6 @@ export function composerStateAtPromptEnd(
       ? null
       : detectComposerTrigger(text, expandCollapsedComposerCursor(text, cursor)),
   };
-}
-
-export function parseStandaloneComposerSlashCommand(
-  text: string,
-): Extract<ComposerSlashCommand, "plan" | "default"> | null {
-  const match = /^\/(plan|default)\s*$/i.exec(text.trim());
-  if (!match) {
-    return null;
-  }
-  const command = match[1]?.toLowerCase();
-  if (command === "plan") return "plan";
-  return "default";
 }
 
 /**

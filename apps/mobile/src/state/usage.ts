@@ -6,11 +6,7 @@ import {
   type UsageSummaryInput,
 } from "@t3tools/contracts";
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
-import {
-  needsCursorKeychainAccess,
-  refreshUsage,
-  usageSummaryInput,
-} from "@t3tools/client-runtime/state/usage";
+import { refreshUsage, usageSummaryInput } from "@t3tools/client-runtime/state/usage";
 import { resolveUsageAccess } from "@t3tools/client-runtime/state/usage-access";
 import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
 import { AsyncResult, Atom } from "effect/reactivity";
@@ -38,7 +34,6 @@ export interface EnvironmentUsageStatus {
    * access check need different fixes than a failed scan. Null otherwise.
    */
   readonly accessError: string | null;
-  readonly needsCursorKeychainAccess: boolean;
 }
 
 const usageByWindowAtom = Atom.family((windowKey: string) =>
@@ -73,7 +68,6 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
           state,
           canReadDiagnostics: false,
           accessError: state.kind === "failed" ? access.error : null,
-          needsCursorKeychainAccess: false,
         });
         continue;
       }
@@ -99,10 +93,6 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
         state,
         canReadDiagnostics: true,
         accessError: null,
-        needsCursorKeychainAccess: needsCursorKeychainAccess(
-          state.kind === "reported" ? state.summary : null,
-          get(serverEnvironment.providersValueAtom(environmentId)),
-        ),
       });
     }
     return statuses;

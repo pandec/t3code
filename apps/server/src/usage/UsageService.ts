@@ -473,9 +473,10 @@ export const make = Effect.gen(function* () {
   /**
    * Reads run concurrently, and the caller stores updates in walk order rather
    * than completion order: saved records of deleted transcripts aggregate in
-   * cache order, where the first copy of a duplicate wins.
+   * cache order, where the first copy of a duplicate wins. Untraced: a scan
+   * reads thousands of files, so scanTranscriptDir records the counts instead.
    */
-  const readFileRecords = Effect.fn("UsageService.readFileRecords")(function* (
+  const readFileRecords = Effect.fnUntraced(function* (
     filePath: string,
     size: number,
     mtimeMs: number,
@@ -602,7 +603,6 @@ export const make = Effect.gen(function* () {
     readonly hostId?: string;
     readonly status?: UsageSource["status"];
     readonly message?: string;
-    readonly action?: UsageSource["action"];
     readonly files: readonly ScannedFile[] | null;
     /** Directories and files the walk could not list or stat. */
     readonly unreadablePaths?: number;
@@ -730,6 +730,10 @@ export const make = Effect.gen(function* () {
         cacheDirty = true;
       }
       return file;
+    });
+    yield* Effect.annotateCurrentSpan({
+      "usage.files": files.length,
+      "usage.files_parsed": read.filter((file) => file.update !== undefined).length,
     });
     return {
       provider,
@@ -1012,7 +1016,6 @@ export const make = Effect.gen(function* () {
         files,
         status,
         message,
-        action,
         refreshing,
         hostId: sourceHostId,
         unreadablePaths = 0,
@@ -1095,7 +1098,6 @@ export const make = Effect.gen(function* () {
         skippedFiles,
         malformedRecords,
         distinctSessions: sessionIds.size,
-        ...(action ? { action } : {}),
         message:
           malformedRecords > 0
             ? [sourceMessage, formatMalformedUsageWarning(malformedRecords)]

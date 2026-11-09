@@ -674,6 +674,11 @@ function OpenCommandPaletteDialog(props: {
       ? null
       : paneThreadRef;
   const currentThread = currentThreadRef === null ? null : paneThread;
+  const secondaryPaneActive =
+    splitMounted && threadActionPane === "secondary" && splitSecondaryRef !== null;
+  // The project context (preferred pick, "Current" marker) follows the palette's pane too.
+  const paneActiveThread = secondaryPaneActive ? (currentThread ?? undefined) : activeThread;
+  const paneActiveDraftThread = secondaryPaneActive ? null : activeDraftThread;
   // Fork (SP Labs): "Open Labs panel" is offered in threads of the labs and sp-labs projects.
   const currentThreadInLabsProject = useIsLabsPanelProject(
     currentThread?.environmentId ?? null,
@@ -746,8 +751,8 @@ function OpenCommandPaletteDialog(props: {
   const { environmentLabelById, projectEnvironmentLocationById } = useEnvironmentLookups();
   const projectGroups = useSortedProjectGroups(environmentLabelById);
   const contextualProjectRef = resolveThreadActionProjectRef({
-    activeDraftThread,
-    activeThread: activeThread ?? undefined,
+    activeDraftThread: paneActiveDraftThread,
+    activeThread: paneActiveThread ?? undefined,
     defaultProjectRef,
     handleNewThread,
   });
@@ -890,8 +895,8 @@ function OpenCommandPaletteDialog(props: {
   const { projectByKey } = useProjectLookups();
 
   const currentProjectEnvironmentId =
-    activeThread?.environmentId ?? activeDraftThread?.environmentId ?? null;
-  const currentProjectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? null;
+    paneActiveThread?.environmentId ?? paneActiveDraftThread?.environmentId ?? null;
+  const currentProjectId = paneActiveThread?.projectId ?? paneActiveDraftThread?.projectId ?? null;
   const scratchTargetEnvironmentId = scratchEnvironmentId(currentProjectEnvironmentId);
   const supportsTriage = (environmentId: EnvironmentId | null) =>
     environments.find((environment) => environment.environmentId === environmentId)?.serverConfig
@@ -1055,6 +1060,11 @@ function OpenCommandPaletteDialog(props: {
       ? contextualProjectRef
       : scopeProjectRef(project.environmentId, project.id);
   };
+  const currentProjectEntry =
+    currentProjectId === null ? undefined : projectPickerEntries.find((entry) => entry.isPreferred);
+  const currentProjectKey = currentProjectEntry
+    ? `${currentProjectEntry.targetProject.environmentId}:${currentProjectEntry.targetProject.id}`
+    : null;
   // Fork: one project list serves "New thread in..." and each group of "New
   // thread in group...": the group only changes the draft the pick lands in.
   // Group lists skip pin toggles because only the main list keeps its order while open.
@@ -1063,6 +1073,7 @@ function OpenCommandPaletteDialog(props: {
       isScratchProject(project, scratchWorkspaceRootFor(project.environmentId));
     const projectItems = buildNewThreadInProjectItems({
       projects: pickerProjects.filter((project) => !isScratch(project)),
+      currentProjectKey,
       projectGroupByTargetKey,
       locationByEnvironmentId: projectEnvironmentLocationById,
       projectAccentColor: (project) =>
@@ -1793,8 +1804,6 @@ function OpenCommandPaletteDialog(props: {
   }
 
   // Fork: the secondary split pane, when the palette opened over it, owns the link.
-  const secondaryPaneActive =
-    splitMounted && threadActionPane === "secondary" && splitSecondaryRef !== null;
   const promptLinkTarget = secondaryPaneActive
     ? splitSecondaryRef
     : paletteRouteTarget
