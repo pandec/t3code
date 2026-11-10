@@ -69,10 +69,26 @@ interface CommandOptions {
   readonly env?: Record<string, string>;
 }
 
-// `open` passes our environment to the app, and an inherited ELECTRON_RUN_AS_NODE makes the
-// installed Electron app run as plain Node and exit silently, so scrub it rather than trust the
-// ambient environment. apps/desktop/scripts/{dev,start}-electron.mjs strip it too.
-const LAUNCH_ENV_BLOCKLIST = new Set(["ELECTRON_RUN_AS_NODE"]);
+// `open` passes our environment to the app. ELECTRON_RUN_AS_NODE makes it exit silently, and a
+// launching Claude Code session's markers reach every app terminal, where claude then runs as
+// that session's child with transcripts off. Keep in sync with CLAUDE_HOST_SESSION_VARIABLES in
+// apps/server/src/provider/Drivers/ClaudeHome.ts.
+const LAUNCH_ENV_BLOCKLIST = new Set([
+  "ELECTRON_RUN_AS_NODE",
+  "CLAUDECODE",
+  "CLAUDE_CODE_SESSION_ID",
+  "CLAUDE_CODE_HOST_SESSION_ID",
+  "CLAUDE_CODE_CHILD_SESSION",
+  "CLAUDE_CODE_SESSION_ATTENDED",
+  "CLAUDE_CODE_MESSAGING_SOCKET",
+  "CLAUDE_CODE_MESSAGING_TOKEN",
+  "CLAUDE_CODE_EXECPATH",
+  "CLAUDE_CODE_DESKTOP_APP_VERSION",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_EFFORT",
+  "CLAUDE_PID",
+  "CLAUDE_AGENT_SDK_VERSION",
+]);
 
 export function launchEnvironment(): Record<string, string> {
   const environment: Record<string, string> = {};

@@ -42,19 +42,22 @@ it.effect("escalates process termination from TERM to KILL", () =>
   }),
 );
 
-it("keeps ELECTRON_RUN_AS_NODE out of the environment used to launch the app", () => {
-  const previous = process.env.ELECTRON_RUN_AS_NODE;
-  process.env.ELECTRON_RUN_AS_NODE = "1";
+it("keeps Electron and Claude Code session variables out of the environment used to launch the app", () => {
+  const keys = ["ELECTRON_RUN_AS_NODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID"];
+  const previous = keys.map((key) => [key, process.env[key]] as const);
+  for (const key of keys) process.env[key] = "1";
   try {
     const environment = launchEnvironment();
 
-    assert.isUndefined(environment.ELECTRON_RUN_AS_NODE);
+    for (const key of keys) assert.isUndefined(environment[key]);
     assert.equal(environment.PATH, process.env.PATH);
   } finally {
-    if (previous === undefined) {
-      delete process.env.ELECTRON_RUN_AS_NODE;
-    } else {
-      process.env.ELECTRON_RUN_AS_NODE = previous;
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
   }
 });
