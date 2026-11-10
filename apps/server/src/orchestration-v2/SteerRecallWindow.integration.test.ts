@@ -314,6 +314,53 @@ it.effect("holds a steer for its recall window, then steers its latest text", ()
   ),
 );
 
+it.effect("a held steer keeps the running model when a queued message picked another", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { steered, threadId, setup, layer } = yield* scenario("steer-recall-queued-pick");
+      yield* Effect.gen(function* () {
+        const { orchestrator, worker, send } = yield* setup;
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("picked"),
+          threadId,
+          messageId: MessageId.make("message:picked"),
+          text: "picked",
+          attachments: [],
+          modelSelection: { instanceId, model: "picked-model" },
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        yield* send("steer", "steer");
+        const steer = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+          (run) => run.userMessageId === "message:steer",
+        );
+        assert.deepEqual(steer?.modelSelection, modelSelection);
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("after-steer"),
+          threadId,
+          messageId: MessageId.make("message:after-steer"),
+          text: "after steer",
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        const afterSteer = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+          (run) => run.userMessageId === "message:after-steer",
+        );
+        assert.deepEqual(afterSteer?.modelSelection, { instanceId, model: "picked-model" });
+
+        yield* TestClock.adjust(Duration.millis(RELEASE_MS));
+        yield* worker.drain();
+        assert.deepEqual(steered, ["steer"]);
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
 it.effect("starts a held steer as its own turn when the turn ends inside the window", () =>
   Effect.scoped(
     Effect.gen(function* () {

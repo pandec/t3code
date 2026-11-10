@@ -434,14 +434,14 @@ export function ThreadSwipeable(props: ThreadSwipeableProps) {
     }
   }, [commitPrimaryAction, content, fullSwipeAction, onDelete]);
   const handleRelease = useCallback(
-    (translation: SharedValue<number>) => {
+    (translation: SharedValue<number>, canceled: boolean) => {
       "worklet";
       if (dismissing.value) return true;
-      if (hasLeftActions && translation.value >= leftFullSwipeThreshold) {
+      if (!canceled && hasLeftActions && translation.value >= leftFullSwipeThreshold) {
         runOnJS(commitLeftAction)();
         return true;
       }
-      if (-translation.value >= fullSwipeThreshold) {
+      if (!canceled && -translation.value >= fullSwipeThreshold) {
         runOnJS(commitFullSwipe)();
         return true;
       }

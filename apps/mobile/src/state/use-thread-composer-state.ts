@@ -192,15 +192,7 @@ export function useThreadDraftForThread(input: {
   };
 }
 
-/** Fork: existing-thread picks are staged against the thread's settings (`baseline`), not the draft. */
-export function updateThreadDraftModelSelection(
-  threadKey: string,
-  value: ModelSelection,
-  baseline: ThreadSettings,
-): void {
-  stageThreadSettings(threadKey, { modelSelection: value }, baseline);
-}
-
+/** Fork: existing-thread runtime picks are staged against the thread's settings (`baseline`). */
 export function updateThreadRuntimeMode(
   threadKey: string,
   value: RuntimeMode,

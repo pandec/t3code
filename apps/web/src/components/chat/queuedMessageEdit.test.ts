@@ -264,6 +264,19 @@ describe("queued message file edits", () => {
       }).outcome,
     ).toBe("kept");
     expect(store.getComposerDraft(threadTarget)?.prompt).toBe("Original message");
+    store.clearComposerContent(threadTarget);
+    // An edit emptied to nothing leaves nothing to append.
+    store.setPrompt(editTarget, " ");
+    expect(
+      recoverQueuedMessageEdit({
+        editTarget,
+        threadTarget,
+        originalText: "Original message",
+        removedSavedAttachments: true,
+      }).outcome,
+    ).toBe("clean");
+    expect(store.getComposerDraft(threadTarget)).toBeNull();
+    expect(store.getComposerDraft(editTarget)).toBeNull();
   });
 
   it("keeps a dictated thread draft's voice origin when a typed edit is appended", () => {

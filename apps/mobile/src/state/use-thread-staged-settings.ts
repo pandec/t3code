@@ -57,6 +57,22 @@ export function stageThreadSettings(
   appAtomRegistry.set(threadStagedSettingsAtom, { ...current, [threadKey]: staged });
 }
 
+/** Drops a staged model pick once the thread accepted it, unless a newer pick replaced it. */
+export function releaseStagedModelSelection(
+  threadKey: string,
+  modelSelection: ModelSelection,
+): void {
+  const current = appAtomRegistry.get(threadStagedSettingsAtom);
+  const staged = current[threadKey];
+  // A newer pick, even of the same model, is still waiting for its own reply.
+  if (staged?.modelSelection?.value !== modelSelection) return;
+  const { modelSelection: _released, ...rest } = staged;
+  const next = { ...current };
+  if (Object.keys(rest).length === 0) delete next[threadKey];
+  else next[threadKey] = rest;
+  appAtomRegistry.set(threadStagedSettingsAtom, next);
+}
+
 export function getStagedThreadSettings(threadKey: string): StagedThreadSettings | undefined {
   return appAtomRegistry.get(threadStagedSettingsAtom)[threadKey];
 }

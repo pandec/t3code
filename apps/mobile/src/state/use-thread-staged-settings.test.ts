@@ -6,6 +6,7 @@ import {
   clearStagedThreadSettings,
   getStagedThreadSettings,
   pruneExpiredStagedThreadSettings,
+  releaseStagedModelSelection,
   removeStagedThreadSettingsForEnvironment,
   resolveStagedThreadSettings,
   stageThreadSettings,
@@ -141,6 +142,26 @@ describe("thread staged settings", () => {
       [retainedKey]: {
         interactionMode: { value: "plan", baseline: baseline.interactionMode },
       },
+    });
+  });
+
+  it("releases an accepted model pick only while no newer pick replaced it", () => {
+    const threadKey = "environment-1:thread-1";
+    const accepted = { ...stagedModel };
+    stageThreadSettings(
+      threadKey,
+      { modelSelection: accepted, runtimeMode: "full-access" },
+      baseline,
+    );
+    const newer = { ...stagedModel };
+    stageThreadSettings(threadKey, { modelSelection: newer }, baseline);
+
+    releaseStagedModelSelection(threadKey, accepted);
+    expect(getStagedThreadSettings(threadKey)?.modelSelection?.value).toBe(newer);
+
+    releaseStagedModelSelection(threadKey, newer);
+    expect(getStagedThreadSettings(threadKey)).toEqual({
+      runtimeMode: { value: "full-access", baseline: "approval-required" },
     });
   });
 });

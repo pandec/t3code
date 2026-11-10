@@ -6,31 +6,18 @@ import {
   useReanimatedKeyboardAnimation,
 } from "react-native-keyboard-controller";
 
-import {
-  flushMobileDiagnostics,
-  mobileDiagnosticsEnabled,
-  recordMobileDiagnostic,
-} from "../diagnostics/journal";
+import { mobileDiagnosticsEnabled, recordMobileDiagnostic } from "../diagnostics/journal";
 import {
   KEYBOARD_STICKY_RESET_FOREGROUND_DELAY_MS,
-  KEYBOARD_STICKY_RESET_SEND_DELAY_MS,
   normalizeKeyboardDiagnosticValue,
   resolveKeyboardDidHideAction,
   resolveKeyboardStickyResetDecision,
   resolveKeyboardStickyResetDelay,
   type KeyboardStickyResetDecision,
 } from "../lib/keyboardStickyReset";
-import {
-  subscribeKeyboardStickyResetRequests,
-  type KeyboardStickyResetRequestReason,
-} from "../lib/keyboardStickyResetRequests";
 
-type ReconcileTrigger =
-  | "message-send-request"
-  | "keyboard-will-hide"
-  | "keyboard-did-hide"
-  | "app-active";
-type ReconcileReason = KeyboardStickyResetRequestReason | "keyboard-hide" | "foreground";
+type ReconcileTrigger = "keyboard-will-hide" | "keyboard-did-hide" | "app-active";
+type ReconcileReason = "keyboard-hide" | "foreground";
 
 interface ReconcilePass {
   readonly generation: number;
@@ -39,7 +26,6 @@ interface ReconcilePass {
   readonly delayMs: number;
   readonly durationMs: number | null;
   readonly requireReportedHidden: boolean;
-  readonly flushAfter: boolean;
 }
 
 interface KeyboardDiagnosticContext {
@@ -55,9 +41,8 @@ interface KeyboardDiagnosticContext {
 
 /**
  * Recovers the shared keyboard offset when iOS drops keyboard movement or hide
- * completion events. Show signals generation-invalidate every pass; send
- * requests provide the deterministic backstop without trusting reported
- * visibility, while generic foreground recovery remains conservative.
+ * completion events. Show signals generation-invalidate every pass;
+ * foreground recovery remains conservative.
  */
 export function KeyboardStickyResetCoordinator() {
   const keyboard = useReanimatedKeyboardAnimation();
@@ -129,9 +114,6 @@ export function KeyboardStickyResetCoordinator() {
       if (pendingReconcileRef.current === pass) {
         pendingReconcileRef.current = null;
       }
-      if (pass.flushAfter) {
-        void flushMobileDiagnostics();
-      }
     },
     [keyboard.height, keyboard.progress, recordKeyboardDiagnostic],
   );
@@ -158,7 +140,7 @@ export function KeyboardStickyResetCoordinator() {
     [reconcileKeyboardOffset, recordKeyboardDiagnostic],
   );
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to native keyboard, AppState and reset-request events
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to native keyboard, and AppState events
   useEffect(() => {
     if (Platform.OS !== "ios") return;
 
@@ -184,30 +166,6 @@ export function KeyboardStickyResetCoordinator() {
       });
     };
 
-    const unsubscribeRequests = subscribeKeyboardStickyResetRequests((reason) => {
-      const generation = startFreshGeneration();
-      recordKeyboardDiagnostic({
-        event: "request-received",
-        generation,
-        trigger: "message-send-request",
-        reason,
-        decision: "accepted",
-      });
-      scheduleReconcile(
-        {
-          generation,
-          trigger: "message-send-request",
-          reason,
-          delayMs: KEYBOARD_STICKY_RESET_SEND_DELAY_MS,
-          durationMs: null,
-          requireReportedHidden: false,
-          flushAfter: true,
-        },
-        true,
-      );
-      return true;
-    });
-
     const keyboardWillShow = KeyboardEvents.addListener("keyboardWillShow", (event) => {
       invalidatePendingPasses("keyboard-will-show", event.duration);
     });
@@ -215,24 +173,6 @@ export function KeyboardStickyResetCoordinator() {
       invalidatePendingPasses("keyboard-did-show", event.duration);
     });
     const keyboardWillHide = KeyboardEvents.addListener("keyboardWillHide", (event) => {
-      const pending = pendingReconcileRef.current;
-      if (
-        pending !== null &&
-        pending.generation === generationRef.current &&
-        pending.reason === "message-send"
-      ) {
-        recordKeyboardDiagnostic({
-          event: "keyboard-will-hide",
-          generation: pending.generation,
-          trigger: "keyboard-will-hide",
-          reason: pending.reason,
-          delayMs: pending.delayMs,
-          durationMs: event.duration,
-          decision: "preserve-pending",
-        });
-        return;
-      }
-
       const generation = startFreshGeneration();
       recordKeyboardDiagnostic({
         event: "keyboard-will-hide",
@@ -250,7 +190,6 @@ export function KeyboardStickyResetCoordinator() {
           delayMs: resolveKeyboardStickyResetDelay(event.duration),
           durationMs: event.duration,
           requireReportedHidden: false,
-          flushAfter: false,
         },
         true,
       );
@@ -303,7 +242,6 @@ export function KeyboardStickyResetCoordinator() {
           delayMs: KEYBOARD_STICKY_RESET_FOREGROUND_DELAY_MS,
           durationMs: null,
           requireReportedHidden: true,
-          flushAfter: false,
         },
         false,
       );
@@ -311,7 +249,6 @@ export function KeyboardStickyResetCoordinator() {
 
     return () => {
       startFreshGeneration();
-      unsubscribeRequests();
       keyboardWillShow.remove();
       keyboardDidShow.remove();
       keyboardWillHide.remove();

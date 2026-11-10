@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  POST_SEND_KEYBOARD_DISMISS_MAX_WAIT_MS,
-  POST_SEND_KEYBOARD_DISMISS_MIN_WAIT_MS,
-} from "./boundedKeyboardDismiss";
-import {
-  KEYBOARD_STICKY_RESET_FOREGROUND_DELAY_MS,
-  KEYBOARD_STICKY_RESET_SEND_DELAY_MS,
   normalizeKeyboardDiagnosticValue,
   resolveKeyboardDidHideAction,
   resolveKeyboardStickyResetDecision,
@@ -19,19 +13,6 @@ describe("keyboard sticky reset", () => {
     expect(resolveKeyboardStickyResetDelay(-20)).toBe(120);
     expect(resolveKeyboardStickyResetDelay(Number.NaN)).toBe(370);
     expect(resolveKeyboardStickyResetDelay(2_000)).toBe(1_120);
-  });
-
-  it("orders deterministic recovery before post-send scrolling", () => {
-    expect(KEYBOARD_STICKY_RESET_SEND_DELAY_MS).toBe(700);
-    expect(POST_SEND_KEYBOARD_DISMISS_MIN_WAIT_MS).toBe(780);
-    expect(POST_SEND_KEYBOARD_DISMISS_MAX_WAIT_MS).toBe(850);
-    expect(POST_SEND_KEYBOARD_DISMISS_MIN_WAIT_MS).toBeGreaterThan(
-      KEYBOARD_STICKY_RESET_SEND_DELAY_MS,
-    );
-    expect(POST_SEND_KEYBOARD_DISMISS_MAX_WAIT_MS).toBeGreaterThan(
-      POST_SEND_KEYBOARD_DISMISS_MIN_WAIT_MS,
-    );
-    expect(KEYBOARD_STICKY_RESET_FOREGROUND_DELAY_MS).toBe(400);
   });
 
   it("resets only a stale offset from the active current generation", () => {

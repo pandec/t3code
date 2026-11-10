@@ -6,6 +6,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import {
+  composerDraftHasUserContent,
   composerFileDedupKey,
   useComposerDraftStore,
   type ComposerFileAttachment,
@@ -50,7 +51,10 @@ export function recoverQueuedMessageEdit(input: {
       edit.reviewComments.length > 0 ||
       edit.threadContexts.length > 0 ||
       input.removedSavedAttachments === true);
-  if (edit === null || !dirty) {
+  // An edit emptied to nothing has nothing to append, so it leaves like an unchanged one.
+  const hasContent =
+    composerDraftHasUserContent(edit) || (input.original?.savedAttachmentLocalIds.size ?? 0) > 0;
+  if (edit === null || !dirty || !hasContent) {
     store.clearComposerContent(input.editTarget);
     return { outcome: "clean", skippedAttachmentCount: 0 };
   }

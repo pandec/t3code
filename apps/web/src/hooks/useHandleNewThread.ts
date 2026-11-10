@@ -6,6 +6,7 @@ import {
 } from "@t3tools/client-runtime/environment";
 import {
   DEFAULT_SERVER_SETTINGS,
+  type EnvironmentId,
   type ModelSelection,
   type ScopedProjectRef,
   type ThreadId,
@@ -23,7 +24,11 @@ import {
 import { shouldDefaultToLabMode } from "../components/labs/labs.logic";
 import { loadLabsInventory } from "../state/labs";
 import { newDraftId, newThreadId } from "../lib/utils";
-import { orderItemsByPreferredIds } from "../components/Sidebar.logic";
+import {
+  orderItemsByPreferredIds,
+  resolveSidebarProjectScopePhysicalKeys,
+} from "../components/Sidebar.logic";
+import { buildSidebarProjectSnapshots } from "../sidebarProjectGrouping";
 import {
   deriveLogicalProjectKeyFromSettings,
   getProjectOrderKey,
@@ -50,11 +55,27 @@ import { environmentSummaries } from "../state/presentation";
 import { environmentServerConfigsAtom } from "../state/server";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
-import { getClientSettings } from "./useSettings";
+import { getClientSettings, useClientSettings } from "./useSettings";
+import { getLocalStorageItem, useLocalStorage } from "./useLocalStorage";
+import * as Schema from "effect/Schema";
+import { useAtomValue } from "@effect/atom-react";
+import { defaultProjectFallbackReadyAtom } from "../state/projects";
+import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
 import { useThreadRouteTarget } from "./useThreadRouteTarget";
 import { readUnloadedThreadCount } from "../state/olderSettledShelf";
 import { resolveProjectDefaultProviderModelSelection } from "../providerInstances";
 import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
+
+export const LAST_USED_PROJECT_STORAGE_KEY = "t3code:last-used-project:v1";
+export const lastUsedProjectKeySchema = Schema.NullOr(Schema.String);
+
+export function readLastUsedProjectKey(): string | null {
+  try {
+    return getLocalStorageItem(LAST_USED_PROJECT_STORAGE_KEY, lastUsedProjectKeySchema);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Precedence, lowest to highest: per-provider sticky memory; the project's
@@ -557,10 +578,75 @@ export function createNewThreadHandler(router: AnyRouter) {
   };
 }
 
+interface SidebarProjectFilterInput {
+  readonly projects: ReadonlyArray<EnvironmentProject>;
+  readonly projectGroupingSettings: ProjectGroupingSettings;
+  readonly primaryEnvironmentId: EnvironmentId | null;
+  readonly scopeKeys: readonly string[] | null;
+  readonly hiddenProjectKeys: readonly string[];
+  readonly environmentScopeIds: readonly string[] | null;
+}
+
+/** Fork: whether a project passes the sidebar's project allowlist, hidden projects, and environment filter. */
+export function createSidebarProjectFilter(
+  input: SidebarProjectFilterInput,
+): (projectRef: ScopedProjectRef) => boolean {
+  return (projectRef) => {
+    if (
+      input.environmentScopeIds !== null &&
+      !input.environmentScopeIds.includes(projectRef.environmentId)
+    ) {
+      return false;
+    }
+    if (input.scopeKeys === null && input.hiddenProjectKeys.length === 0) return true;
+    // Filters store logical project keys; resolve them through the sidebar's grouping.
+    const groups = buildSidebarProjectSnapshots({
+      projects: input.projects,
+      groupScratchProjects: true,
+      settings: input.projectGroupingSettings,
+      primaryEnvironmentId: input.primaryEnvironmentId,
+      resolveEnvironmentLabel: () => null,
+    });
+    const projectKey = scopedProjectKey(projectRef);
+    const scoped = resolveSidebarProjectScopePhysicalKeys(
+      groups,
+      input.scopeKeys === null ? null : new Set(input.scopeKeys),
+    );
+    const hidden = resolveSidebarProjectScopePhysicalKeys(groups, new Set(input.hiddenProjectKeys));
+    return (scoped === null || scoped.has(projectKey)) && hidden?.has(projectKey) !== true;
+  };
+}
+
+export function readSidebarProjectFilter(): (projectRef: ScopedProjectRef) => boolean {
+  const uiState = useUiStateStore.getState();
+  return createSidebarProjectFilter({
+    projects: readProjects(),
+    projectGroupingSettings: selectProjectGroupingSettings(getClientSettings()),
+    primaryEnvironmentId: appAtomRegistry.get(primaryEnvironmentIdAtom),
+    scopeKeys: uiState.sidebarProjectScopeKeys,
+    hiddenProjectKeys: uiState.sidebarHiddenProjectKeys,
+    environmentScopeIds: uiState.sidebarV2EnvironmentScopeIds,
+  });
+}
+
 export function resolveDefaultProjectRef(
   projects: ReadonlyArray<EnvironmentProject>,
   projectOrder: readonly string[],
+  lastUsedProjectKey: string | null,
+  fallbackReady = true,
+  // Fork: a remembered project outside the active sidebar filters yields to sidebar order.
+  isRememberedProjectVisible: (projectRef: ScopedProjectRef) => boolean = () => true,
 ): ScopedProjectRef | null {
+  const lastUsed = projects.find(
+    (project) =>
+      project.archivedAt == null &&
+      scopedProjectKey(scopeProjectRef(project.environmentId, project.id)) === lastUsedProjectKey,
+  );
+  if (lastUsed) {
+    const lastUsedRef = scopeProjectRef(lastUsed.environmentId, lastUsed.id);
+    if (isRememberedProjectVisible(lastUsedRef)) return lastUsedRef;
+  }
+  if (!fallbackReady) return null;
   const [defaultProject] = orderItemsByPreferredIds({
     items: projects.filter((project) => project.archivedAt == null),
     preferredIds: projectOrder,
@@ -575,6 +661,19 @@ export function resolveDefaultProjectRef(
 
 export function useHandleNewThread() {
   const projectOrder = useUiStateStore((store) => store.projectOrder);
+  const [lastUsedProjectKey] = useLocalStorage(
+    LAST_USED_PROJECT_STORAGE_KEY,
+    null,
+    lastUsedProjectKeySchema,
+  );
+  const defaultProjectFallbackReady = useAtomValue(
+    defaultProjectFallbackReadyAtom(lastUsedProjectKey),
+  );
+  const sidebarProjectScopeKeys = useUiStateStore((store) => store.sidebarProjectScopeKeys);
+  const sidebarHiddenProjectKeys = useUiStateStore((store) => store.sidebarHiddenProjectKeys);
+  const sidebarEnvironmentScopeIds = useUiStateStore((store) => store.sidebarV2EnvironmentScopeIds);
+  const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
+  const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
   const routeTarget = useThreadRouteTarget();
   const routeThreadRef = routeTarget?.kind === "server" ? routeTarget.threadRef : null;
   const routeDraftId = routeTarget?.kind === "draft" ? routeTarget.draftId : null;
@@ -589,12 +688,26 @@ export function useHandleNewThread() {
   );
   const projects = useProjects();
   const handleNewThread = useNewThreadHandler();
-  const defaultProjectRef = resolveDefaultProjectRef(projects, projectOrder);
+  const defaultProjectRef = resolveDefaultProjectRef(
+    projects,
+    projectOrder,
+    lastUsedProjectKey,
+    defaultProjectFallbackReady,
+    createSidebarProjectFilter({
+      projects,
+      projectGroupingSettings,
+      primaryEnvironmentId,
+      scopeKeys: sidebarProjectScopeKeys,
+      hiddenProjectKeys: sidebarHiddenProjectKeys,
+      environmentScopeIds: sidebarEnvironmentScopeIds,
+    }),
+  );
 
   return {
     activeDraftThread,
     activeThread,
     defaultProjectRef,
+    defaultProjectFallbackReady,
     handleNewThread,
     routeDraftId,
     routeThreadRef,

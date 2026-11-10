@@ -16,12 +16,6 @@ export function resolveKeyboardStickyResetDelay(durationMs: number): number {
 }
 
 /**
- * Deterministic fallback used when the send-triggered hide emits no completion.
- * A healthy `keyboardDidHide` reconciles immediately instead of waiting for it.
- */
-export const KEYBOARD_STICKY_RESET_SEND_DELAY_MS = 700;
-
-/**
  * Delay before the foreground reconciliation pass. iOS can hide the keyboard
  * while the app is inactive and restore it on return; this window is long
  * enough for that restore to emit `keyboardWillShow`, which invalidates the

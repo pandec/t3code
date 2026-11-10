@@ -290,7 +290,7 @@ vi.mock("../features/threads/thread-work-log", () => ({ THREAD_DISCLOSURE_TRANSI
 vi.mock("../features/threads/HtmlRenderWebView", () => ({}));
 vi.mock("../features/threads/McpAppWebView", () => ({}));
 vi.mock("../features/layout/AdaptiveWorkspaceLayout", () => ({
-  useAdaptiveWorkspaceLayout: () => ({ fileInspector: { supported: false } }),
+  useWorkspacePaneState: () => ({ fileInspector: { supported: false } }),
 }));
 vi.mock("../features/threads/thread-workflow-opening", () => ({ useWorkflowOpening: () => null }));
 vi.mock("../features/threads/useFileChipShare", () => ({ useFileChipShare: () => vi.fn() }));
@@ -455,9 +455,6 @@ describe("ThreadInlineFilePreview playback", () => {
             queuedMessages: [],
             dispatchingMessageId: null,
             onEditPendingMessage: null,
-            onAnchorEndSpaceConsumed: () => {},
-            contentInsetBaseline: 0,
-            keyboardVisible: false,
             contentPresentation: { kind: "ready" },
             latestRun: null,
             activeWorkStartedAt: null,
@@ -1397,9 +1394,6 @@ describe("ThreadFeed previews", () => {
           queuedMessages: [],
           dispatchingMessageId: null,
           onEditPendingMessage: null,
-          onAnchorEndSpaceConsumed: () => {},
-          contentInsetBaseline: 0,
-          keyboardVisible: false,
           contentPresentation,
           latestRun: null,
           activeWorkStartedAt: null,
