@@ -1,7 +1,6 @@
 import { liveShellEnvironmentIdsAtom } from "../state/shell";
 import { attachSidebarTree } from "../lib/sidebarTree";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
-import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import {
   dropThreadContext,
   endThreadContextDrag,
@@ -40,6 +39,7 @@ import {
   UNTIL_DONE_SNOOZE_LABEL,
 } from "@t3tools/client-runtime/state/thread-settled";
 import {
+  asLaunchingThread,
   createFoldedAttentionTracker,
   createInboxReturnTracker,
   isThreadWorking,
@@ -126,17 +126,11 @@ import { isElectron } from "../env";
 import {
   resolveShortcutCommand,
   shortcutLabelForCommand,
-  shouldShowThreadJumpHintsForModifiers,
   threadJumpCommandForIndex,
   threadJumpIndexFromCommand,
   threadTraversalDirectionFromCommand,
 } from "../keybindings";
-import { useShortcutModifierState } from "../shortcutModifierState";
-import { isTerminalFocused } from "../lib/terminalFocus";
-import { isPreviewFocused } from "../lib/previewFocus";
 import { isModelPickerOpen } from "../modelPickerVisibility";
-import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
-import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { cn, isMacPlatform } from "~/lib/utils";
 import { readLocalApi } from "../localApi";
 import { configuredHostedAppUrl } from "../hostedPairing";
@@ -164,7 +158,6 @@ import {
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useProjectPin } from "../hooks/useProjectGroupUpdate";
 import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
-import { useTerminalFocus } from "../hooks/useTerminalFocus";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
@@ -268,6 +261,7 @@ import {
   toggleSidebarProjectIsolation,
   toggleSidebarProjectSelection,
   useSnoozeWakeClock,
+  threadShortcutContext,
   useThreadJumpHintsVisible,
   type SidebarListItem,
   type SidebarProjectScope,
@@ -303,7 +297,12 @@ import { Menu, MenuCheckboxItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
-import { composerDraftHasUserContent, DraftId, useComposerDraftStore } from "../composerDraftStore";
+import {
+  composerDraftHasUserContent,
+  DraftId,
+  useComposerDraftStore,
+  usePromotingDraftThreadKeys,
+} from "../composerDraftStore";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
 import {
   SidebarSearchResultRow,
@@ -1453,6 +1452,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   // Rows read their live shell; arranging from quiet shells keeps a running
   // thread's streaming ticks from re-rendering the whole sidebar.
   const threads = useQuietThreadShells();
+  const promotingDraftThreadKeys = usePromotingDraftThreadKeys();
+  const listedThreads =
+    promotingDraftThreadKeys.length === 0
+      ? threads
+      : threads.map((thread) =>
+          promotingDraftThreadKeys.includes(threadShellKey(thread))
+            ? asLaunchingThread(thread)
+            : thread,
+        );
   // Fork: custom thread groups. Headers appear only while the catalog has groups.
   const customGroups = useThreadGroupCatalog();
   const hasCustomGroups = customGroups.groups.length > 0;
@@ -2020,16 +2028,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const dragScrollRef = useRef<{ readonly viewport: Element; readonly top: number } | null>(null);
   const snoozingThreadKeysRef = useRef(new Set<string>());
   const removeFromSelection = useThreadSelectionStore((s) => s.removeFromSelection);
-  const shortcutModifiers = useShortcutModifierState();
-  const terminalFocused = useTerminalFocus();
-  const routeTerminalOpen = useTerminalUiStateStore((state) =>
-    routeThreadRef
-      ? selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef).terminalOpen
-      : false,
-  );
-  const routePreviewOpen = useRightPanelStore(
-    (state) => selectActiveRightPanel(state.byThreadKey, routeThreadRef) === "preview",
-  );
   const connectedEnvironmentIds = useConnectedEnvironmentIds();
   const threadSearch = useThreadSearch(
     connectedEnvironmentIds,
@@ -2084,7 +2082,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     pinnedKeysById,
     activeKeysById,
   } = useSidebarThreads({
-    threads,
+    threads: listedThreads,
     environmentScope,
     environmentScopeActive: !revealClearsEnvironment && environmentFilter.scope !== null,
     scopedProjectKeys,
@@ -2638,8 +2636,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     }
     restoreDragScroll();
     const threads = contextDragThreads();
-    const title =
-      threadByKeyRef.current.get(contextDragKeyRef.current ?? "")?.title.trim() || "Thread";
+    const threadRef = parseScopedThreadKey(contextDragKeyRef.current ?? "");
+    const title = (threadRef && readThreadShell(threadRef)?.title.trim()) || "Thread";
     moveThreadContextDragGhost(point, { title, count: threads.length });
     return true;
   });
@@ -3237,7 +3235,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     children: [
                       ...snoozePresets.map((preset) => ({
                         id: `snooze:${preset.id}`,
-                        label: `${preset.label} (${preset.whenLabel})`,
+                        label: preset.label,
+                        detail: preset.whenLabel,
                         disabled: !canOperateThreads(selectedThreads),
                       })),
                       {
@@ -3896,15 +3895,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       }
       const command = resolveShortcutCommand(event, keybindings, {
         platform: navigator.platform,
-        context: {
-          terminalFocus: isTerminalFocused(),
-          terminalOpen: routeTerminalOpen,
-          previewFocus: isPreviewFocused(),
-          previewOpen: routePreviewOpen,
-          modelPickerOpen: isModelPickerOpen(),
-          isWeb: !isElectron,
-          isDesktop: isElectron,
-        },
+        context: threadShortcutContext(routeThreadRef),
       });
       const navigateToThreadKey = (targetThreadKey: string | null) => {
         if (!targetThreadKey) return false;
@@ -3936,29 +3927,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     keybindings,
     navigateToThread,
     orderedThreadKeys,
-    routePreviewOpen,
     routeRowThreadKey,
-    routeTerminalOpen,
+    routeThreadRef,
     threadByKey,
   ]);
 
-  const shouldShowJumpHintsNow = shouldShowThreadJumpHintsForModifiers(
-    shortcutModifiers,
-    keybindings,
-    {
-      platform: navigator.platform,
-      context: {
-        terminalFocus: terminalFocused,
-        terminalOpen: routeTerminalOpen,
-        previewFocus: isPreviewFocused(),
-        previewOpen: routePreviewOpen,
-        modelPickerOpen: isModelPickerOpen(),
-        isWeb: !isElectron,
-        isDesktop: isElectron,
-      },
-    },
-  );
-  const showJumpHints = useThreadJumpHintsVisible(shouldShowJumpHintsNow);
+  const showJumpHints = useThreadJumpHintsVisible(keybindings, routeThreadRef);
 
   const handleNewThreadClick = (event?: ReactMouseEvent) => {
     const context = {
@@ -4047,7 +4021,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   );
   return (
     <>
-      <ThreadContextDragGhost />
       <SidebarChromeHeader isElectron={isElectron} />
       <SidebarContent
         ref={sidebarContentRef}

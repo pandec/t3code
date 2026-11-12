@@ -97,7 +97,10 @@ const layer = OrchestratorMcpService.layer.pipe(
       Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
         list: () => Effect.succeed([]),
       }),
-      Layer.mock(ProjectService.ProjectService)({}),
+      // `listThreads` validates an explicit projectId before listing.
+      Layer.mock(ProjectService.ProjectService)({
+        getById: (projectId) => Effect.succeedSome({ id: projectId } as never),
+      }),
       Layer.mock(SecretRequests.SecretRequests)({}),
       Layer.mock(RemoteDelegation.RemoteDelegation)({}),
       Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),

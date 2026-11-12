@@ -49,6 +49,7 @@ const THREAD_KEYBINDING_COMMANDS = [
   "thread.rename",
   "thread.snooze",
   "thread.snoozeUntilDone",
+  "thread.regenerateTitle",
   "thread.undo",
   ...THREAD_JUMP_KEYBINDING_COMMANDS,
 ] as const;
@@ -85,6 +86,7 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "preview.zoomIn",
   "preview.zoomOut",
   "preview.resetZoom",
+  "preview.find",
   "commandPalette.toggle",
   "filePicker.toggle",
   "projectSearch.toggle",
@@ -160,8 +162,14 @@ export const KeybindingsConfig = Schema.Array(KeybindingRule).check(
 );
 export type KeybindingsConfig = typeof KeybindingsConfig.Type;
 
+// Untrimmed: the `space` token resolves to the key " ".
+const KeybindingShortcutKey = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(MAX_KEYBINDING_VALUE_LENGTH),
+);
+
 export const KeybindingShortcut = Schema.Struct({
-  key: KeybindingValue,
+  key: KeybindingShortcutKey,
   metaKey: Schema.Boolean,
   ctrlKey: Schema.Boolean,
   shiftKey: Schema.Boolean,

@@ -858,12 +858,29 @@ describe("account switch races (generation fencing, per-thread ownership, compac
               const first = yield* heldTurn(harness, "first");
               yield* providerTurnRunning(first.providerTurnId);
               yield* send(threadId, "follow-up", ACCOUNT_B, { type: "queue_after_active" });
-              // The app thread moves to B while A's conversation is still running.
+              // Upstream refuses a selection change during an active turn, so
+              // stop with the queue held and move the app thread to B while
+              // A still owns the conversation.
+              yield* orchestrator.dispatch({
+                type: "run.interrupt",
+                commandId: CommandId.make(`command:${threadId}:stop-first`),
+                threadId,
+                runId: first.input.runId,
+                holdQueue: true,
+              });
+              yield* completeTurn(first, "interrupted");
+              yield* runSettled(threadId, 1);
+              yield* worker.drain();
               yield* orchestrator.dispatch({
                 type: "thread.model-selection.set",
                 commandId: CommandId.make(`command:${threadId}:select-b`),
                 threadId,
                 modelSelection: ACCOUNT_B,
+              });
+              yield* orchestrator.dispatch({
+                type: "queue.resume",
+                commandId: CommandId.make(`command:${threadId}:resume`),
+                threadId,
               });
               yield* worker.drain();
               yield* runSettled(threadId, 2);
@@ -872,8 +889,6 @@ describe("account switch races (generation fencing, per-thread ownership, compac
           );
           const log = yield* Ref.get(harness.log);
           const nativeA = `native:${threadId}:${ACCOUNT_A.instanceId}`;
-          // (v2 releases A's process on the selection command itself, which ends
-          // the first run; that is upstream behavior and not asserted here.)
           assert.deepEqual(
             [result.runs[1]?.providerInstanceId, result.runs[1]?.status],
             [ACCOUNT_B.instanceId, "completed"],
@@ -1143,6 +1158,7 @@ const makeClaudeRegistry = Effect.gen(function* () {
             }),
           forkSession: () => Effect.die("unused forkSession"),
           subagentLaunchToolUseId: () => Effect.succeed(null),
+          subagentModel: () => Effect.succeed(null),
           assertComplete: Effect.void,
         },
       });

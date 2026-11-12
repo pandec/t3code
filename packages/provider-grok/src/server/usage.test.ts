@@ -283,12 +283,15 @@ describe("grokUsageReader.directories", () => {
   const sessionsDir = (environment: NodeJS.ProcessEnv) =>
     Effect.gen(function* () {
       if (grokUsageReader.kind !== "transcripts") throw new Error("expected a transcript reader");
-      const [directory] = yield* grokUsageReader.directories({
-        instanceId: ProviderInstanceId.make("grok"),
-        config: undefined,
-        environment,
-        configured: true,
-      });
+      const [directory] = yield* grokUsageReader.directories(
+        {
+          instanceId: ProviderInstanceId.make("grok"),
+          config: undefined,
+          environment,
+          configured: true,
+        },
+        { awaitRefresh: true },
+      );
       return directory?.dir;
     }).pipe(
       Effect.provideService(HostProcess.HomeDirectory, "/home/server"),

@@ -537,6 +537,68 @@ it.effect(
     ),
 );
 
+it.effect("steers an early steer edited while its turn became ready once the edit ends", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { started, steered, events, deferRunning, threadId, setup, layer } =
+        yield* scenario("edit-hold-early-steer");
+      yield* Effect.gen(function* () {
+        const { orchestrator, worker, watch, send, hold, endTurn } = yield* setup;
+        yield* send("next", "queue");
+        deferRunning.current = true;
+        yield* endTurn(0);
+        const sendSteer = (id: string) =>
+          orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make(id),
+            threadId,
+            messageId: MessageId.make(`message:${id}`),
+            text: id,
+            attachments: [],
+            dispatchMode: { type: "queue_after_active" },
+            deliveryIntent: "steer",
+            createdBy: "user",
+            creationSource: "web",
+          });
+        yield* sendSteer("edited-steer");
+        yield* sendSteer("later-steer");
+        const steers = (yield* orchestrator.getThreadProjection(threadId)).runs.filter(
+          (run) => run.steerWhenReadyRunId === started[1]!.runId,
+        );
+        const [edited, later] = ["edited-steer", "later-steer"].map((id) =>
+          steers.find((run) => run.userMessageId === MessageId.make(`message:${id}`))!,
+        );
+        yield* hold("hold", edited!.id, true);
+
+        // Delivery passes over the edited steer before it reaches the later one.
+        const joined = (runId: RunId) =>
+          watch(
+            (event) =>
+              event.type === "run.updated" &&
+              event.payload.id === runId &&
+              event.payload.status === "cancelled",
+          );
+        const laterJoined = yield* joined(later!.id);
+        yield* Queue.offer(events, {
+          type: "provider_turn.updated",
+          driver,
+          providerTurn: providerTurnFor(started[1]!, yield* DateTime.now),
+        });
+        yield* Fiber.join(laterJoined);
+        yield* worker.drain();
+        assert.deepEqual(steered, ["later-steer"]);
+
+        const editedJoined = yield* joined(edited!.id);
+        yield* hold("release", edited!.id, false);
+        yield* Fiber.join(editedJoined);
+        yield* worker.drain();
+        assert.deepEqual(steered, ["later-steer", "edited-steer"]);
+        assert.lengthOf(started, 2);
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
 // Fork: deferred archive and worktree switch count runs created after the
 // request as new work, not runs created after the requesting one. `older` is
 // queued first and held for editing; `newer` is reordered ahead of it, so it

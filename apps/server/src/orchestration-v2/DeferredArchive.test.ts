@@ -1723,7 +1723,7 @@ it.layer(makeTestLayer({ continueThreadsAfterServerUpdate: true }))(
         assert.equal(held.request?.status, "pending");
         assert.equal(held.request?.runId, source.id);
 
-        assert.isTrue(yield* worker.runOnce);
+        assert.isTrue(yield* worker.runOnce());
         yield* scheduler.drain;
         const continuation = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
           (candidate) => candidate.restartContinuationOfRunId === source.id,
@@ -1760,7 +1760,7 @@ it.layer(makeTestLayer({ continueThreadsAfterServerUpdate: true }))(
 
         // Nothing to resume: the continuation settles without an event, and the
         // worker re-checks the archive itself.
-        assert.isTrue(yield* worker.runOnce);
+        assert.isTrue(yield* worker.runOnce());
         yield* scheduler.drain;
         assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 1);
         const thread = yield* threadState(threadId);

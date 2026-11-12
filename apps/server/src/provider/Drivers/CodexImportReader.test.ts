@@ -29,6 +29,13 @@ it.effect("passes launch args to the ephemeral app-server process", () => {
       cwd: "/tmp/project",
     }).pipe(Effect.exit);
 
-    assert.deepEqual(spawned?.args, ["app-server", "--strict-config", "--enable", "gateway"]);
+    assert.deepEqual(spawned?.args, [
+      "app-server",
+      "-c",
+      "thread_unload_delay_secs=0",
+      "--strict-config",
+      "--enable",
+      "gateway",
+    ]);
   }).pipe(Effect.provide(Layer.merge(NodeServices.layer, spawnerLayer)));
 });

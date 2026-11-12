@@ -108,6 +108,8 @@ interface ThreadLifecycleInput {
   readonly serverConfig: EnvironmentServerConfig | null;
   readonly runtimeMode: RuntimeMode;
   readonly isWorking: boolean;
+  /** Also true while the server prepares, starts, or queues a run this client did not send. */
+  readonly runIsLive: boolean;
   readonly pendingBackgroundTasks: Parameters<typeof backgroundWorkNowItem>[0]["tasks"];
   /**
    * The run background Stop targets: Stop's own lookup reads a windowed history that may no
@@ -171,6 +173,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     serverConfig,
     runtimeMode,
     isWorking,
+    runIsLive,
     pendingBackgroundTasks,
     backgroundWorkRunId,
     standaloneCommandBlocked,
@@ -427,9 +430,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
   const handleSwitchCheckoutToThreadStable = useStableCallback(() => {
     void handleSwitchCheckoutToThread();
   });
-  // The interrupt path also accepts a completed run while its provider still
-  // has background work.
-  const activeBackgroundTasks = !isWorking && activeThread ? pendingBackgroundTasks : [];
+  const activeBackgroundTasks = activeThread ? pendingBackgroundTasks : [];
   const [backgroundWorkStops, setBackgroundWorkStops] = useState<
     Record<string, BackgroundWorkStopRequest | undefined>
   >({});
@@ -634,7 +635,8 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
         threadId: activeThread.id,
         tasks: activeBackgroundTasks,
         turnItems,
-        stopDisabled: !canOperateThread || isStoppingBackgroundWork,
+        // Interrupt stops the active run first, not this work; the composer owns that Stop.
+        stopDisabled: runIsLive || !canOperateThread || isStoppingBackgroundWork,
         stopping: isStoppingBackgroundWork,
         onStop: handleStopBackgroundWorkStable,
         onOpenThread: onOpenRelatedThreadStable,
@@ -760,6 +762,15 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
           activeThreadPinned ? "Failed to unpin thread" : "Failed to pin thread",
         ),
       );
+    },
+    "thread.regenerateTitle": () => {
+      if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return false;
+      if (!activeThreadShell || !activeThreadRef || !serverConfigLoaded) return;
+      if (activeThreadShell.titleRegeneration != null) return;
+      void updateThreadMetadata({
+        environmentId: activeThreadRef.environmentId,
+        input: { threadId: activeThreadRef.threadId, regenerateTitle: true },
+      }).then(toastThreadActionFailure("Failed to regenerate thread title"));
     },
   } satisfies ChatShortcutCommands;
   return {

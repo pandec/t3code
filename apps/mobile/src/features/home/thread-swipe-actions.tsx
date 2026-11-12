@@ -21,7 +21,7 @@ import type {
   StyleProp,
   ViewStyle,
 } from "react-native";
-import { Pressable, View } from "react-native";
+import { Platform, Pressable, View, useWindowDimensions } from "react-native";
 import ReanimatedSwipeable, {
   type SwipeableMethods,
 } from "react-native-gesture-handler/ReanimatedSwipeable";
@@ -41,6 +41,7 @@ import Animated, {
 } from "react-native-reanimated";
 
 import { AppText as Text } from "../../components/ui/AppText";
+import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import { SwipeRowActivationContext, type SwipeRowActivation } from "./swipe-row-activation";
 import { registerThreadDismissal } from "./thread-dismissal";
 
@@ -49,6 +50,8 @@ const ACTION_CIRCLE_SIZE = 36;
 const ACTION_ICON_SIZE = 15;
 const COMPACT_ACTION_CIRCLE_SIZE = 28;
 const COMPACT_ACTION_ICON_SIZE = 13;
+// At the default app text size, "Unarchive", the longest label, fills its slot at about 1.12x.
+const ACTION_LABEL_MAX_FONT_SCALE = 1.1;
 
 const THREAD_SWIPE_ACTIONS_WIDTH = ACTION_ITEM_WIDTH * 2;
 const THREAD_SWIPE_SPRING = {
@@ -642,6 +645,15 @@ function SwipeActionButton(props: {
   // Left-panel reveal grows with positive translation, right-panel with
   // negative; the stretch offset flips sign with it.
   const revealSign = props.side === "left" ? 1 : -1;
+  const { fontScale } = useWindowDimensions();
+  const labelLineHeight = useScaledTextRole("micro").lineHeight;
+  // Android scales lineHeight by the full font scale, past maxFontSizeMultiplier.
+  const labelTextStyle = {
+    lineHeight:
+      Platform.OS === "android" && fontScale > ACTION_LABEL_MAX_FONT_SCALE
+        ? (labelLineHeight * ACTION_LABEL_MAX_FONT_SCALE) / fontScale
+        : labelLineHeight,
+  };
   const actionStyle = useAnimatedStyle(() => {
     const reveal = Math.max(revealSign * translation.value, 0);
     const entryProgress = interpolate(
@@ -767,13 +779,19 @@ function SwipeActionButton(props: {
           />
         </Animated.View>
       </View>
+      {/* An offset, not padding: padding would grow the box and move the circle at 1x. */}
       <Animated.View
         style={[
-          { height: 14, justifyContent: "center", paddingTop: props.compact ? 0 : 2 },
+          { justifyContent: "center", minHeight: 14, top: props.compact ? 0 : 2 },
           labelStyle,
         ]}
       >
-        <Text className="text-3xs font-t3-medium text-foreground-muted" numberOfLines={1}>
+        <Text
+          className="text-3xs font-t3-medium text-foreground-muted"
+          maxFontSizeMultiplier={ACTION_LABEL_MAX_FONT_SCALE}
+          numberOfLines={1}
+          style={labelTextStyle}
+        >
           {props.label}
         </Text>
       </Animated.View>

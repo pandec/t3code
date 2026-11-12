@@ -205,12 +205,12 @@ export const make = Effect.gen(function* () {
   const advertisedServerSelfUpdate =
     desktopAppUpdateDisabled && serverSelfUpdate === "desktop-managed" ? null : serverSelfUpdate;
   const serverInstallation = serverSelfUpdate === null ? yield* resolveServerInstallation : null;
-  // Desktop and server ship together; a control fd guarantees requestDesktopUpdate support.
-  // WSL backends never get the fd. Packaged Dev sets the disable marker before
-  // spawning its backend so it cannot advertise production app updates.
+  // The desktop reports whether it can install updates; requests travel over its control fd.
+  // Packaged Dev also sets the disable marker so it cannot advertise production app updates.
   const desktopAppUpdate =
     !desktopAppUpdateDisabled &&
     serverSelfUpdate === "desktop-managed" &&
+    serverConfig.desktopAppUpdate === true &&
     serverConfig.desktopTelemetryControlFd !== undefined;
 
   const databaseMigration = databaseMigrationHead(serverConfig.dbPath);

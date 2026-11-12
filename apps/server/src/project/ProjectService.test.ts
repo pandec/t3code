@@ -205,8 +205,8 @@ const layerProjectServiceDependencies = Layer.mergeAll(
   Layer.provideMerge(layerMetadata),
   Layer.provideMerge(SqlitePersistence.layerMemory),
   Layer.provideMerge(ServerSettings.layerTest()),
-  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "project-service-race-" })),
-  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "project-service-race-" })),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 const waitForProject = Effect.fn("ProjectServiceTest.waitForProject")(function* (
@@ -543,6 +543,12 @@ it.layer(layerTest)("ProjectService", (it) => {
         title: "Delete retry",
         workspaceRoot: "/work/delete-retry",
       });
+      // Settle create's enrichment so a late lookup cannot repopulate the retry's read.
+      yield* waitForProject(
+        service,
+        projectId,
+        (project) => project.repositoryIdentity !== null && project.faviconPath !== null,
+      );
       const input = { commandId: CommandId.make("command:delete-retry:delete"), projectId };
       const deleted = yield* service.delete(input);
       assert.deepEqual(yield* service.delete(input), deleted);

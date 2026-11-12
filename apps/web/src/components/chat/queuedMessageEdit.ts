@@ -1,5 +1,6 @@
 import type {
   ChatAttachment,
+  ComposerContextId,
   EnvironmentId,
   ModelSelection,
   OrchestrationMessageContext,
@@ -13,6 +14,7 @@ import {
   type ComposerImageAttachment,
   type ComposerThreadTarget,
 } from "../../composerDraftStore";
+import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 import { randomUUID } from "~/lib/utils";
 import { applyMessageContextRestore, planMessageContextRestore } from "./messageContextRestore";
 
@@ -26,6 +28,7 @@ export function recoverQueuedMessageEdit(input: {
   readonly editTarget: ComposerThreadTarget;
   readonly threadTarget: ComposerThreadTarget;
   readonly originalText: string;
+  readonly originalReplyContextId?: ComposerContextId | undefined;
   /** True when the edit dropped one of the message's saved attachments. */
   readonly removedSavedAttachments?: boolean;
   /** The queued message's model, staged so a resend uses it. */
@@ -44,12 +47,12 @@ export function recoverQueuedMessageEdit(input: {
   const dirty =
     edit !== null &&
     (edit.prompt !== input.originalText ||
+      edit.replyTo?.contextId !== input.originalReplyContextId ||
       edit.images.length > 0 ||
       edit.files.length > 0 ||
       edit.terminalContexts.length > 0 ||
       edit.previewAnnotations.length > 0 ||
       edit.reviewComments.length > 0 ||
-      edit.threadContexts.length > 0 ||
       input.removedSavedAttachments === true);
   // An edit emptied to nothing has nothing to append, so it leaves like an unchanged one.
   const hasContent =
@@ -73,7 +76,19 @@ export function recoverQueuedMessageEdit(input: {
             ...edit.terminalContexts,
           ],
         });
-  const prompt = [destination?.prompt ?? "", restoredContext?.text ?? edit.prompt]
+  // A draft holds one reply: the thread draft's wins, and a different one from the edit
+  // stays as a quote of that response.
+  const destinationReply = destination?.replyTo ?? null;
+  const replyQuote =
+    edit.replyTo !== null &&
+    destinationReply !== null &&
+    destinationReply.contextId !== edit.replyTo.contextId
+      ? serializeAssistantCitation(edit.replyTo.citation)
+      : "";
+  const editText = [replyQuote, restoredContext?.text ?? edit.prompt]
+    .filter((part) => part.trim().length > 0)
+    .join(" ");
+  const prompt = [destination?.prompt ?? "", editText]
     .filter((part) => part.trim().length > 0)
     .join("\n\n");
   // Attachments may exceed the per-message limit here (sending still enforces
@@ -82,6 +97,9 @@ export function recoverQueuedMessageEdit(input: {
   const inputOrigin = edit.inputOrigin ?? destination?.inputOrigin;
   store.moveComposerPromptAndImages(input.editTarget, input.threadTarget, { allowOverflow: true });
   store.setPrompt(input.threadTarget, prompt, inputOrigin);
+  if (edit.replyTo !== null && destinationReply === null) {
+    store.setReplyTo(input.threadTarget, edit.replyTo);
+  }
   if (edit.terminalContexts.length > 0) {
     store.addTerminalContexts(input.threadTarget, [...edit.terminalContexts], {
       appendReference: false,

@@ -5,6 +5,7 @@ import {
   DesktopPreviewPickElementInputSchema,
   DesktopPreviewArtifactInputSchema,
   DesktopPreviewConfigInputSchema,
+  DesktopPreviewFindInPageInputSchema,
   DesktopPreviewNavigateInputSchema,
   DesktopPreviewRecordingArtifactSchema,
   DesktopPreviewRecordingSaveInputSchema,
@@ -76,6 +77,9 @@ export const installPreviewEventForwarding = Effect.fn(
         });
     }
   });
+  yield* manager.subscribeFindResults((event) =>
+    electronWindow.sendAll(IpcChannels.PREVIEW_FIND_RESULT_CHANNEL, event),
+  );
 });
 
 const setForwardedShortcuts = DesktopIpc.makeIpcMethod({
@@ -133,6 +137,21 @@ const navigate = DesktopIpc.makeIpcMethod({
   }),
 });
 
+const findInPage = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_FIND_IN_PAGE_CHANNEL,
+  payload: DesktopPreviewFindInPageInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.findInPage")(function* ({
+    tabId,
+    text,
+    forward,
+    newSession,
+  }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.findInPage(tabId, text, { forward, newSession });
+  }),
+});
+
 const tabMethod = (
   channel: string,
   name: string,
@@ -185,6 +204,11 @@ const hardReload = tabMethod(
   IpcChannels.PREVIEW_HARD_RELOAD_CHANNEL,
   "desktop.ipc.preview.hardReload",
   (manager, tabId) => manager.hardReload(tabId),
+);
+const stopFindInPage = tabMethod(
+  IpcChannels.PREVIEW_STOP_FIND_IN_PAGE_CHANNEL,
+  "desktop.ipc.preview.stopFindInPage",
+  (manager, tabId) => manager.stopFindInPage(tabId),
 );
 const setZoomFactor = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_SET_ZOOM_FACTOR_CHANNEL,
@@ -563,6 +587,8 @@ export const methods = [
   zoomOut,
   resetZoom,
   hardReload,
+  findInPage,
+  stopFindInPage,
   setColorScheme,
   setZoomFactor,
   setAudioMuted,

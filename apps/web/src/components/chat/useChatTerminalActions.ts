@@ -28,8 +28,8 @@ import {
   type RightPanelSurface,
   useRightPanelStore,
 } from "../../rightPanelStore";
-import { isPreviewSupportedInRuntime } from "../../previewStateStore";
 import { openUrlInPreview } from "../../browser/openFileInPreview";
+import { isPreviewAvailableFor } from "../../browser/previewRuntime";
 import { resolveDiscoveredPreviewUrl } from "../preview/openDiscoveredPort";
 import {
   PROJECT_SCRIPT_PREVIEW_WAIT_MS,
@@ -228,7 +228,9 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
     // Opted-in actions reuse a dev server already running in this workspace
     // and open it in the in-app browser instead of starting another one.
     const previewUrl =
-      script.autoOpenPreview && isPreviewSupportedInRuntime() ? (script.previewUrl ?? null) : null;
+      script.autoOpenPreview && isPreviewAvailableFor(environmentId)
+        ? (script.previewUrl ?? null)
+        : null;
     const findScriptServerUrl = async (waitMs: number) => {
       const result = await findWorkspaceServer({
         environmentId,

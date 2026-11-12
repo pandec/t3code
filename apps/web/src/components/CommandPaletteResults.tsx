@@ -1,3 +1,4 @@
+import { startPaletteThreadDrag } from "./CommandPalette.drag";
 import { useLegendListRef } from "~/hooks/useLegendListRef";
 import { type ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import type { AccentTintIntensityPercent } from "@t3tools/contracts/settings";
@@ -81,7 +82,15 @@ export function CommandPaletteResults(props: CommandPaletteResultsProps) {
   );
 }
 
-export function scrollCommandPaletteRowIntoView(list: LegendListRef | null, rowIndex: number) {
+export function scrollCommandPaletteRowIntoView(
+  list: LegendListRef | null,
+  rowIndex: number,
+  isFirstItem: boolean,
+) {
+  if (isFirstItem) {
+    void list?.scrollToOffset({ offset: 0, animated: false });
+    return;
+  }
   void list?.scrollIndexIntoView({
     index: rowIndex,
     animated: false,
@@ -258,6 +267,16 @@ function CommandPaletteResultRow(props: {
         props.item.projectAccentColor,
         props.accentTintIntensityPercent,
       )}
+      onPointerDown={(event) => {
+        if (props.item.threadRef) {
+          startPaletteThreadDrag(
+            event.nativeEvent,
+            props.item.threadRef,
+            props.item.searchTitle ??
+              (typeof props.item.title === "string" ? props.item.title : "Thread"),
+          );
+        }
+      }}
       onMouseDown={(event) => {
         event.preventDefault();
       }}

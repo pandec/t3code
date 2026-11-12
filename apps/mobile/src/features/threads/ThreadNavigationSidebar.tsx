@@ -25,6 +25,7 @@ import { FLOATING_TABS } from "../layout/workspace/floating-workspace-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/ui/AppText";
+import { Button } from "../../components/ui/Button";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { useProjects, useNavigationThreadShells } from "../../state/entities";
 import { useThreadSearch } from "../../state/queries";
@@ -39,7 +40,11 @@ import { ThreadCustomGroupHeader } from "./ThreadCustomGroupHeader";
 import { useThreadListNow } from "./use-thread-list-now";
 import { usePendingThreadOrder } from "../../state/thread-order";
 import { threadListEnvironmentsAtom } from "../../state/presentation";
-import { usePendingNewTasks, type PendingNewTask } from "../../state/use-pending-new-tasks";
+import {
+  useLaunchingThreads,
+  usePendingNewTasks,
+  type PendingNewTask,
+} from "../../state/use-pending-new-tasks";
 import { useQueuedThreadKeys } from "../../state/use-thread-outbox";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -62,7 +67,6 @@ import { RecentArchivedThreadSection } from "./RecentArchivedThreadSection";
 import { mergePendingArchivedThreads } from "../../state/thread-lifecycle-outbox-model";
 import { useFabScroll } from "../home/FabScrollContext";
 import { WorkspaceListHeader } from "../layout/workspace/WorkspaceListHeader";
-import { WORKSPACE_LIST_SCROLL_INSETS } from "../layout/workspace/workspace-list-insets";
 import { WorkspaceSidebarColumn } from "../layout/workspace/WorkspaceSidebarColumn";
 import {
   ThreadListV2PendingRow,
@@ -137,7 +141,9 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
   const { fabClearance, fabSize } = useAndroidControlSizing();
   const projects = useProjects();
   // Fork: offline archive/unarchive intents overlay the canonical shells.
-  const threadLifecyclePresentation = useThreadLifecyclePresentation(useNavigationThreadShells());
+  const threadLifecyclePresentation = useThreadLifecyclePresentation(
+    useLaunchingThreads(useNavigationThreadShells()),
+  );
   const threads = threadLifecyclePresentation.activeThreads;
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
@@ -713,28 +719,45 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       }}
     />
   );
+  const showAddEnvironment =
+    !catalogState.isLoadingConnections &&
+    !catalogState.hasReadyEnvironment &&
+    !catalogState.hasConnectingEnvironment;
   const listEmpty = (
-    <Text
-      className={
-        Platform.OS === "android"
-          ? "px-4 py-4 text-center text-sm text-drawer-foreground-muted"
-          : "px-2 py-4 text-sm text-drawer-foreground-muted"
-      }
-    >
-      {catalogState.isLoadingConnections
-        ? "Loading threads…"
-        : Platform.OS === "android" && !catalogState.hasConnections
-          ? "No environments connected"
-          : props.searchQuery.trim().length > 0
-            ? threadSearch.isPending
-              ? "Searching thread messages…"
-              : "No matching threads"
-            : activeWork
-              ? "No active threads"
-              : selectedProjectScope !== null
-                ? `No threads in ${selectedProjectScope.title}`
-                : "No threads yet"}
-    </Text>
+    <View>
+      <Text
+        className={
+          Platform.OS === "android"
+            ? "px-4 py-4 text-center text-sm text-drawer-foreground-muted"
+            : "px-2 py-4 text-sm text-drawer-foreground-muted"
+        }
+      >
+        {catalogState.isLoadingConnections
+          ? "Loading threads…"
+          : showAddEnvironment
+            ? "No environments connected"
+            : props.searchQuery.trim().length > 0
+              ? threadSearch.isPending
+                ? "Searching thread messages…"
+                : "No matching threads"
+              : activeWork
+                ? "No active threads"
+                : selectedProjectScope !== null
+                  ? `No threads in ${selectedProjectScope.title}`
+                  : "No threads yet"}
+      </Text>
+      {showAddEnvironment ? (
+        <View className={Platform.OS === "android" ? "self-center" : "px-2"}>
+          <Button
+            tone="primary"
+            size="compact"
+            icon="plus"
+            label="Add environment"
+            onPress={props.onOpenEnvironmentSettings}
+          />
+        </View>
+      ) : null}
+    </View>
   );
   // Fork: with archived rows below, "No threads yet" would read as data loss.
   const listEmptyOrArchive = archivedSectionFooter !== null ? null : listEmpty;
@@ -757,7 +780,9 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
                 itemsAreEqual={sidebarItemsAreEqual}
                 keyExtractor={(item) => item.key}
                 renderItem={renderListItem}
-                {...WORKSPACE_LIST_SCROLL_INSETS}
+                automaticallyAdjustsScrollIndicatorInsets
+                // The column lays the list under its bar, glass or solid; UIKit insets it past both.
+                contentInsetAdjustmentBehavior="automatic"
                 contentContainerStyle={[
                   styles.threadListContent,
                   {

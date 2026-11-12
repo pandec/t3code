@@ -17,10 +17,10 @@ export const CLAUDE_SYNTHETIC_MODEL = "<synthetic>";
 const SYNTHETIC_MODEL_FIELD = `"model":${JSON.stringify(CLAUDE_SYNTHETIC_MODEL)}`;
 
 /**
- * Claude Code writes one record per content block, each repeating the message's
- * usage, so the caller keeps the one with most output per `dedupeKey`. Proxied
- * models report nothing until completion (earlier records hold a prompt-size
- * estimate), and about one proxied message in five never gets a completed record.
+ * Claude Code repeats a message's `dedupeKey` for each assistant content block. Subagent blocks
+ * can progress from stream-start to final usage, so callers count each key once using each token
+ * channel's maximum. Proxied models report nothing until completion: earlier records hold a
+ * provisional prompt-size estimate that real usage replaces.
  */
 export function parseClaudeLine(line: string): readonly UsageRecord[] {
   let parsed: unknown;

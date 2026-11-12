@@ -2,6 +2,7 @@ import { stripInlineContextReferences } from "./lib/composerContextReferences";
 import { composerFileAttachmentMimeType } from "./components/chat/composerAttachmentFiles";
 import { elementContextToPreviewAnnotation } from "./lib/elementContext";
 import {
+  ResponseContextRecord,
   ElementContextDetails,
   DEFAULT_MODEL,
   LAB_DEFAULT_BASE_REF,
@@ -112,6 +113,7 @@ const isThreadContextRecord = Schema.is(ThreadContextRecord);
 const isEnvironmentContextRecord = Schema.is(EnvironmentContextRecord);
 const isSnapShotSource = Schema.is(SnapShotSource);
 const isPreviewAnnotationPayload = Schema.is(PreviewAnnotationPayloadSchema);
+const isResponseContextRecord = Schema.is(ResponseContextRecord);
 
 export const COMPOSER_DRAFT_STORAGE_KEY = "t3code:composer-drafts:v1";
 const COMPOSER_DRAFT_STORAGE_VERSION = 9;
@@ -294,6 +296,7 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   reviewComments: Schema.optionalKey(Schema.Array(ReviewCommentContextSchema)),
   threadContexts: Schema.optionalKey(Schema.Array(ThreadContextRecord)),
   environmentContexts: Schema.optionalKey(Schema.Array(EnvironmentContextRecord)),
+  replyTo: Schema.optionalKey(ResponseContextRecord),
   modelSelectionByProvider: Schema.optionalKey(Schema.Record(ProviderInstanceId, ModelSelection)),
   activeProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
   modelSelectionExplicit: Schema.optionalKey(Schema.Boolean),
@@ -367,6 +370,9 @@ const PersistedDraftThreadState = Schema.Struct({
   startFromOrigin: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   lab: Schema.optionalKey(Schema.NullOr(DraftLabIntentSchema)),
   customGroupId: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  checkoutPullRequest: Schema.optionalKey(
+    Schema.Struct({ url: Schema.String, branch: Schema.String }),
+  ),
   promotedTo: Schema.optionalKey(
     Schema.NullOr(
       Schema.Struct({
@@ -422,6 +428,8 @@ export interface ComposerThreadDraftState {
   reviewComments: ReviewCommentContext[];
   threadContexts: ThreadContextRecord[];
   environmentContexts: EnvironmentContextRecord[];
+  /** The response this message replies to. It becomes a context record when the message is sent. */
+  replyTo: ResponseContextRecord | null;
   modelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>>;
   activeProvider: ProviderInstanceId | null;
   modelSelectionExplicit?: boolean;
@@ -449,7 +457,8 @@ export function composerDraftHasUserContent(
     draft.previewAnnotations.length > 0 ||
     draft.reviewComments.length > 0 ||
     draft.threadContexts.length > 0 ||
-    draft.environmentContexts.length > 0
+    draft.environmentContexts.length > 0 ||
+    draft.replyTo !== null
   );
 }
 
@@ -471,10 +480,30 @@ export interface DraftSessionState {
   lab?: DraftLabIntent | null;
   /** Custom thread group the thread joins on first send; null or absent is Active. */
   customGroupId?: string | null;
+  /** Linked to the thread when the draft is sent on this branch. */
+  checkoutPullRequest?: DraftCheckoutPullRequest;
   promotedTo?: ScopedThreadRef | null;
 }
 
 export type DraftThreadState = DraftSessionState;
+
+export interface DraftCheckoutPullRequest {
+  readonly url: string;
+  readonly branch: string;
+}
+
+/**
+ * The pull request to link when this draft becomes a thread. Matching the branch at send time,
+ * rather than clearing on every branch write, matters: right after a local checkout the live
+ * branch sync briefly writes the stale pre-checkout branch back onto the draft before the fresh
+ * git status lands.
+ */
+export function checkoutPullRequestUrlToLink(
+  draft: Pick<DraftSessionState, "branch" | "checkoutPullRequest"> | null | undefined,
+): string | null {
+  const checkout = draft?.checkoutPullRequest;
+  return checkout && draft.branch === checkout.branch ? checkout.url : null;
+}
 
 interface ProjectDraftSession extends DraftSessionState {
   draftId: DraftId;
@@ -528,6 +557,7 @@ interface ComposerDraftStoreState {
       environmentSelection?: "auto" | "manual";
       loadBalancedEnvironmentId?: EnvironmentId | null;
       customGroupId?: string | null;
+      checkoutPullRequest?: DraftCheckoutPullRequest | null;
     },
   ) => void;
   setProjectDraftThreadId: (
@@ -546,6 +576,7 @@ interface ComposerDraftStoreState {
       environmentSelection?: "auto" | "manual";
       loadBalancedEnvironmentId?: EnvironmentId | null;
       customGroupId?: string | null;
+      checkoutPullRequest?: DraftCheckoutPullRequest | null;
     },
   ) => void;
   setDraftThreadContext: (
@@ -563,6 +594,7 @@ interface ComposerDraftStoreState {
       environmentSelection?: "auto" | "manual";
       loadBalancedEnvironmentId?: EnvironmentId | null;
       customGroupId?: string | null;
+      checkoutPullRequest?: DraftCheckoutPullRequest | null;
     },
   ) => void;
   clearProjectDraftThreadId: (projectRef: ScopedProjectRef) => void;
@@ -660,6 +692,7 @@ interface ComposerDraftStoreState {
     annotations: ReadonlyArray<PreviewAnnotationPayload>,
   ) => void;
   removePreviewAnnotation: (threadRef: ComposerThreadTarget, annotationId: string) => void;
+  setReplyTo: (threadRef: ComposerThreadTarget, response: ResponseContextRecord | null) => void;
   addReviewComment: (
     threadRef: ComposerThreadTarget,
     comment: ReviewCommentContext,
@@ -832,6 +865,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   reviewComments: EMPTY_REVIEW_COMMENTS,
   threadContexts: EMPTY_THREAD_CONTEXTS,
   environmentContexts: EMPTY_ENVIRONMENT_CONTEXTS,
+  replyTo: null,
   modelSelectionByProvider: EMPTY_MODEL_SELECTION_BY_PROVIDER,
   activeProvider: null,
   runtimeMode: null,
@@ -850,6 +884,7 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     reviewComments: [],
     threadContexts: [],
     environmentContexts: [],
+    replyTo: null,
     modelSelectionByProvider: {},
     activeProvider: null,
     runtimeMode: null,
@@ -956,6 +991,7 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.reviewComments.length === 0 &&
     draft.threadContexts.length === 0 &&
     draft.environmentContexts.length === 0 &&
+    draft.replyTo === null &&
     Object.keys(draft.modelSelectionByProvider).length === 0 &&
     draft.activeProvider === null &&
     draft.runtimeMode === null &&
@@ -1240,13 +1276,12 @@ export function deriveEffectiveComposerModelState(input: {
         activeSelection.model,
       ))
     : baseModel;
-  // Options come from the first of the draft, thread and project that has any. Their selections
-  // stay with them, so a fallback instance can check which model the options belong to.
+  // Draft options win; otherwise an existing thread's options, even none, outrank the project's.
+  // Selections stay with them, so a fallback instance can check which model the options belong to.
   const optionSelections =
     [
       input.draft?.modelSelectionByProvider,
-      selectionsByInstance(input.threadModelSelection),
-      selectionsByInstance(input.projectModelSelection),
+      selectionsByInstance(input.threadModelSelection ?? input.projectModelSelection),
     ].find((selections) => modelSelectionByProviderToOptions(selections) !== null) ?? null;
   const modelOptions = modelSelectionByProviderToOptions(optionSelections);
 
@@ -1560,6 +1595,7 @@ function createDraftThreadState(
     environmentSelection?: "auto" | "manual";
     loadBalancedEnvironmentId?: EnvironmentId | null;
     customGroupId?: string | null;
+    checkoutPullRequest?: DraftCheckoutPullRequest | null;
   },
 ): DraftThreadState {
   const projectChanged =
@@ -1584,6 +1620,11 @@ function createDraftThreadState(
       : options.startFromOrigin;
   const environmentSelection =
     options?.environmentSelection ?? existingThread?.environmentSelection;
+  const checkoutPullRequest = resolveCheckoutPullRequest(
+    existingThread,
+    options?.checkoutPullRequest,
+    projectChanged,
+  );
   return {
     threadId,
     environmentId: projectRef.environmentId,
@@ -1615,6 +1656,7 @@ function createDraftThreadState(
       options?.customGroupId === undefined
         ? (existingThread?.customGroupId ?? null)
         : options.customGroupId,
+    ...(checkoutPullRequest ? { checkoutPullRequest } : {}),
     promotedTo: null,
   };
 }
@@ -1627,6 +1669,23 @@ function resolveNextDraftLabIntent(
   if (next !== undefined) return next;
   if (!existing) return null;
   return projectChanged && existing.labId !== null ? { ...existing, labId: null } : existing;
+}
+
+/** An explicit value wins; otherwise a checkout's pull request stays with its project. */
+function resolveCheckoutPullRequest(
+  existing: DraftThreadState | undefined,
+  explicit: DraftCheckoutPullRequest | null | undefined,
+  projectChanged: boolean,
+): DraftCheckoutPullRequest | undefined {
+  if (explicit !== undefined) return explicit ?? undefined;
+  return projectChanged ? undefined : existing?.checkoutPullRequest;
+}
+
+function checkoutPullRequestsEqual(
+  left: DraftCheckoutPullRequest | undefined,
+  right: DraftCheckoutPullRequest | undefined,
+): boolean {
+  return left === right || (left?.url === right?.url && left?.branch === right?.branch);
 }
 
 function scopedThreadRefsEqual(
@@ -1661,6 +1720,7 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.startFromOrigin === right.startFromOrigin &&
     draftLabIntentsEqual(left.lab, right.lab) &&
     (left.customGroupId ?? null) === (right.customGroupId ?? null) &&
+    checkoutPullRequestsEqual(left.checkoutPullRequest, right.checkoutPullRequest) &&
     scopedThreadRefsEqual(left.promotedTo, right.promotedTo)
   );
 }
@@ -1698,6 +1758,17 @@ function removeDraftThreadReferences(
     draftThreadsByThreadKey: restDraftThreadsByThreadKey,
     logicalProjectDraftThreadKeyByLogicalProjectKey: nextLogicalMappings,
   };
+}
+
+function normalizePersistedCheckoutPullRequest(value: unknown): DraftCheckoutPullRequest | null {
+  if (!value || typeof value !== "object") return null;
+  const { url, branch } = value as Record<string, unknown>;
+  return typeof url === "string" &&
+    url.length > 0 &&
+    typeof branch === "string" &&
+    branch.length > 0
+    ? { url, branch }
+    : null;
 }
 
 function normalizePersistedDraftThreads(
@@ -1762,6 +1833,9 @@ function normalizePersistedDraftThreads(
       const worktreePath = candidateDraftThread.worktreePath;
       const startFromOrigin = candidateDraftThread.startFromOrigin === true;
       const normalizedWorktreePath = typeof worktreePath === "string" ? worktreePath : null;
+      const checkoutPullRequest = normalizePersistedCheckoutPullRequest(
+        candidateDraftThread.checkoutPullRequest,
+      );
       const promotedToCandidate = candidateDraftThread.promotedTo;
       const promotedToRecord =
         promotedToCandidate && typeof promotedToCandidate === "object"
@@ -1826,6 +1900,7 @@ function normalizePersistedDraftThreads(
           : candidateDraftThread.loadBalancedEnvironmentId === null
             ? { loadBalancedEnvironmentId: null }
             : {}),
+        ...(checkoutPullRequest ? { checkoutPullRequest } : {}),
         promotedTo,
       };
     }
@@ -1972,6 +2047,7 @@ function normalizePersistedDraftsByThreadId(
     const previewAnnotations = Array.isArray(draftCandidate.previewAnnotations)
       ? draftCandidate.previewAnnotations.filter(isPreviewAnnotationPayload)
       : [];
+    const replyTo = isResponseContextRecord(draftCandidate.replyTo) ? draftCandidate.replyTo : null;
     const legacyElements =
       "elementContexts" in draftValue && Array.isArray(draftValue.elementContexts)
         ? draftValue.elementContexts
@@ -2086,6 +2162,7 @@ function normalizePersistedDraftsByThreadId(
       reviewComments.length === 0 &&
       threadContexts.length === 0 &&
       environmentContexts.length === 0 &&
+      replyTo === null &&
       !hasModelData &&
       !runtimeMode &&
       !interactionMode
@@ -2116,6 +2193,7 @@ function normalizePersistedDraftsByThreadId(
       ...(reviewComments.length > 0 ? { reviewComments } : {}),
       ...(threadContexts.length > 0 ? { threadContexts } : {}),
       ...(environmentContexts.length > 0 ? { environmentContexts } : {}),
+      ...(replyTo ? { replyTo: replyTo as DeepMutable<ResponseContextRecord> } : {}),
       ...(hasModelData
         ? {
             modelSelectionByProvider: compactModelSelectionByProvider(modelSelectionByProvider),
@@ -2140,7 +2218,8 @@ function persistedComposerDraftHasUserContent(draft: PersistedComposerThreadDraf
     (draft.previewAnnotations?.length ?? 0) > 0 ||
     (draft.reviewComments?.length ?? 0) > 0 ||
     (draft.threadContexts?.length ?? 0) > 0 ||
-    (draft.environmentContexts?.length ?? 0) > 0
+    (draft.environmentContexts?.length ?? 0) > 0 ||
+    draft.replyTo !== undefined
   );
 }
 
@@ -2220,6 +2299,7 @@ export function partializeComposerDraftStoreState(
       draft.reviewComments.length === 0 &&
       draft.threadContexts.length === 0 &&
       draft.environmentContexts.length === 0 &&
+      draft.replyTo === null &&
       !hasModelData &&
       draft.runtimeMode === null &&
       draft.interactionMode === null
@@ -2278,6 +2358,9 @@ export function partializeComposerDraftStoreState(
         : {}),
       ...(draft.environmentContexts.length > 0
         ? { environmentContexts: draft.environmentContexts.map((record) => ({ ...record })) }
+        : {}),
+      ...(draft.replyTo
+        ? { replyTo: { ...draft.replyTo } as DeepMutable<ResponseContextRecord> }
         : {}),
       ...(hasModelData
         ? {
@@ -2557,6 +2640,7 @@ function toHydratedThreadDraft(
     reviewComments: persistedDraft.reviewComments?.map((comment) => ({ ...comment })) ?? [],
     threadContexts: persistedDraft.threadContexts?.map((record) => ({ ...record })) ?? [],
     environmentContexts: persistedDraft.environmentContexts?.map((record) => ({ ...record })) ?? [],
+    replyTo: persistedDraft.replyTo ?? null,
     modelSelectionByProvider,
     activeProvider,
     ...(persistedDraft.modelSelectionExplicit ? { modelSelectionExplicit: true } : {}),
@@ -2599,6 +2683,9 @@ function toHydratedDraftThreadState(
           loadBalancedEnvironmentId:
             persistedDraftThread.loadBalancedEnvironmentId as EnvironmentId | null,
         }
+      : {}),
+    ...(persistedDraftThread.checkoutPullRequest
+      ? { checkoutPullRequest: persistedDraftThread.checkoutPullRequest }
       : {}),
     promotedTo: persistedDraftThread.promotedTo
       ? scopeThreadRef(
@@ -2859,6 +2946,11 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               (options.branch != null || options.worktreePath != null
                 ? "manual"
                 : existing.environmentSelection);
+            const checkoutPullRequest = resolveCheckoutPullRequest(
+              existing,
+              options.checkoutPullRequest,
+              projectChanged,
+            );
             const nextDraftThread: DraftThreadState = {
               threadId: existing.threadId,
               environmentId: nextProjectRef.environmentId,
@@ -2887,6 +2979,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 options.customGroupId === undefined
                   ? (existing.customGroupId ?? null)
                   : options.customGroupId,
+              ...(checkoutPullRequest ? { checkoutPullRequest } : {}),
               promotedTo: existing.promotedTo ?? null,
             };
             const isUnchanged =
@@ -2904,6 +2997,10 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftThread.startFromOrigin === existing.startFromOrigin &&
               draftLabIntentsEqual(nextDraftThread.lab, existing.lab) &&
               nextDraftThread.customGroupId === (existing.customGroupId ?? null) &&
+              checkoutPullRequestsEqual(
+                nextDraftThread.checkoutPullRequest,
+                existing.checkoutPullRequest,
+              ) &&
               scopedThreadRefsEqual(nextDraftThread.promotedTo, existing.promotedTo);
             if (isUnchanged) {
               return state;
@@ -3856,6 +3953,18 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
         },
+        setReplyTo: (threadRef, response) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef);
+          if (!threadKey) return;
+          set((state) => {
+            const existing = state.draftsByThreadKey[threadKey] ?? createEmptyThreadDraft();
+            const nextDraft = { ...existing, replyTo: response };
+            const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
+            if (shouldRemoveDraft(nextDraft)) delete nextDraftsByThreadKey[threadKey];
+            else nextDraftsByThreadKey[threadKey] = nextDraft;
+            return { draftsByThreadKey: nextDraftsByThreadKey };
+          });
+        },
         removePreviewAnnotation: (threadRef, annotationId) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef);
           if (!threadKey || !annotationId) return;
@@ -4193,6 +4302,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               reviewComments: [],
               threadContexts: [],
               environmentContexts: [],
+              replyTo: null,
             };
             const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
             if (shouldRemoveDraft(nextDraft)) {
@@ -4570,6 +4680,17 @@ export function useComposerDraftModelState(
           }
         : EMPTY_COMPOSER_DRAFT_MODEL_STATE;
     }),
+  );
+}
+
+/** Threads a sent draft is launching into: from their shell's arrival until the server owns the send. */
+export function usePromotingDraftThreadKeys(): ReadonlyArray<string> {
+  return useComposerDraftStore(
+    useShallow((state) =>
+      Object.values(state.draftThreadsByThreadKey).flatMap((draft) =>
+        draft.promotedTo ? [scopedThreadKey(draft.promotedTo)] : [],
+      ),
+    ),
   );
 }
 

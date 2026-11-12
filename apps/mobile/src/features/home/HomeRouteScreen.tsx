@@ -17,7 +17,7 @@ import {
 import { useProjects } from "../../state/entities";
 import { useThreadLifecyclePresentation } from "../archive/useArchivedThreadSnapshots";
 import { environmentThreadShells } from "../../state/threads";
-import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
+import { useLaunchingThreads, usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import {
@@ -49,7 +49,9 @@ export function HomeRouteScreen() {
   const visible = useHomeRouteVisible();
   // Fork: offline archive/unarchive intents overlay the canonical shells.
   const threadLifecyclePresentation = useThreadLifecyclePresentation(
-    useAtomValueWhileVisible(environmentThreadShells.navigationThreadShellsAtom, visible),
+    useLaunchingThreads(
+      useAtomValueWhileVisible(environmentThreadShells.navigationThreadShellsAtom, visible),
+    ),
   );
   const threads = threadLifecyclePresentation.activeThreads;
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();

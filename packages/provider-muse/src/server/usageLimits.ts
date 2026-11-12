@@ -7,8 +7,11 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import type { ProviderUsageLimitsReport } from "@t3tools/provider-core/server/snapshot";
 
 import { LATEST_DATE_MS, type MuseSubscriptionUsage } from "./protocol.ts";
+
+const isoMillis = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 
 const MuseUsageWindow = Schema.Struct({
   usedPercent: Schema.Finite,
@@ -28,9 +31,7 @@ const MuseUsageOutput = Schema.Struct({
 const decodeMuseUsageOutput = Schema.decodeUnknownOption(Schema.fromJsonString(MuseUsageOutput));
 
 function isoFromMs(ms: number | undefined): string | undefined {
-  return ms !== undefined && ms > 0 && ms <= LATEST_DATE_MS
-    ? DateTime.formatIso(DateTime.makeUnsafe(ms))
-    : undefined;
+  return ms !== undefined && ms > 0 && ms <= LATEST_DATE_MS ? isoMillis(ms) : undefined;
 }
 
 const UNSUPPORTED_ALLOWANCE_REASONS = new Map([
@@ -87,14 +88,41 @@ export function museUsageOutputToLimits(
     ];
   };
   const windows = [
-    ...toWindow(allowance.window, { id: "muse-window", kind: "session", label: "Session" }),
-    ...toWindow(allowance.weekly, { id: "muse-weekly", kind: "weekly", label: "Weekly" }),
+    ...toWindow(allowance.window, { id: "session", kind: "session", label: "Session" }),
+    ...toWindow(allowance.weekly, { id: "weekly", kind: "weekly", label: "Weekly" }),
   ];
   // A rate-limited refresh can answer with an older observation; date the bars by it.
   const asOf = isoFromMs(allowance.asOfMs);
   const observedAt =
     asOf !== undefined && Date.parse(asOf) < Date.parse(checkedAt) ? asOf : checkedAt;
   return windows.length > 0 ? makeUsageLimits({ checkedAt: observedAt, windows }) : probeFailed;
+}
+
+/** Muse's account-wide report as Limits windows, with its tier as the plan. */
+export function museUsageToLimits(usage: MuseSubscriptionUsage): ProviderUsageLimitsReport {
+  const tier = usage.tier.trim();
+  return {
+    checkedAt: isoMillis(usage.observedAtMs),
+    windows: [
+      {
+        id: "session",
+        kind: "session",
+        label: "Session",
+        usedPercent: clampPercent(usage.window.usedPercent),
+        resetsAt: isoMillis(usage.window.resetsAtMs),
+        windowDurationMins: usage.window.windowDurationMins,
+      },
+      {
+        id: "weekly",
+        kind: "weekly",
+        label: "Weekly",
+        usedPercent: clampPercent(usage.weekly.usedPercent),
+        resetsAt: isoMillis(usage.weekly.resetsAtMs),
+        windowDurationMins: 7 * 24 * 60,
+      },
+    ],
+    ...(tier ? { authLabel: tier } : {}),
+  };
 }
 
 /** Credential proxies may omit error.quota from 429 refusals; inspect text too. */
@@ -125,5 +153,5 @@ export function museUsageLimitResetAt(
     (ms): ms is number =>
       ms !== undefined && Number.isFinite(ms) && ms > nowMs && ms <= LATEST_DATE_MS,
   );
-  return resets.length > 0 ? DateTime.formatIso(DateTime.makeUnsafe(Math.max(...resets))) : null;
+  return resets.length > 0 ? isoMillis(Math.max(...resets)) : null;
 }

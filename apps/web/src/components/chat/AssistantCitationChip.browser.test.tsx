@@ -63,7 +63,6 @@ function mount(
     return (
       <AssistantCitationChip
         citation={chipCitation}
-        composer
         commentEditor={{ open, sourceAnchor, onOpenChange: setOpen, onSave }}
       />
     );

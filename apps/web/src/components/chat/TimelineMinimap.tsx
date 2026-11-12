@@ -13,7 +13,6 @@ import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { Button } from "../ui/button";
 import {
   resolveTimelineMinimapHeightStyle,
-  resolveTimelineMinimapInteractiveWidth,
   resolveTimelineMinimapNavigationInteractive,
   TIMELINE_MINIMAP_MIN_ITEMS,
 } from "./MessagesTimeline.logic";
@@ -21,10 +20,6 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { formatDayAwareTimestamp } from "../../timestampFormat";
 import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
-
-function timelineMinimapEventTargetsPreview(target: EventTarget): boolean {
-  return target instanceof Element && target.closest("[data-minimap-preview]") !== null;
-}
 
 // A release outside the window can skip `mouseup`, so the next button-free
 // `mousemove` also counts.
@@ -48,6 +43,7 @@ export const TimelineMinimap = memo(function TimelineMinimap({
   hasPersistentGutter,
   hitStripWidth,
   currentIndex = null,
+  atEnd = false,
   items,
   pinnedIds,
   side,
@@ -61,6 +57,7 @@ export const TimelineMinimap = memo(function TimelineMinimap({
   hasPersistentGutter: boolean;
   hitStripWidth: number;
   currentIndex?: number | null;
+  atEnd?: boolean;
   items: ReadonlyArray<TimelineMinimapItem>;
   pinnedIds: ReadonlyArray<string>;
   side: "left" | "right";
@@ -131,7 +128,8 @@ export const TimelineMinimap = memo(function TimelineMinimap({
       : undefined;
   const previousItem =
     resolvedCurrentIndex === null ? null : (items[resolvedCurrentIndex - 1] ?? null);
-  const nextItem = resolvedCurrentIndex === null ? null : (items[resolvedCurrentIndex + 1] ?? null);
+  const nextItem =
+    resolvedCurrentIndex === null || atEnd ? null : (items[resolvedCurrentIndex + 1] ?? null);
 
   const resolveActiveIndexFromPointer = (
     event: MouseEvent<HTMLElement>,
@@ -194,7 +192,7 @@ export const TimelineMinimap = memo(function TimelineMinimap({
           style={{
             height: resolveTimelineMinimapHeightStyle(items.length),
             maxHeight: "100%",
-            width: resolveTimelineMinimapInteractiveWidth(hitStripWidth, activeItem !== null),
+            width: hitStripWidth,
           }}
         >
           {side === "left" ? (
@@ -214,15 +212,12 @@ export const TimelineMinimap = memo(function TimelineMinimap({
               primaryText: activeItem?.primaryText ?? null,
               side,
             })}
-            className="absolute inset-y-0 left-0 w-full cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+            className="absolute inset-y-0 left-0 w-full cursor-pointer bg-transparent before:absolute before:inset-x-0 before:-inset-y-1 before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
             onBlur={() => {
               setActiveIndex(null);
               setKeyboardNavigating(false);
             }}
             onClick={(event) => {
-              if (timelineMinimapEventTargetsPreview(event.target)) {
-                return;
-              }
               const nextIndex = resolveActiveIndexFromPointer(event);
               const selectedItem = nextIndex === null ? null : (items[nextIndex] ?? null);
               if (selectedItem) {
@@ -263,12 +258,7 @@ export const TimelineMinimap = memo(function TimelineMinimap({
               setKeyboardNavigating(false);
               setActiveIndex(resolveActiveIndexFromPointer(event, readingScrollOffset));
             }}
-            onMouseDown={(event) => {
-              if (timelineMinimapEventTargetsPreview(event.target)) {
-                return;
-              }
-              event.preventDefault();
-            }}
+            onMouseDown={(event) => event.preventDefault()}
             type="button"
           >
             <div
@@ -340,13 +330,12 @@ export const TimelineMinimap = memo(function TimelineMinimap({
               </div>
             </div>
             {activeItem ? (
+              // Display-only: it overlaps the message column, and the strip keeps tracking beneath it.
               <span
                 className={cn(
-                  "pointer-events-auto absolute w-80 cursor-text select-text",
+                  "pointer-events-none absolute w-80",
                   side === "left" ? "left-8" : "right-8",
                 )}
-                data-minimap-preview
-                onMouseMove={(event) => event.stopPropagation()}
                 style={{
                   top:
                     resolveTimelineMinimapStripTop(resolvedActiveIndex ?? 0, spacing) -
@@ -418,7 +407,7 @@ function TimelineMinimapNavigationButton({
             className={cn(
               "absolute left-1 z-10 inline-flex -translate-x-1/2 opacity-0 transition-opacity duration-150 hover:opacity-100 focus-within:opacity-100",
               interactive ? "pointer-events-auto" : "pointer-events-none",
-              previous ? "bottom-[calc(100%+2px)]" : "top-[calc(100%+2px)]",
+              previous ? "bottom-[calc(100%+6px)]" : "top-[calc(100%+6px)]",
             )}
           />
         }

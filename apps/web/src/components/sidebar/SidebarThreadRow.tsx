@@ -1,4 +1,5 @@
 import { useAtomMount } from "@effect/atom-react";
+import { asLaunchingThread } from "@t3tools/client-runtime/state/thread-inbox";
 import { ThreadHoverCard, ThreadHoverCardPopup } from "../ThreadHoverCard";
 import {
   ThreadTerminalStatusButton,
@@ -110,6 +111,7 @@ import {
   shouldRecedeSidebarThread,
   resolveWorkingStartedAt,
   useRetainedValue,
+  withoutRemovedCheckout,
   useSidebarRowSubscriptionLease,
   setFileDragActive,
 } from "../Sidebar.logic";
@@ -533,9 +535,16 @@ export function SortableThreadRow(
   };
   // The sidebar arranges rows from quiet shells, which hold still while a
   // thread streams; reading the live shell here re-renders only this row.
+  const liveThread = useThreadShell(
+    scopeThreadRef(rowProps.thread.environmentId, rowProps.thread.id),
+  );
+  // A runtime on the arranged copy but not the run-less live shell is the list's launch overlay.
   const thread =
-    useThreadShell(scopeThreadRef(rowProps.thread.environmentId, rowProps.thread.id)) ??
-    rowProps.thread;
+    liveThread === null
+      ? rowProps.thread
+      : rowProps.thread.runtime !== null
+        ? asLaunchingThread(liveThread)
+        : liveThread;
   // Keyed by variant so a card/slim switch remounts the row.
   return <SidebarThreadRow key={rowProps.variant} {...rowProps} thread={thread} sortable={bag} />;
 }
@@ -624,7 +633,7 @@ type SidebarThreadRowProps = {
   wokeOnFinishedWork: boolean;
   isActive: boolean;
   // Set on the active row only; scrolls it into view when a reveal is owed.
-  revealRef?: ((row: HTMLElement, threadKey: string) => void) | undefined;
+  revealRef?: ((row: HTMLElement, threadKey: string) => (() => void) | undefined) | undefined;
   // Unlike isActive, never true for the ancestor standing in for an open
   // subagent: drafts and PR clicks care about which composer is on screen.
   isRouteThread: boolean;
@@ -756,8 +765,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const { leaseLiveStatus, rowRef: leaseRowRef } = useSidebarRowSubscriptionLease(props.isActive);
   const { revealRef } = props;
   const rowRef = (row: HTMLElement | null) => {
-    if (row !== null) revealRef?.(row, threadKey);
-    return leaseRowRef(row);
+    const stopReveal = row === null ? undefined : revealRef?.(row, threadKey);
+    const releaseLease = leaseRowRef(row);
+    if (!stopReveal) return releaseLease;
+    return () => {
+      stopReveal();
+      releaseLease?.();
+    };
   };
   const isRegeneratingTitle = thread.titleRegeneration != null;
   const localLastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
@@ -813,6 +827,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     JSON.stringify([thread.environmentId, gitCwd]),
     gitStatus.data,
   );
+  const checkoutThread = withoutRemovedCheckout(thread, visibleGitStatus);
   const pr = linkedPullRequestStatus?.pr ?? null;
   const supportsMultiplePullRequests = useSupportsMultiplePullRequests(thread.environmentId);
   const currentLinkedPr = supportsMultiplePullRequests
@@ -930,11 +945,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     : thread.modelSelection.model;
 
   const isRemote = thread.environmentId !== props.currentEnvironmentId;
-  const showsScratchMachine = !thread.branch && props.scratchMachineLabel !== null;
+  const showsScratchMachine = !checkoutThread.branch && props.scratchMachineLabel !== null;
 
   const detailsTooltip = (
     <SidebarThreadTooltip
-      thread={thread}
+      thread={checkoutThread}
       project={props.project}
       projectDisplayName={props.projectDisplayName}
       environmentLabel={props.environmentLabel}
@@ -1383,7 +1398,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   );
   // Only the trailing icons would remain, so the row moves them to the title line instead.
   const metaLineEmpty =
-    !thread.branch &&
+    !checkoutThread.branch &&
     !showsScratchMachine &&
     splitPaneIcon === null &&
     prBadge === null &&
@@ -1394,11 +1409,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       {/* Always the branch. The plan step used to take this slot while
           working, but it truncated to a half-sentence and dropped the
           branch, so the row lost its most stable identifier. */}
-      {thread.branch ? (
+      {checkoutThread.branch ? (
         <>
-          <ThreadWorktreeIndicator thread={thread} />
+          <ThreadWorktreeIndicator thread={checkoutThread} />
           <span className="flex min-w-0 flex-1">
-            <MiddleTruncate value={thread.branch} showTitle={false} />
+            <MiddleTruncate value={checkoutThread.branch} showTitle={false} />
           </span>
         </>
       ) : showsScratchMachine ? (
@@ -2073,6 +2088,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
     JSON.stringify([thread.environmentId, gitCwd]),
     gitStatus.data,
   );
+  const checkoutThread = withoutRemovedCheckout(thread, visibleGitStatus);
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
     effectiveEnvMode: thread.worktreePath === null ? "local" : "worktree",
     activeWorktreePath: thread.worktreePath,
@@ -2192,7 +2208,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
           </span>
         </TooltipTrigger>
         <SidebarThreadTooltip
-          thread={thread}
+          thread={checkoutThread}
           project={props.project}
           projectDisplayName={props.projectDisplayName}
           environmentLabel={props.environmentLabel}

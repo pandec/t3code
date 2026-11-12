@@ -1,6 +1,10 @@
-import { PanelBottomIcon, PanelRightIcon, SquareMenuIcon } from "lucide-react";
-import { Maximize2, Minimize2 } from "lucide";
-import { MorphIcon } from "~/components/MorphIcon";
+import {
+  PanelBottomIcon,
+  PanelRightIcon,
+  SquareMenuIcon,
+  Maximize2Icon,
+  Minimize2Icon,
+} from "lucide-react";
 import { memo, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
@@ -8,6 +12,7 @@ import { cn } from "~/lib/utils";
 import type { ThreadPanelPresentation } from "../../rightPanelLayout";
 import { OpenSplitViewControl } from "../thread-split/PaneControls";
 import { PopoverCreateHandle, PopoverTrigger } from "../ui/popover";
+import { useMobileSidebarSheetMounted } from "../ui/sidebar";
 import { Toggle } from "../ui/toggle";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
@@ -157,7 +162,11 @@ export const RightPanelMaximizeControl = memo(function RightPanelMaximizeControl
             variant="ghost"
             size="sm"
           >
-            <MorphIcon className="size-4" icon={maximized ? Minimize2 : Maximize2} />
+            {maximized ? (
+              <Minimize2Icon className="size-4" />
+            ) : (
+              <Maximize2Icon className="size-4" />
+            )}
           </Toggle>
         }
       />
@@ -168,9 +177,13 @@ export const RightPanelMaximizeControl = memo(function RightPanelMaximizeControl
 
 /** The thread panel toggle on a header whose right side the inline right panel covers. */
 export function ThreadPanelHeaderControl(props: PanelLayoutControlsProps) {
+  const mobileSidebarSheetMounted = useMobileSidebarSheetMounted();
   return (
     <div
-      className="absolute top-[var(--workspace-controls-top)] right-[calc(env(safe-area-inset-right)+0.75rem)] z-50 flex h-[var(--workspace-topbar-height)] items-center [-webkit-app-region:no-drag]"
+      className={cn(
+        "absolute top-[var(--workspace-controls-top)] right-[calc(env(safe-area-inset-right)+0.75rem)] z-50 flex h-[var(--workspace-topbar-height)] items-center [-webkit-app-region:no-drag]",
+        mobileSidebarSheetMounted && "hidden",
+      )}
       data-workspace-titlebar-controls
     >
       <PanelLayoutControls
@@ -195,6 +208,7 @@ export function WorkspaceTitlebarControls(props: {
   readonly onToggleMaximized: () => void;
   readonly children: ReactNode;
 }) {
+  const mobileSidebarSheetMounted = useMobileSidebarSheetMounted();
   return (
     <div
       className={cn(
@@ -207,6 +221,7 @@ export function WorkspaceTitlebarControls(props: {
         props.touchesWindowRightEdge
           ? "fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)]"
           : "absolute inset-y-0 right-3",
+        mobileSidebarSheetMounted && "hidden",
       )}
       data-workspace-titlebar-controls
     >

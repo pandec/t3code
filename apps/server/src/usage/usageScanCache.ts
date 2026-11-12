@@ -7,19 +7,21 @@ import type {
 import * as Schema from "effect/Schema";
 
 import { CLAUDE_SYNTHETIC_MODEL } from "../provider/Drivers/claudeUsage.ts";
+import { mergeUsageCopies } from "./usageAggregation.ts";
 import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptReader.ts";
 
-// Fork and upstream v4-v11 share versions with different layouts, identified by `x`/`tx`.
-const USAGE_SCAN_CACHE_VERSION = 12 as const;
+// Fork and upstream v4-v12 share versions with different layouts, identified by `x`/`tx`.
+const USAGE_SCAN_CACHE_VERSION = 13 as const;
 const OLDEST_MIGRATED_VERSION = 4;
 
 /**
  * Each cache version writes its own file, so an older server sharing the state dir cannot replace a
  * newer cache and drop saved usage. Without its own file, this server migrates older builds' files:
- * fork v4/v5 and upstream v4 share the unversioned name, upstream v5 has its own, v6-v11 share theirs.
+ * fork v4/v5 and upstream v4 share the unversioned name, upstream v5 has its own, v6-v12 share theirs.
  */
-export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v12.json";
+export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v13.json";
 export const LEGACY_SCAN_CACHE_FILE_NAMES = [
+  "usage-scan-cache-v12.json",
   "usage-scan-cache-v11.json",
   "usage-scan-cache.json",
   "usage-scan-cache-v5.json",
@@ -158,32 +160,28 @@ function serializeFile(entry: CachedFile, tables: InternTables): SerializedFile 
   };
 }
 
-/** Memoizes immutable entries by identity; growing intern tables preserve indexes, retaining unused strings until restart. */
+/** Yields the document in pieces so large caches never become one string; growing intern tables preserve indexes, retaining unused strings until restart. */
 export function makeScanCacheWriter(): (
   cache: ScanCache,
   extra: Readonly<Record<string, unknown>>,
-) => string {
+) => Iterable<string> {
   const tables = makeInternTables();
-  const fragments = new WeakMap<CachedFile, string>();
-  return (cache, extra) => {
-    const files: string[] = [];
-    for (const [path, entry] of cache) {
-      let fragment = fragments.get(entry);
-      if (fragment === undefined) {
-        fragment = JSON.stringify(serializeFile(entry, tables));
-        fragments.set(entry, fragment);
-      }
-      files.push(`${JSON.stringify(path)}:${fragment}`);
+  function* encode(entries: readonly (readonly [string, CachedFile])[], extra: object) {
+    yield '{"files":{';
+    for (const [index, [path, entry]] of entries.entries()) {
+      yield `${index === 0 ? "" : ","}${JSON.stringify(path)}:${JSON.stringify(serializeFile(entry, tables))}`;
     }
     // Encoded after the files, which may have added to the intern tables.
-    const head = JSON.stringify({
+    const tail = JSON.stringify({
       ...extra,
       version: USAGE_SCAN_CACHE_VERSION,
       models: tables.models,
       sessions: tables.sessions,
     });
-    return `${head.slice(0, -1)},"files":{${files.join(",")}}}`;
-  };
+    yield `},${tail.slice(1)}`;
+  }
+  // Snapshot now: the encoding runs later, while the file is written.
+  return (cache, extra) => encode([...cache], extra);
 }
 
 function isRecordArray(value: unknown): value is readonly unknown[] {
@@ -202,6 +200,7 @@ function isCount(value: unknown): value is number {
  */
 type EntryLayout =
   | "current"
+  | "forkV12"
   | "forkV11"
   | "forkV10"
   | "forkV9"
@@ -210,6 +209,7 @@ type EntryLayout =
   | "forkV6"
   | "forkV5"
   | "forkV4"
+  | "upstreamV12"
   | "upstreamV11"
   | "upstreamV10"
   | "upstreamV9"
@@ -222,6 +222,7 @@ type EntryLayout =
 function entryLayout(version: number, entry: Partial<SerializedFile>): EntryLayout | null {
   if (version === USAGE_SCAN_CACHE_VERSION) return "current";
   const fork = entry.x !== undefined || entry.tx !== undefined;
+  if (version === 12) return fork ? "forkV12" : "upstreamV12";
   if (version === 11) return fork ? "forkV11" : "upstreamV11";
   if (version === 10) return fork ? "forkV10" : "upstreamV10";
   if (version === 9) return fork ? "forkV9" : "upstreamV9";
@@ -236,6 +237,7 @@ function entryLayout(version: number, entry: Partial<SerializedFile>): EntryLayo
 /** Shortest row each layout writes; the columns after it are absent. */
 const ROW_LENGTH: Record<EntryLayout, number> = {
   current: 12,
+  forkV12: 12,
   forkV11: 12,
   forkV10: 12,
   forkV9: 12,
@@ -244,6 +246,7 @@ const ROW_LENGTH: Record<EntryLayout, number> = {
   forkV6: 12,
   forkV5: 12,
   forkV4: 10,
+  upstreamV12: 11,
   upstreamV11: 11,
   upstreamV10: 11,
   upstreamV9: 11,
@@ -257,12 +260,14 @@ const ROW_LENGTH: Record<EntryLayout, number> = {
 /** Layouts whose speed column may hold ultrafast, not just the legacy `fast` flag. */
 const ULTRAFAST_LAYOUTS: ReadonlySet<EntryLayout> = new Set([
   "current",
+  "forkV12",
   "forkV11",
   "forkV10",
   "forkV9",
   "forkV8",
   "forkV7",
   "forkV6",
+  "upstreamV12",
   "upstreamV11",
   "upstreamV10",
   "upstreamV9",
@@ -275,6 +280,7 @@ const ULTRAFAST_LAYOUTS: ReadonlySet<EntryLayout> = new Set([
 /** Layouts whose rows always carry `rateModel`; upstream's may append it. */
 const RATE_MODEL_LAYOUTS: ReadonlySet<EntryLayout> = new Set([
   "current",
+  "forkV12",
   "forkV11",
   "forkV10",
   "forkV9",
@@ -338,9 +344,10 @@ export function decodeScanCache(
         rateModelIndex,
       ] = row as SerializedRecord;
       // Fork v7+ layouts append provisional and one-hour columns; upstream
-      // v7–v11 put their tier turn where the fork's provisional flag sits.
+      // v7–v12 put their tier turn where the fork's provisional flag sits.
       const forkTurnColumn =
         layout === "current" ||
+        layout === "forkV12" ||
         layout === "forkV11" ||
         layout === "forkV10" ||
         layout === "forkV9" ||
@@ -350,7 +357,8 @@ export function decodeScanCache(
       const oneHourCacheCreationTokens = forkColumns ? row[13] : undefined;
       const unresolvedServiceTierTurnId = forkTurnColumn
         ? row[14]
-        : layout === "upstreamV11" ||
+        : layout === "upstreamV12" ||
+            layout === "upstreamV11" ||
             layout === "upstreamV10" ||
             layout === "upstreamV9" ||
             layout === "upstreamV8" ||
@@ -449,6 +457,8 @@ export function decodeScanCache(
     ) {
       continue;
     }
+    // Fork v12 Codex state already buffers interrupted requests.
+    const currentCodex = layout === "current" || layout === "forkV12";
     const requiresReparse =
       entry.reparse === true ||
       !countsMalformed ||
@@ -456,17 +466,17 @@ export function decodeScanCache(
       // Malformed old Codex scans may have discarded interrupted requests; older reducers
       // also lack cumulative reconciliation and tier provenance.
       (entry.p === "codex" &&
-        layout !== "current" &&
+        !currentCodex &&
         ((layout !== "forkV11" && layout !== "forkV10" && layout !== "forkV9") ||
           entry.x !== 0 ||
           entry.tx !== 0)) ||
-      // Fork v11 added Claude advisor records.
-      (entry.p === "claude" && layout !== "current" && layout !== "forkV11");
+      // Before v13 a repeated Claude key kept one whole copy, not each token channel's maximum.
+      (entry.p === "claude" && layout !== "current");
     const migrated = layout !== "current" && requiresReparse;
     // A corrupt state must not attribute appended usage to another model or replay copied history.
     if (!migrated && !isValidState(entry.p, entry.cs)) continue;
-    // Clean old Codex records remain useful unchanged, but lack buffered interrupted requests.
-    const resumable = !requiresReparse && !(entry.p === "codex" && layout !== "current");
+    // Clean pre-v12 Codex records remain useful unchanged, but lack buffered interrupted requests.
+    const resumable = !requiresReparse && !(entry.p === "codex" && !currentCodex);
 
     const provider = entry.p;
     const records = decodeRecords(entry.r, provider, layout);
@@ -524,60 +534,20 @@ export function pruneScanCache(cache: ScanCache, retentionCutoffMs: number): num
   return removed;
 }
 
-/**
- * Whether `candidate` should replace `kept`, an earlier record with the same
- * dedupe key. Real usage replaces a provisional estimate. Claude Code writes a
- * message's records as growing snapshots, so its record with the most output
- * is the completed one. Otherwise the first record wins, as in ccusage.
- */
-function supersedesUsageRecord(candidate: UsageRecord, kept: UsageRecord): boolean {
-  const keptProvisional = kept.provisional === true;
-  if (keptProvisional !== (candidate.provisional === true)) return keptProvisional;
-  return (
-    candidate.provider === "claude" && candidate.totals.outputTokens > kept.totals.outputTokens
-  );
-}
-
-/**
- * Within-file de-duplication, applied before an entry is cached. One record
- * survives per dedupe key, at the position of the key's first record.
- */
+/** Pass only newline-terminated records: an unterminated tail can still change, so the aggregator merges it per scan. */
 export function dedupeWithinFile(records: readonly UsageRecord[]): readonly UsageRecord[] {
   const kept: UsageRecord[] = [];
-  const indexByKey = new Map<string, number>();
+  const firstIndex = new Map<string, number>();
   for (const record of records) {
-    if (record.dedupeKey === null) {
-      kept.push(record);
-      continue;
+    if (record.dedupeKey !== null) {
+      const index = firstIndex.get(record.dedupeKey);
+      if (index !== undefined) {
+        kept[index] = mergeUsageCopies(kept[index]!, record);
+        continue;
+      }
+      firstIndex.set(record.dedupeKey, kept.length);
     }
-    const index = indexByKey.get(record.dedupeKey);
-    if (index === undefined) {
-      indexByKey.set(record.dedupeKey, kept.length);
-      kept.push(record);
-    } else if (supersedesUsageRecord(record, kept[index]!)) {
-      kept[index] = record;
-    }
+    kept.push(record);
   }
   return kept;
-}
-
-/**
- * The record each dedupe key keeps across a whole scan, by the same rule as
- * `dedupeWithinFile`. A resumed or forked Claude session copies records into
- * another transcript, so the completed record may sit in a later file.
- */
-export function selectDedupeWinners(
-  files: readonly { readonly records: readonly UsageRecord[] }[],
-): ReadonlyMap<string, UsageRecord> {
-  const winners = new Map<string, UsageRecord>();
-  for (const { records } of files) {
-    for (const record of records) {
-      if (record.dedupeKey === null) continue;
-      const kept = winners.get(record.dedupeKey);
-      if (kept === undefined || supersedesUsageRecord(record, kept)) {
-        winners.set(record.dedupeKey, record);
-      }
-    }
-  }
-  return winners;
 }

@@ -56,7 +56,6 @@ import {
 import {
   decodeScanCache,
   dedupeWithinFile,
-  selectDedupeWinners,
   LEGACY_SCAN_CACHE_FILE_NAMES,
   makeScanCacheWriter,
   pruneScanCache,
@@ -79,6 +78,7 @@ const MTIME_SLACK_MS = 36 * 60 * 60 * 1000;
 const MAX_HOURLY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const CACHE_RETENTION_DAYS = 92;
+const STALE_TEMP_DIRECTORY_MS = 60 * 60 * 1000;
 
 const TRANSCRIPT_READ_CONCURRENCY = 4;
 
@@ -189,7 +189,7 @@ export const make = Effect.gen(function* () {
   const legacyScanCachePaths = LEGACY_SCAN_CACHE_FILE_NAMES.map((name) =>
     path.join(config.stateDir, name),
   );
-  const writeCacheFile = (filePath: string, contents: string) =>
+  const writeCacheFile = (filePath: string, contents: string | Iterable<string>) =>
     writeFileStringAtomically({ filePath, contents }).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
@@ -346,16 +346,25 @@ export const make = Effect.gen(function* () {
   const resolveTranscriptDirs = Effect.fn("UsageService.resolveTranscriptDirs")(function* (
     settings: ServerSettingsValue,
     retentionCutoffMs: number,
+    awaitRefresh: boolean,
   ) {
     const dirs: Array<TranscriptSource> = [];
+    const pending: Array<ScannedDir> = [];
     const seen = new Set<string>();
     for (const { driver, reader } of transcriptReaders) {
       const { provider, format } = reader;
       const directories = yield* Effect.forEach(
         yield* usageInstances(driver, settings),
-        (instance) => reader.directories(instance),
+        (instance) => reader.directories(instance, { awaitRefresh }),
       );
-      for (const { dir: directory, fileName } of directories.flat()) {
+      for (const { dir: directory, fileName, refreshing } of directories.flat()) {
+        if (refreshing) {
+          const key = `${provider}\0${directory}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          pending.push({ provider, dir: directory, volumeId: "", files: [], refreshing });
+          continue;
+        }
         const sourceKey = provider + "\0" + directory;
         const previous = sourceCache.get(sourceKey);
         const dir = yield* fileSystem
@@ -392,7 +401,7 @@ export const make = Effect.gen(function* () {
         });
       }
     }
-    return dirs;
+    return { dirs, pending };
   });
 
   // Share first loads so concurrent readers cannot scan against a still-empty cache.
@@ -429,6 +438,29 @@ export const make = Effect.gen(function* () {
   // Serialize writes so concurrently finished window scans cannot overwrite newer snapshots.
   const persistLock = yield* Semaphore.make(1);
 
+  // Older builds may still share this state dir, so their cache files stay. Temp folders an aborted
+  // write left behind are removed once idle for an hour, so a write in progress from another server survives.
+  let staleTempDirectoriesRemoved = false;
+  const removeStaleTempDirectories = Effect.gen(function* () {
+    const tempPrefixes = [SCAN_CACHE_FILE_NAME, ...LEGACY_SCAN_CACHE_FILE_NAMES].map(
+      (fileName) => `${fileName}.`,
+    );
+    const staleBeforeMs = (yield* Clock.currentTimeMillis) - STALE_TEMP_DIRECTORY_MS;
+    for (const name of yield* fileSystem.readDirectory(config.stateDir)) {
+      if (!tempPrefixes.some((prefix) => name.startsWith(prefix))) continue;
+      const tempPath = path.join(config.stateDir, name);
+      yield* fileSystem.stat(tempPath).pipe(
+        Effect.flatMap((info) => {
+          const mtimeMs = Option.getOrUndefined(info.mtime)?.getTime();
+          return info.type === "Directory" && mtimeMs !== undefined && mtimeMs <= staleBeforeMs
+            ? fileSystem.remove(tempPath, { recursive: true })
+            : Effect.void;
+        }),
+        Effect.ignore,
+      );
+    }
+  }).pipe(Effect.ignore);
+
   // Clear dirty before encoding to retain concurrent changes; restore it on failure for retry.
   const persistCaches = Effect.gen(function* () {
     if (cacheDirty) {
@@ -437,6 +469,13 @@ export const make = Effect.gen(function* () {
         writeScanCache(fileCache, { sources: Object.fromEntries(sourceCache) }),
       ).pipe(
         Effect.flatMap((contents) => writeCacheFile(scanCachePath, contents)),
+        Effect.andThen(
+          Effect.suspend(() => {
+            if (staleTempDirectoriesRemoved) return Effect.void;
+            staleTempDirectoriesRemoved = true;
+            return removeStaleTempDirectories;
+          }),
+        ),
         Effect.catchCause(() =>
           Effect.sync(() => {
             cacheDirty = true;
@@ -473,7 +512,7 @@ export const make = Effect.gen(function* () {
   /**
    * Reads run concurrently, and the caller stores updates in walk order rather
    * than completion order: saved records of deleted transcripts aggregate in
-   * cache order, where the first copy of a duplicate wins. Untraced: a scan
+   * cache order, where the first copy of a duplicate decides its bucket. Untraced: a scan
    * reads thousands of files, so scanTranscriptDir records the counts instead.
    */
   const readFileRecords = Effect.fnUntraced(function* (
@@ -559,16 +598,9 @@ export const make = Effect.gen(function* () {
         }
       }
     }
-
-    // Cached records are already deduped within the file; the aggregator still dedupes across files.
-    // Base, new lines and tail dedupe as one sequence so a resumed parse keeps a full parse's record
-    // per key. The previous tail is excluded because the reader re-reads it, and a tail record that
-    // replaced an earlier one stays a tail record so the next resumed parse reads it again.
-    const baseRecords = resumedFromCache ? cached.records : [];
-    const tail = new Set(parsed.tailRecords);
-    const kept = dedupeWithinFile([...baseRecords, ...parsed.records, ...parsed.tailRecords]);
-    const records = tail.size === 0 ? kept : kept.filter((record) => !tail.has(record));
-    const tailRecords = tail.size === 0 ? [] : kept.filter((record) => tail.has(record));
+    const base = resumedFromCache ? cached.records : [];
+    const records = dedupeWithinFile([...base, ...parsed.records]);
+    const tailRecords = parsed.tailRecords;
     const malformedRecords =
       (resumedFromCache ? cached.malformedRecords : 0) + parsed.malformedRecords;
 
@@ -810,9 +842,11 @@ export const make = Effect.gen(function* () {
     retentionCutoffMs: number,
     awaitRefresh: boolean,
   ) {
-    const dirs = yield* resolveTranscriptDirs(settings, retentionCutoffMs).pipe(
-      Effect.provideContext(readerContext),
-    );
+    const { dirs, pending } = yield* resolveTranscriptDirs(
+      settings,
+      retentionCutoffMs,
+      awaitRefresh,
+    ).pipe(Effect.provideContext(readerContext));
 
     // Shared by every source kind; identities are provider-scoped.
     const seenRootIdentities = new Set<string>();
@@ -840,11 +874,11 @@ export const make = Effect.gen(function* () {
       return scanned;
     });
 
-    // Scan independent sources together, directories sequentially to bound open files; preserve order for first-copy dedupe.
+    // Scan independent sources together, directories sequentially to bound open files; keep order, since the first copy decides a duplicate's bucket.
     const [transcriptDirs, readerScans] = yield* Effect.all([transcripts, scans], {
       concurrency: "unbounded",
     });
-    const scanned: ScannedDir[] = [...transcriptDirs];
+    const scanned: ScannedDir[] = [...transcriptDirs, ...pending];
     for (const { provider, sources } of readerScans) {
       for (const source of sources) {
         const result = yield* resolveScanSource(provider, source, now, seenRootIdentities);
@@ -1001,10 +1035,6 @@ export const make = Effect.gen(function* () {
       priceOverrides: createOverrideRateTable(settings.usagePriceOverrides),
       modelAliases: resolveModelAliases(settings.usageModelAliases),
       ...(input.modelFilter === undefined ? {} : { modelFilter: input.modelFilter }),
-      // The aggregator matches winners by identity, so pick them among corrected records.
-      dedupeWinners: selectDedupeWinners(
-        allFiles.map((file) => ({ records: correctedBatch(file.records) })),
-      ),
     });
 
     for (const [

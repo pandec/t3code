@@ -22,3 +22,9 @@ export function expandHomePath(value: string, home: string): string {
 export function isExistingDirectory(value: string): boolean {
   return NodeFS.statSync(value, { throwIfNoEntry: false })?.isDirectory() === true;
 }
+
+const HOME_PATH_VARIABLES = new Set(["CODEX_HOME", "CLAUDE_CONFIG_DIR", "GROK_HOME"]);
+
+export function expandHomeVariable(name: string, value: string, home: string): string {
+  return HOME_PATH_VARIABLES.has(name) ? expandHomePath(value, home) : value;
+}

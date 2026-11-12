@@ -215,7 +215,7 @@ it.effect.each([{ stop: false }, { stop: true }])(
             createdBy: "user",
             creationSource: "web",
           });
-          const delivery = yield* worker.runOnce.pipe(Effect.forkScoped);
+          const delivery = yield* worker.runOnce().pipe(Effect.forkScoped);
           yield* Deferred.await(steerEntered);
           if (stop) {
             yield* orchestrator.dispatch({

@@ -38,6 +38,7 @@ import {
 import { useEnvironment } from "../state/environments";
 import { useEnvironmentScope, usePreparedConnection } from "../state/session";
 import { setListeningRecordingActive } from "../state/listeningPlayback";
+import { chooseRecordingMicrophone } from "./browserMicrophones";
 import { createBrowserVoiceInputPlatform } from "./browserVoiceInput";
 import { preferredSpeechLanguages } from "./preferredSpeechLanguages";
 import { runEnvironmentSpeech } from "./runEnvironmentSpeech";
@@ -297,7 +298,7 @@ export function useEnvironmentSpeechInput(input: HookInput) {
           speechSilenceFiltering: settings.speechSilenceFiltering,
         };
       },
-      getMicrophoneId: () => latestRef.current.clientSettings.voiceMicrophone,
+      getMicrophoneId: chooseRecordingMicrophone,
       onLevel: setLevel,
       onDurationLimit: () => void controller.stop(),
       onText: (text) => {

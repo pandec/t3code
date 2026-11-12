@@ -97,7 +97,7 @@ it.layer(NodeServices.layer)("Muse status", (it) => {
         expect(snapshot.auth).toEqual({ status: "unknown" });
         expect(snapshot.version).toBe("1.0.3-R2198.1");
         expect(snapshot.usageLimits?.windows).toEqual([
-          { id: "muse-weekly", kind: "weekly", label: "Weekly", usedPercent: 7 },
+          { id: "weekly", kind: "weekly", label: "Weekly", usedPercent: 7 },
         ]);
         expect(snapshot.models.map((model) => model.slug)).toEqual([
           "muse-wonder-1.0",
@@ -142,7 +142,7 @@ it.layer(NodeServices.layer)("Muse status", (it) => {
           async () => makeHost(metaCatalog),
         );
         expect(snapshot.usageLimits?.windows).toEqual([
-          { id: "muse-weekly", kind: "weekly", label: "Weekly", usedPercent: 18 },
+          { id: "weekly", kind: "weekly", label: "Weekly", usedPercent: 18 },
         ]);
         const fs = yield* FileSystem.FileSystem;
         const pokeArgs = yield* fs.readFileString(binaryPath.replace(/muse(\.cmd)?$/, "poked"));

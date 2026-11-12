@@ -103,6 +103,7 @@ export function buildLinkedThreadActionItems(
   return input.threads.map((thread) => ({
     kind: "action",
     value: `thread:${input.environmentId}:${thread.id}`,
+    threadRef: { environmentId: input.environmentId, threadId: thread.id },
     title: thread.title || "Untitled thread",
     description: thread.archivedAt === null ? "Linked thread" : "Archived thread",
     searchTerms: [input.query, thread.title],
@@ -266,6 +267,7 @@ export interface CommandPaletteItem {
   readonly timestamp?: string;
   /** Thread rows rank by this, with use history, instead of by `searchTerms`. */
   readonly threadSearch?: ThreadSearchSubject;
+  readonly threadRef?: ScopedThreadRef;
   /** Shown in place of the description when the match is not in the title. */
   readonly matchHint?: SearchMatchHint;
   readonly icon: ReactNode;
@@ -966,6 +968,7 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
       {
         kind: "action" as const,
         value: `thread:${thread.environmentId}:${thread.id}`,
+        threadRef: { environmentId: thread.environmentId, threadId: thread.id },
         searchTerms: [thread.title],
         threadSearch: threadSearchSubject(
           {

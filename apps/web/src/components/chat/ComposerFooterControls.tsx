@@ -226,6 +226,7 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
   } | null;
   isRunning: boolean;
   canInterrupt: boolean;
+  runId: string | null;
   followUpBehavior: "queue" | "steer";
   canSteer: boolean;
   alternateShortcutLabel: string | null;
@@ -247,6 +248,7 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
   compactDisabled: boolean;
   compactDisabledReason: string | null;
   compactBeforeSendTokens: number | null;
+  hideCompactToggle: boolean;
   keepFullHistory: boolean;
   onToggleKeepFullHistory: () => void;
   secondarySendShortcutLabel: string | null;
@@ -287,6 +289,7 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
         pendingAction={props.pendingAction}
         isRunning={props.isRunning}
         canInterrupt={props.canInterrupt}
+        runId={props.runId}
         followUpBehavior={props.followUpBehavior}
         canSteer={props.canSteer}
         alternateShortcutLabel={props.alternateShortcutLabel}
@@ -306,6 +309,7 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
         onQueue={props.onQueue}
         onSteer={props.onSteer}
         compactBeforeSendTokens={props.compactBeforeSendTokens}
+        hideCompactToggle={props.hideCompactToggle}
         keepFullHistory={props.keepFullHistory}
         onToggleKeepFullHistory={props.onToggleKeepFullHistory}
         secondarySendShortcutLabel={props.secondarySendShortcutLabel}
