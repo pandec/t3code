@@ -6124,6 +6124,37 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect("gives an app the JSON text of a Claude result with images as structuredContent", () =>
+    Effect.gen(function* () {
+      const text = '{"query":"weather","screens":[]}';
+      const { item } = yield* runClaudeMcpAppToolTurn(
+        MCP_APP_CAPABILITIES,
+        undefined,
+        undefined,
+        // Shape recorded from Claude Code 2.1.322: images make the result a bare block list.
+        [
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0K" } },
+          { type: "text", text: "[Image: source: /tmp/screen.png]" },
+          { type: "text", text },
+        ],
+      );
+      assert.isDefined(mcpAppFromToolItem(item));
+      assert.deepInclude((item.output as { readonly result?: object }).result, {
+        structuredContent: { query: "weather", screens: [] },
+      });
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          NodeServices.layer,
+          NodeCrypto.layer,
+        ),
+      ),
+    ),
+  );
+
   it.effect.each([
     {
       name: "its ui:// resource cannot be read",
