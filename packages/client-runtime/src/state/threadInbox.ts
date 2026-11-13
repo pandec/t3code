@@ -331,9 +331,9 @@ function asksAnew(previous: Attention | undefined, next: Attention): boolean {
 }
 
 /**
- * A folded group hides its threads, except one that started needing the user
- * (approval, question, guest request, unseen failure) after the fold was last
- * toggled. Keep one at module scope; `observe` live shells when they change and
+ * A folded group hides its threads, except bolted ones and one that started
+ * needing the user (approval, question, guest request, unseen failure) since the
+ * fold was last toggled. Keep one at module scope; `observe` live shells and
  * `acknowledge` a fold on every toggle. Fold keys are the caller's.
  */
 export function createFoldedAttentionTracker() {
@@ -343,7 +343,11 @@ export function createFoldedAttentionTracker() {
   // and restores them (an environment toggled off and on) re-raises nothing.
   const states = new Map<string, { attention: Attention; since: number }>();
   const acknowledged = new Map<string, number>();
-  const surfaces = (thread: ThreadKeyInput, fold: string) =>
+  const surfaces = (
+    thread: ThreadKeyInput & Pick<EnvironmentThreadShell, "activeMarkedAt">,
+    fold: string,
+  ) =>
+    thread.activeMarkedAt != null ||
     (states.get(keyOf(thread))?.since ?? 0) > (acknowledged.get(fold) ?? 0);
   return {
     observe(threads: readonly AttentionThreadInput[]): typeof surfaces {

@@ -289,6 +289,10 @@ describe("createFoldedAttentionTracker", () => {
     expect(tracker.observe([failed])(failed, "group:g")).toBe(true);
     const seen = { ...failed, lastVisitedAt: "2026-06-01T03:00:00.000Z" };
     expect(tracker.observe([seen])(seen, "group:g")).toBe(false);
+    // Fork: a bolted thread stays through every fold toggle.
+    const bolted = { ...seen, activeMarkedAt: "2026-06-01T04:00:00.000Z" };
+    tracker.acknowledge("group:g");
+    expect(tracker.observe([bolted])(bolted, "group:g")).toBe(true);
   });
 
   it("re-raises only new requests, and keeps acknowledgements across absence", () => {
