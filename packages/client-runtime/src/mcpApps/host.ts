@@ -131,13 +131,34 @@ function isId(value: unknown): value is JsonRpcId {
   return typeof value === "string" || (typeof value === "number" && Number.isFinite(value));
 }
 
+const isString = (value: unknown) => typeof value === "string";
+
+/** Stored results lose image bytes, and Claude reports images in Anthropic's `source` shape. */
+function isMcpContentBlock(block: unknown): boolean {
+  if (!Predicate.isObject(block)) return false;
+  switch (block.type) {
+    case "text":
+      return isString(block.text);
+    case "image":
+    case "audio":
+      return isString(block.data) && isString(block.mimeType);
+    case "resource_link":
+      return isString(block.uri) && isString(block.name);
+    case "resource":
+      return Predicate.isObject(block.resource) && isString(block.resource.uri);
+    default:
+      return false;
+  }
+}
+
 /**
- * Providers can report absent fields as null (Codex sends `_meta: null`), which
- * the MCP Apps SDK rejects, dropping the whole notification or response.
+ * Providers can report absent fields as null (Codex sends `_meta: null`) or content
+ * blocks MCP does not define, which the MCP Apps SDK rejects, dropping the whole
+ * notification or response.
  */
 function normalizeMcpAppToolResult(result: McpAppCallToolResult): McpAppCallToolResult {
   return {
-    content: Array.isArray(result.content) ? result.content : [],
+    content: Array.isArray(result.content) ? result.content.filter(isMcpContentBlock) : [],
     ...(Predicate.isObject(result.structuredContent)
       ? { structuredContent: result.structuredContent }
       : {}),

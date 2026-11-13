@@ -1000,12 +1000,31 @@ function claudeMcpToolForApps(
   };
 }
 
+/** Claude reports a result with images as a bare block list without `structuredContent`; the JSON text block carries it. */
+function claudeMcpBlocksStructuredContent(blocks: ReadonlyArray<unknown>): unknown {
+  for (const block of blocks.toReversed()) {
+    if (!Predicate.isObject(block) || block.type !== "text" || typeof block.text !== "string") {
+      continue;
+    }
+    try {
+      const parsed: unknown = JSON.parse(block.text);
+      if (Predicate.isObject(parsed) && !Array.isArray(parsed)) return parsed;
+    } catch {
+      // Prose, not JSON.
+    }
+  }
+  return undefined;
+}
+
 /** A model-turn MCP `tool_use_result` flattens text `content` to a string; app calls return MCP's raw `CallToolResult`. */
 function claudeMcpCallToolResult(
   value: unknown,
 ): ProviderAdapter.ProviderAdapterV2McpCallToolResult {
   const record = Predicate.isObject(value) && !Array.isArray(value) ? value : undefined;
   const content = record === undefined ? value : record.content;
+  const structuredContent = Array.isArray(value)
+    ? claudeMcpBlocksStructuredContent(value)
+    : record?.structuredContent;
   return {
     content:
       typeof content === "string"
@@ -1013,9 +1032,7 @@ function claudeMcpCallToolResult(
         : Array.isArray(content)
           ? content
           : [],
-    ...(record?.structuredContent === undefined
-      ? {}
-      : { structuredContent: record.structuredContent }),
+    ...(structuredContent === undefined ? {} : { structuredContent }),
     ...(record?.isError === true ? { isError: true } : {}),
     ...(record?._meta === undefined ? {} : { _meta: record._meta }),
   };

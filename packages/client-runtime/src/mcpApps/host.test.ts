@@ -107,7 +107,7 @@ describe("makeMcpAppHost", () => {
     ]);
   });
 
-  it("drops null fields providers report, which the MCP Apps SDK rejects", async () => {
+  it("drops null fields and non-MCP content blocks, which the MCP Apps SDK rejects", async () => {
     const { host, sent } = setup({
       callTool: async () => ({ content: [], structuredContent: null, _meta: null }),
     });
@@ -116,7 +116,12 @@ describe("makeMcpAppHost", () => {
     host.setToolCall({
       arguments: {},
       result: {
-        content: [{ type: "text", text: "t" }],
+        content: [
+          // Claude's image shape, with its bytes stripped in storage.
+          { type: "image", source: { type: "base64", media_type: "image/webp", sizeBytes: 9 } },
+          { type: "image", mimeType: "image/webp", sizeBytes: 9 },
+          { type: "text", text: "t" },
+        ],
         structuredContent: { time: "t" },
         _meta: null,
       },
