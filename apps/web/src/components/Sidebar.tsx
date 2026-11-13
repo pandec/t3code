@@ -2889,6 +2889,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     settledOrder: draggedSettledOrder,
     ...(draggedActiveOrder === undefined ? {} : { activeOrder: draggedActiveOrder }),
     foldedGroupIds,
+    keepsFoldedRow: (key) => threadByKey.get(key)?.activeMarkedAt != null,
     settledExpanded: settledShelfExpanded,
     settledVisibleCount,
     routeThreadKey: routeRowThreadKey,

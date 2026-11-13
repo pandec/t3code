@@ -509,6 +509,9 @@ describe("sidebar drag projection", () => {
     const open = preview({ ...input, routeThreadKey: "a2" }, "a2", over);
     expect(open.get(over)?.y).toBe(-83);
     expect(open.get(sidebarMarkerId("settled-header"))?.y).toBe(0);
+    // So does a bolted thread.
+    const bolted = preview({ ...input, keepsFoldedRow: (key) => key === "a2" }, "a2", over);
+    expect(bolted.get(sidebarMarkerId("settled-header"))?.y).toBe(0);
   });
 
   it("uses the canonical settled rank and the destination's slim height", () => {
