@@ -1728,14 +1728,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 <span className="flex-1" />
               )}
               {listeningIndicator}
-              {renderArchivePendingIndicator(
-                canOperateThread &&
-                  !sortable?.isDragging &&
-                  cn(
-                    "group-has-[:focus-visible]/sidebar-row:hidden group-any-hover/sidebar-row:hidden",
-                    snoozeMenuOpen && "hidden",
-                  ),
-              )}
               {showPin ? (
                 <PinIcon
                   aria-label="Pinned"
@@ -1773,7 +1765,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               ) : (
                 <span
                   className={cn(
-                    "group/sidebar-status-slot relative ml-auto flex h-5 min-w-8 shrink-0 items-stretch justify-end text-xs",
+                    "group/sidebar-status-slot relative ml-auto flex h-5 shrink-0 items-stretch justify-end text-xs",
+                    // Fork: an age-only slot as wide as the Archive button's visible part, so
+                    // the resting bolt sits where its hover button appears.
+                    props.isActiveMarked && !topStatus && !hasPendingArchive(thread)
+                      ? "min-w-5.75"
+                      : "min-w-8",
                     props.sweepAction !== null && "hidden",
                     jumpHintLabel && JUMP_HINT_SLOT_CLASS_NAME,
                   )}
@@ -1836,6 +1833,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       <RelativeTimeLabel timestamp={resolveThreadActivityTimestamp(thread)} />
                     )}
                   </span>
+                  {/* Fork: centered under the hover Archive button, which overhangs by 4px. */}
+                  {renderArchivePendingIndicator(
+                    cn(
+                      "ml-1.5 mr-0.75",
+                      canOperateThread &&
+                        "group-has-[:focus-visible]/sidebar-row:hidden group-any-hover/sidebar-row:hidden",
+                      canOperateThread && snoozeMenuOpen && "hidden",
+                    ),
+                  )}
                   <span
                     className={cn(
                       // Mouse clicks leave Settle focused; focus-within would pin controls over
@@ -1882,28 +1888,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                         </TooltipPopup>
                       </Tooltip>
                     ) : null}
-                    {props.activeMarkSupported && canOperateThread ? (
+                    {showForkButton ? (
                       <Tooltip>
                         <TooltipTrigger
                           render={
                             <button
                               type="button"
-                              aria-label={
-                                props.isActiveMarked ? "Unmark as active" : "Mark as active"
-                              }
-                              aria-pressed={props.isActiveMarked}
-                              onClick={handleActiveMarkToggleClick}
+                              aria-label="Fork conversation"
+                              onClick={handleForkClick}
                               className="inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-muted-foreground hover:text-foreground"
                             >
-                              <ZapIcon
-                                className={cn("size-3.5", props.isActiveMarked && "fill-current")}
-                              />
+                              <GitForkIcon className="size-3.5" />
                             </button>
                           }
                         />
-                        <TooltipPopup>
-                          {props.isActiveMarked ? "Unmark as active" : "Mark as active"}
-                        </TooltipPopup>
+                        <TooltipPopup>Fork conversation</TooltipPopup>
                       </Tooltip>
                     ) : null}
                     {showSnoozeButton ? (
@@ -1936,21 +1935,28 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                         <TooltipPopup>Settle thread</TooltipPopup>
                       </Tooltip>
                     ) : null}
-                    {showForkButton ? (
+                    {props.activeMarkSupported && canOperateThread ? (
                       <Tooltip>
                         <TooltipTrigger
                           render={
                             <button
                               type="button"
-                              aria-label="Fork conversation"
-                              onClick={handleForkClick}
+                              aria-label={
+                                props.isActiveMarked ? "Unmark as active" : "Mark as active"
+                              }
+                              aria-pressed={props.isActiveMarked}
+                              onClick={handleActiveMarkToggleClick}
                               className="inline-flex cursor-pointer items-center rounded-md bg-transparent px-1.5 text-muted-foreground hover:text-foreground"
                             >
-                              <GitForkIcon className="size-3.5" />
+                              <ZapIcon
+                                className={cn("size-3.5", props.isActiveMarked && "fill-current")}
+                              />
                             </button>
                           }
                         />
-                        <TooltipPopup>Fork conversation</TooltipPopup>
+                        <TooltipPopup>
+                          {props.isActiveMarked ? "Unmark as active" : "Mark as active"}
+                        </TooltipPopup>
                       </Tooltip>
                     ) : null}
                     {canOperateThread ? (

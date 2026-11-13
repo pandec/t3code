@@ -1115,8 +1115,8 @@ function useSidebarThreads(input: {
     return visible.length === settledThreads.length ? settledThreads : visible;
   })();
   const hiddenSettledCount = Math.max(0, settledCount - visibleSettledThreads.length);
-  // A folded group keeps the open thread's row. Fork: it also keeps threads
-  // that started needing the user since the fold was last toggled.
+  // A folded group keeps the open thread's row. Fork: it also keeps bolted
+  // threads and threads that started needing the user since the last toggle.
   const surfacesAttention = foldedAttention.observe(threads);
   const foldedRows = (list: readonly EnvironmentThreadShell[], fold: string) =>
     list.filter(
@@ -2889,6 +2889,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     settledOrder: draggedSettledOrder,
     ...(draggedActiveOrder === undefined ? {} : { activeOrder: draggedActiveOrder }),
     foldedGroupIds,
+    keepsFoldedRow: (key) => threadByKey.get(key)?.activeMarkedAt != null,
     settledExpanded: settledShelfExpanded,
     settledVisibleCount,
     routeThreadKey: routeRowThreadKey,

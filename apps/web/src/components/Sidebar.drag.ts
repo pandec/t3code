@@ -108,9 +108,11 @@ export function createSidebarSortingStrategy(input: {
    * rows do not drift below their at-rest drop rects. */
   boundaryLabelHeights?: Partial<Record<"pinned-header" | "pinned-divider", number>>;
   /** Fork: folded groups (null: Active). A drop into one hides the row, so the
-   * preview opens no slot under its header (the open thread excepted) and a
-   * folded Active opens no placeholder; the header is the drop target. */
+   * preview opens no slot under its header (the open or a kept thread excepted)
+   * and a folded Active opens no placeholder; the header is the drop target. */
   foldedGroupIds?: ReadonlySet<string | null>;
+  /** Fork: rows a folded group keeps visible, such as bolted threads. */
+  keepsFoldedRow?: (key: string) => boolean;
 }): SortingStrategy {
   if (input.enabled === false) return () => stationary;
   const { items } = input;
@@ -213,7 +215,12 @@ export function createSidebarSortingStrategy(input: {
         const rows = groups.active.filter(
           (row) =>
             (row.customGroupId ?? null) === id &&
-            !(folded && row.key === active.key && row.key !== input.routeThreadKey),
+            !(
+              folded &&
+              row.key === active.key &&
+              row.key !== input.routeThreadKey &&
+              input.keepsFoldedRow?.(row.key) !== true
+            ),
         );
         if (rows.length) projected.push(...rows);
         else if (id === null && !folded) marker("active-placeholder");
