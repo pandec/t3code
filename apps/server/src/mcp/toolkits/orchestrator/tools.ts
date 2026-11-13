@@ -39,7 +39,10 @@ import {
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import { McpSchema, Tool, Toolkit } from "effect/ai";
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as SchemaIssue from "effect/SchemaIssue";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Struct from "effect/Struct";
 
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -145,10 +148,39 @@ const WorkflowStopTool = Tool.make("t3_workflow_stop", {
   .annotate(Tool.Title, "Stop a workflow")
   .annotate(Tool.Destructive, true);
 
-const backgroundWaitParameters = Schema.Struct({
-  taskIds: Schema.Array(TrimmedNonEmptyString).check(Schema.isMinLength(1), Schema.isMaxLength(20)),
+const BackgroundTaskIds = Schema.Array(TrimmedNonEmptyString).check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(20),
+);
+const BackgroundWaitInput = Schema.Struct({
+  taskIds: BackgroundTaskIds,
   waiting: Schema.optional(Schema.Boolean),
 });
+// Agents often pass a single `taskId`, the shape of Claude Code's own task tools.
+const backgroundWaitParameters = Schema.Struct({
+  taskIds: Schema.optional(BackgroundTaskIds),
+  taskId: Schema.optional(TrimmedNonEmptyString).annotate({
+    description: "One task ID; same as `taskIds: [taskId]`.",
+  }),
+  waiting: Schema.optional(Schema.Boolean),
+}).pipe(
+  Schema.decodeTo(
+    BackgroundWaitInput,
+    SchemaTransformation.transformEffect({
+      decode: ({ taskIds = [], taskId, waiting }) => {
+        const ids = taskId === undefined ? taskIds : [...taskIds, taskId];
+        return ids.length === 0
+          ? Effect.fail(
+              new SchemaIssue.InvalidValue({
+                message: 'Pass `taskIds`, e.g. `{"taskIds":["<id>"]}`.',
+              }),
+            )
+          : Effect.succeed<typeof BackgroundWaitInput.Type>({ taskIds: ids, waiting });
+      },
+      encode: (value) => Effect.succeed(value),
+    }),
+  ),
+);
 const backgroundWaitExample = {
   taskIds: ["task-123"],
 } satisfies typeof backgroundWaitParameters.Encoded;
