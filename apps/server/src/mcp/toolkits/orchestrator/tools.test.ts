@@ -28,6 +28,19 @@ it("refuses a t3_thread_update whose fields do not fit its action", () => {
   );
 });
 
+it("accepts a single taskId for t3_background_wait", () => {
+  const tool = OrchestratorToolkit.tools.t3_background_wait;
+  const decode = Schema.decodeUnknownExit(tool.parametersSchema);
+  expect(decode({ taskId: "a" })).toEqual(Exit.succeed({ taskIds: ["a"], waiting: undefined }));
+  expect(decode({ taskIds: ["a"], taskId: "b", waiting: false })).toEqual(
+    Exit.succeed({ taskIds: ["a", "b"], waiting: false }),
+  );
+  expect(String(decode({}))).toContain("Pass `taskIds`");
+  // The MCP server rejects arguments the advertised schema does not declare.
+  const advertised = Tool.getJsonSchema(tool) as { readonly properties: object };
+  expect(Object.keys(advertised.properties)).toEqual(["taskIds", "taskId", "waiting"]);
+});
+
 const parseExample = Schema.decodeSync(Schema.fromJsonString(Schema.Unknown));
 const exampleTools = [
   {
