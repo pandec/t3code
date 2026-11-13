@@ -131,21 +131,23 @@ function isId(value: unknown): value is JsonRpcId {
   return typeof value === "string" || (typeof value === "number" && Number.isFinite(value));
 }
 
-const isString = (value: unknown) => typeof value === "string";
-
 /** Stored results lose image bytes, and Claude reports images in Anthropic's `source` shape. */
 function isMcpContentBlock(block: unknown): boolean {
   if (!Predicate.isObject(block)) return false;
   switch (block.type) {
     case "text":
-      return isString(block.text);
+      return Predicate.isString(block.text);
     case "image":
     case "audio":
-      return isString(block.data) && isString(block.mimeType);
+      return Predicate.isString(block.data) && Predicate.isString(block.mimeType);
     case "resource_link":
-      return isString(block.uri) && isString(block.name);
+      return Predicate.isString(block.uri) && Predicate.isString(block.name);
     case "resource":
-      return Predicate.isObject(block.resource) && isString(block.resource.uri);
+      return (
+        Predicate.isObject(block.resource) &&
+        Predicate.isString(block.resource.uri) &&
+        (Predicate.isString(block.resource.text) || Predicate.isString(block.resource.blob))
+      );
     default:
       return false;
   }

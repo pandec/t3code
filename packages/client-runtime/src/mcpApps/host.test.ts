@@ -120,6 +120,8 @@ describe("makeMcpAppHost", () => {
           // Claude's image shape, with its bytes stripped in storage.
           { type: "image", source: { type: "base64", media_type: "image/webp", sizeBytes: 9 } },
           { type: "image", mimeType: "image/webp", sizeBytes: 9 },
+          { type: "resource", resource: { uri: "u", mimeType: "image/png", sizeBytes: 9 } },
+          { type: "image", data: "AAAA", mimeType: "image/png" },
           { type: "text", text: "t" },
         ],
         structuredContent: { time: "t" },
@@ -129,7 +131,10 @@ describe("makeMcpAppHost", () => {
     host.receive({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "get-time" } });
     await flush();
     expect(sent.find((m) => m.method === "ui/notifications/tool-result")?.params).toEqual({
-      content: [{ type: "text", text: "t" }],
+      content: [
+        { type: "image", data: "AAAA", mimeType: "image/png" },
+        { type: "text", text: "t" },
+      ],
       structuredContent: { time: "t" },
     });
     expect(sent.find((m) => m.id === 2)?.result).toEqual({ content: [] });
