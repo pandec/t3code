@@ -159,9 +159,7 @@ const BackgroundWaitInput = Schema.Struct({
 // Agents often pass a single `taskId`, the shape of Claude Code's own task tools.
 const backgroundWaitParameters = Schema.Struct({
   taskIds: Schema.optional(BackgroundTaskIds),
-  taskId: Schema.optional(TrimmedNonEmptyString).annotate({
-    description: "One task ID; same as `taskIds: [taskId]`.",
-  }),
+  taskId: Schema.optional(TrimmedNonEmptyString),
   waiting: Schema.optional(Schema.Boolean),
 }).pipe(
   Schema.decodeTo(
@@ -186,7 +184,7 @@ const backgroundWaitExample = {
 } satisfies typeof backgroundWaitParameters.Encoded;
 
 const BackgroundWaitTool = Tool.make("t3_background_wait", {
-  description: `Keep this thread in Working while background work runs. Pass its task IDs after starting it. Not for dev servers or watchers. \`waiting=false\` clears without stopping tasks. Claude only. Example: \`${Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(backgroundWaitExample)}\`.`,
+  description: `Keep this thread in Working while background work runs. Pass its task IDs once started. Not for dev servers or watchers. \`waiting=false\` clears without stopping tasks. Claude only. Example: \`${Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(backgroundWaitExample)}\`.`,
   parameters: backgroundWaitParameters,
   success: Schema.Struct({
     matched: Schema.Array(Schema.String),
