@@ -127,21 +127,36 @@ const makeHarness = (name: string) =>
               Effect.sync(() => {
                 steered.push(turn.message.text);
               }),
-            // Like a real provider, an interrupted turn reports its terminal.
+            // Like a real provider, an interrupted turn reports its settled turn and terminal.
             interruptTurn: ({ providerThread, providerTurnId }) =>
-              Queue.offer(events, {
-                type: "turn.terminal",
-                driver,
-                providerThreadId: providerThread.id,
-                providerTurnId,
-                runOrdinal: started.find(
-                  (turn) =>
-                    ProviderTurnId.make(`provider-turn:${turn.attemptId}`) === providerTurnId,
-                )!.runOrdinal,
-                status: "interrupted",
-                failure: null,
-                threadDisposition: "reusable",
-              }).pipe(Effect.asVoid),
+              Effect.gen(function* () {
+                const turn = started.find(
+                  (candidate) =>
+                    ProviderTurnId.make(`provider-turn:${candidate.attemptId}`) === providerTurnId,
+                )!;
+                const now = yield* DateTime.now;
+                yield* Queue.offerAll(events, [
+                  {
+                    type: "provider_turn.updated",
+                    driver,
+                    providerTurn: {
+                      ...providerTurnFor(turn, now),
+                      status: "interrupted",
+                      completedAt: now,
+                    },
+                  },
+                  {
+                    type: "turn.terminal",
+                    driver,
+                    providerThreadId: providerThread.id,
+                    providerTurnId,
+                    runOrdinal: turn.runOrdinal,
+                    status: "interrupted",
+                    failure: null,
+                    threadDisposition: "reusable",
+                  },
+                ]);
+              }),
             respondToRuntimeRequest: () => Effect.void,
             readThreadSnapshot: () => Effect.die("unused"),
             rollbackThread: () => Effect.die("unused"),

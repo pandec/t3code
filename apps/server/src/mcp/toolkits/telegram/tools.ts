@@ -5,7 +5,7 @@ import {
   TelegramDispatchResult,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/ai";
+import { McpSchema, Tool, Toolkit } from "effect/ai";
 
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as TelegramService from "../../../telegram/TelegramService.ts";
@@ -27,6 +27,7 @@ const TelegramSendTool = Tool.make("telegram_send", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 export const TelegramToolkit = Toolkit.make(TelegramSendTool);

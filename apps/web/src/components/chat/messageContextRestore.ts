@@ -1,5 +1,6 @@
 import type {
   ComposerContextRecord,
+  EnvironmentContextRecord,
   EnvironmentId,
   PreviewAnnotationPayload,
   ThreadContextRecord,
@@ -36,6 +37,7 @@ export interface MessageContextRestore {
   readonly reviewComments: ReadonlyArray<ReviewCommentContext>;
   readonly previewAnnotations: ReadonlyArray<PreviewAnnotationPayload>;
   readonly threadContexts: ReadonlyArray<ThreadContextRecord>;
+  readonly environmentContexts: ReadonlyArray<EnvironmentContextRecord>;
 }
 
 /**
@@ -63,6 +65,7 @@ export function planMessageContextRestore(input: {
   const reviewComments: ReviewCommentContext[] = [];
   const previewAnnotations: PreviewAnnotationPayload[] = [];
   const threadContexts: ThreadContextRecord[] = [];
+  const environmentContexts: EnvironmentContextRecord[] = [];
   // null: the record exists but has no draft shape here, so the chip becomes its label.
   const restored = new Map<string, Omit<ComposerContextReference, "label"> | null>();
   const restore = (contextId: string): Omit<ComposerContextReference, "label"> | null => {
@@ -112,6 +115,10 @@ export function planMessageContextRestore(input: {
         threadContexts.push(record);
         return { kind: "thread", contextId: record.contextId };
       }
+      case "environment": {
+        environmentContexts.push(record);
+        return { kind: "environment", contextId: record.contextId };
+      }
       case "image":
       case "file": {
         const localId = input.attachmentLocalIds.get(record.attachmentId);
@@ -135,7 +142,14 @@ export function planMessageContextRestore(input: {
       ? formatInlineContextReference({ ...reference, label: occurrence.label })
       : occurrence.label;
   });
-  return { text, terminalContexts, reviewComments, previewAnnotations, threadContexts };
+  return {
+    text,
+    terminalContexts,
+    reviewComments,
+    previewAnnotations,
+    threadContexts,
+    environmentContexts,
+  };
 }
 
 /** Adds a planned restore's contexts to a draft whose prompt already holds their chips. */
@@ -154,5 +168,8 @@ export function applyMessageContextRestore(
   }
   if (restore.threadContexts.length > 0) {
     store.addThreadContexts(target, restore.threadContexts, options);
+  }
+  if (restore.environmentContexts.length > 0) {
+    store.addEnvironmentContexts(target, restore.environmentContexts, options);
   }
 }

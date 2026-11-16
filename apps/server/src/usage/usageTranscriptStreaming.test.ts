@@ -220,7 +220,7 @@ describe("large usage records", () => {
           cacheCreationTokens: 5,
           reasoningTokens: 40,
         },
-        oneHourCacheCreationTokens: 3,
+        cacheCreation1hTokens: 3,
         reportedCostUsd: 0.25,
         speed: "fast",
         dedupeKey: "m1:r-m1",
@@ -279,7 +279,7 @@ describe("large usage records", () => {
         outputTokens: 99,
         reasoningTokens: 10,
       },
-      dedupeKey: "s1:p1:grok-4.5-build",
+      dedupeKey: "s1:p1:1785578400123:grok-4.5-build",
       reportedCostUsd: 0.25,
     });
   });

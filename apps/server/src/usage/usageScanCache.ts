@@ -10,17 +10,23 @@ import { CLAUDE_SYNTHETIC_MODEL } from "../provider/Drivers/claudeUsage.ts";
 import { mergeUsageCopies } from "./usageAggregation.ts";
 import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptReader.ts";
 
-// Fork and upstream v4-v12 share versions with different layouts, identified by `x`/`tx`.
-const USAGE_SCAN_CACHE_VERSION = 13 as const;
+// Fork and upstream v4-v13 share versions with different layouts, identified by `x`/`tx`.
+// Upstream alone wrote v14-v17.
+const USAGE_SCAN_CACHE_VERSION = 18 as const;
 const OLDEST_MIGRATED_VERSION = 4;
 
 /**
  * Each cache version writes its own file, so an older server sharing the state dir cannot replace a
  * newer cache and drop saved usage. Without its own file, this server migrates older builds' files:
- * fork v4/v5 and upstream v4 share the unversioned name, upstream v5 has its own, v6-v12 share theirs.
+ * fork v4/v5 and upstream v4 share the unversioned name, upstream v5 has its own, v6-v13 share theirs.
  */
-export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v13.json";
+export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v18.json";
 export const LEGACY_SCAN_CACHE_FILE_NAMES = [
+  "usage-scan-cache-v17.json",
+  "usage-scan-cache-v16.json",
+  "usage-scan-cache-v15.json",
+  "usage-scan-cache-v14.json",
+  "usage-scan-cache-v13.json",
   "usage-scan-cache-v12.json",
   "usage-scan-cache-v11.json",
   "usage-scan-cache.json",
@@ -68,7 +74,7 @@ type SerializedRecord = readonly [
   rateModelIndex: number | null,
   /** `1` for a provisional record. Trailing unset columns are omitted. */
   provisional?: 0 | 1,
-  oneHourCacheCreationTokens?: number,
+  cacheCreation1hTokens?: number,
   unresolvedServiceTierTurnId?: string,
 ];
 
@@ -135,7 +141,7 @@ function serializeFile(entry: CachedFile, tables: InternTables): SerializedFile 
         ? null
         : intern(tables.models, tables.modelIndex, record.rateModel),
     ];
-    const oneHour = record.oneHourCacheCreationTokens ?? 0;
+    const oneHour = record.cacheCreation1hTokens ?? 0;
     const turnId = record.unresolvedServiceTierTurnId;
     if (record.provisional || oneHour > 0 || turnId !== undefined) {
       row.push(record.provisional ? 1 : 0);
@@ -200,6 +206,7 @@ function isCount(value: unknown): value is number {
  */
 type EntryLayout =
   | "current"
+  | "forkV13"
   | "forkV12"
   | "forkV11"
   | "forkV10"
@@ -209,6 +216,11 @@ type EntryLayout =
   | "forkV6"
   | "forkV5"
   | "forkV4"
+  | "upstreamV17"
+  | "upstreamV16"
+  | "upstreamV15"
+  | "upstreamV14"
+  | "upstreamV13"
   | "upstreamV12"
   | "upstreamV11"
   | "upstreamV10"
@@ -222,6 +234,11 @@ type EntryLayout =
 function entryLayout(version: number, entry: Partial<SerializedFile>): EntryLayout | null {
   if (version === USAGE_SCAN_CACHE_VERSION) return "current";
   const fork = entry.x !== undefined || entry.tx !== undefined;
+  if (version === 17) return fork ? null : "upstreamV17";
+  if (version === 16) return fork ? null : "upstreamV16";
+  if (version === 15) return fork ? null : "upstreamV15";
+  if (version === 14) return fork ? null : "upstreamV14";
+  if (version === 13) return fork ? "forkV13" : "upstreamV13";
   if (version === 12) return fork ? "forkV12" : "upstreamV12";
   if (version === 11) return fork ? "forkV11" : "upstreamV11";
   if (version === 10) return fork ? "forkV10" : "upstreamV10";
@@ -237,6 +254,7 @@ function entryLayout(version: number, entry: Partial<SerializedFile>): EntryLayo
 /** Shortest row each layout writes; the columns after it are absent. */
 const ROW_LENGTH: Record<EntryLayout, number> = {
   current: 12,
+  forkV13: 12,
   forkV12: 12,
   forkV11: 12,
   forkV10: 12,
@@ -246,6 +264,11 @@ const ROW_LENGTH: Record<EntryLayout, number> = {
   forkV6: 12,
   forkV5: 12,
   forkV4: 10,
+  upstreamV17: 11,
+  upstreamV16: 11,
+  upstreamV15: 11,
+  upstreamV14: 11,
+  upstreamV13: 11,
   upstreamV12: 11,
   upstreamV11: 11,
   upstreamV10: 11,
@@ -260,6 +283,7 @@ const ROW_LENGTH: Record<EntryLayout, number> = {
 /** Layouts whose speed column may hold ultrafast, not just the legacy `fast` flag. */
 const ULTRAFAST_LAYOUTS: ReadonlySet<EntryLayout> = new Set([
   "current",
+  "forkV13",
   "forkV12",
   "forkV11",
   "forkV10",
@@ -267,6 +291,11 @@ const ULTRAFAST_LAYOUTS: ReadonlySet<EntryLayout> = new Set([
   "forkV8",
   "forkV7",
   "forkV6",
+  "upstreamV17",
+  "upstreamV16",
+  "upstreamV15",
+  "upstreamV14",
+  "upstreamV13",
   "upstreamV12",
   "upstreamV11",
   "upstreamV10",
@@ -280,6 +309,7 @@ const ULTRAFAST_LAYOUTS: ReadonlySet<EntryLayout> = new Set([
 /** Layouts whose rows always carry `rateModel`; upstream's may append it. */
 const RATE_MODEL_LAYOUTS: ReadonlySet<EntryLayout> = new Set([
   "current",
+  "forkV13",
   "forkV12",
   "forkV11",
   "forkV10",
@@ -292,8 +322,7 @@ const RATE_MODEL_LAYOUTS: ReadonlySet<EntryLayout> = new Set([
 
 /**
  * Rebuilds the cache, migrating older layouts. Migrated entries keep their records (the transcript
- * may be gone) but mark incompatible entries for reparsing. Clean pre-v12 Codex scans retain their
- * records unchanged and reparse on growth, because their state lacks interrupted requests.
+ * may be gone) but mark incompatible entries for reparsing.
  */
 export function decodeScanCache(
   document: unknown,
@@ -343,21 +372,29 @@ export function decodeScanCache(
         speedIndex,
         rateModelIndex,
       ] = row as SerializedRecord;
-      // Fork v7+ layouts append provisional and one-hour columns; upstream
-      // v7–v12 put their tier turn where the fork's provisional flag sits.
+      // Fork v7+ layouts append provisional and one-hour columns; upstream v7+ put a nullable
+      // tier turn where the fork's provisional flag sits, and v13+ their one-hour count after it.
       const forkTurnColumn =
         layout === "current" ||
+        layout === "forkV13" ||
         layout === "forkV12" ||
         layout === "forkV11" ||
         layout === "forkV10" ||
         layout === "forkV9" ||
         layout === "forkV8";
       const forkColumns = forkTurnColumn || layout === "forkV7";
+      const upstreamOneHourColumn =
+        layout === "upstreamV17" ||
+        layout === "upstreamV16" ||
+        layout === "upstreamV15" ||
+        layout === "upstreamV14" ||
+        layout === "upstreamV13";
       const provisional = forkColumns ? row[12] : undefined;
-      const oneHourCacheCreationTokens = forkColumns ? row[13] : undefined;
-      const unresolvedServiceTierTurnId = forkTurnColumn
+      const cacheCreation1hTokens = forkColumns || upstreamOneHourColumn ? row[13] : undefined;
+      const turnColumn = forkTurnColumn
         ? row[14]
-        : layout === "upstreamV12" ||
+        : upstreamOneHourColumn ||
+            layout === "upstreamV12" ||
             layout === "upstreamV11" ||
             layout === "upstreamV10" ||
             layout === "upstreamV9" ||
@@ -365,6 +402,7 @@ export function decodeScanCache(
             layout === "upstreamV7"
           ? row[12]
           : undefined;
+      const unresolvedServiceTierTurnId = turnColumn === null ? undefined : turnColumn;
 
       // Fork v4 predates fast mode. A legacy `fast` flag (0 or 1) is the
       // speed index it maps to; only later tier-aware layouts record ultrafast.
@@ -392,7 +430,7 @@ export function decodeScanCache(
         !Number.isFinite(reasoning) ||
         speed === undefined ||
         (provisional !== undefined && provisional !== 0 && provisional !== 1) ||
-        (oneHourCacheCreationTokens !== undefined && !isCount(oneHourCacheCreationTokens)) ||
+        (cacheCreation1hTokens !== undefined && !isCount(cacheCreation1hTokens)) ||
         (unresolvedServiceTierTurnId !== undefined &&
           typeof unresolvedServiceTierTurnId !== "string")
       ) {
@@ -416,12 +454,22 @@ export function decodeScanCache(
           outputTokens: output,
           reasoningTokens: reasoning,
         },
+        ...(cacheCreation1hTokens ? { cacheCreation1hTokens } : {}),
         reportedCostUsd: typeof reportedCostUsd === "number" ? reportedCostUsd : null,
         speed,
         ...(unresolvedServiceTierTurnId === undefined ? {} : { unresolvedServiceTierTurnId }),
-        dedupeKey: typeof dedupeKey === "string" ? dedupeKey : null,
+        dedupeKey:
+          typeof dedupeKey !== "string"
+            ? null
+            : // Saved copies of moved transcripts must still match the re-parsed v17 key.
+              provider === "grok" &&
+                layout !== "current" &&
+                layout !== "upstreamV17" &&
+                dedupeKey.endsWith(`:${model}`) &&
+                !dedupeKey.endsWith(`:${timestampMs}:${model}`)
+              ? `${dedupeKey.slice(0, -model.length)}${timestampMs}:${model}`
+              : dedupeKey,
         ...(provisional === 1 ? { provisional: true as const } : {}),
-        ...(oneHourCacheCreationTokens ? { oneHourCacheCreationTokens } : {}),
       });
     }
     return records;
@@ -457,26 +505,20 @@ export function decodeScanCache(
     ) {
       continue;
     }
-    // Fork v12 Codex state already buffers interrupted requests.
-    const currentCodex = layout === "current" || layout === "forkV12";
     const requiresReparse =
       entry.reparse === true ||
       !countsMalformed ||
       layout === "forkV4" ||
-      // Malformed old Codex scans may have discarded interrupted requests; older reducers
-      // also lack cumulative reconciliation and tier provenance.
-      (entry.p === "codex" &&
-        !currentCodex &&
-        ((layout !== "forkV11" && layout !== "forkV10" && layout !== "forkV9") ||
-          entry.x !== 0 ||
-          entry.tx !== 0)) ||
-      // Before v13 a repeated Claude key kept one whole copy, not each token channel's maximum.
-      (entry.p === "claude" && layout !== "current");
+      // Older Codex reducers lack request ledgers, rewind repair, and dated baselines.
+      (entry.p === "codex" && layout !== "current") ||
+      // Older Claude entries lack advisor one-hour writes and per-channel maxima per key.
+      (entry.p === "claude" && layout !== "current") ||
+      // Older Grok keys merged turns that shared a prompt id.
+      (entry.p === "grok" && layout !== "current");
     const migrated = layout !== "current" && requiresReparse;
     // A corrupt state must not attribute appended usage to another model or replay copied history.
     if (!migrated && !isValidState(entry.p, entry.cs)) continue;
-    // Clean pre-v12 Codex records remain useful unchanged, but lack buffered interrupted requests.
-    const resumable = !requiresReparse && !(entry.p === "codex" && !currentCodex);
+    const resumable = !requiresReparse;
 
     const provider = entry.p;
     const records = decodeRecords(entry.r, provider, layout);

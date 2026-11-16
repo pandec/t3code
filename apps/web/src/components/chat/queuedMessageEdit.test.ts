@@ -22,7 +22,7 @@ import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,
 } from "../../composerDraftStore";
-import { responseContextRecord } from "../../lib/composerContextRecords";
+import { environmentContextRecord, responseContextRecord } from "../../lib/composerContextRecords";
 import {
   prepareQueuedEditAttachments,
   recoverQueuedMessageEdit,
@@ -112,12 +112,22 @@ describe("queued message file edits", () => {
   it("keeps file-only edits when another client starts the queued run", () => {
     const store = useComposerDraftStore.getState();
     store.setPrompt(editTarget, "Original message");
-    store.addFiles(editTarget, [file]);
+    const elsewhere: ComposerFileAttachment = {
+      ...uploadedFile,
+      id: "file:elsewhere",
+      name: "elsewhere.pdf",
+      file: null,
+      uploadedAttachmentId: "upload:elsewhere",
+      uploadEnvironmentId: EnvironmentId.make("other-environment"),
+    };
+    store.addFiles(editTarget, [file, elsewhere]);
     expect(
       recoverQueuedMessageEdit({ editTarget, threadTarget, originalText: "Original message" }),
     ).toEqual({ outcome: "kept", skippedAttachmentCount: 0 });
     expect(store.getComposerDraft(threadTarget)?.prompt).toBe("Original message");
-    expect(store.getComposerDraft(threadTarget)?.files).toEqual([file]);
+    // An upload this environment cannot reach comes back as a file to reattach, not a dropped chip.
+    const { uploadedAttachmentId: _id, uploadEnvironmentId: _env, ...reattach } = elsewhere;
+    expect(store.getComposerDraft(threadTarget)?.files).toEqual([file, reattach]);
     expect(store.getComposerDraft(editTarget)).toBeNull();
   });
 
@@ -301,17 +311,29 @@ describe("queued message file edits", () => {
     expect(result.skippedAttachmentCount).toBe(1);
   });
 
-  it("removes a kept edit draft that held a thread mention", () => {
+  it("keeps the mentions and reply of a kept edit in the thread draft", () => {
     const store = useComposerDraftStore.getState();
     store.setPrompt(editTarget, "Edited message");
-    store.setThreadContexts(editTarget, [
-      threadContextRecord(scopeThreadRef(environmentId, ThreadId.make("thread:other")), "Other"),
-    ]);
+    const thread = threadContextRecord(
+      scopeThreadRef(environmentId, ThreadId.make("thread:other")),
+      "Other",
+    );
+    const machine = environmentContextRecord(EnvironmentId.make("environment-vps"), "vps");
+    store.addThreadContexts(editTarget, [thread]);
+    store.addEnvironmentContexts(editTarget, [machine]);
+    store.setReplyTo(editTarget, reply);
+    const editedPrompt = store.getComposerDraft(editTarget)!.prompt;
     expect(
       recoverQueuedMessageEdit({ editTarget, threadTarget, originalText: "Original message" })
         .outcome,
     ).toBe("kept");
     expect(store.getComposerDraft(editTarget)).toBeNull();
+    expect(store.getComposerDraft(threadTarget)).toMatchObject({
+      prompt: editedPrompt,
+      threadContexts: [thread],
+      environmentContexts: [machine],
+      replyTo: reply,
+    });
   });
 
   it("keeps an edit that only removed a saved attachment or its reply", () => {

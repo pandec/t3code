@@ -101,6 +101,7 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
     isCurrentSend,
     inputOrigin,
     customGroupId,
+    draftChangedDuringPreparation,
   }: {
     readonly threadId: ThreadId;
     readonly project: EnvironmentProject;
@@ -121,6 +122,7 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
     readonly inputOrigin: MessageInputOrigin | undefined;
     /** Fork: the draft's custom group, which every created thread joins. */
     readonly customGroupId: string | null;
+    readonly draftChangedDuringPreparation: () => boolean;
   }) => {
     const { attachments: attachmentsSnapshot, messageText } = sendSnapshot;
     const failedSelections: ModelSelection[] = [];
@@ -132,6 +134,8 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
     // fails every selection; the draft restore below still runs.
     const sendResult = await settlePromise(async () => {
       const attachments = await attachmentsPromise;
+      if (draftChangedDuringPreparation())
+        throw new Error("Draft changed while preparing this message. Review it and send again.");
       const fileBlockReason = readFileBlockReason();
       if (fileBlockReason !== null) throw new Error(fileBlockReason);
       const context = buildOutgoingMessageContext(

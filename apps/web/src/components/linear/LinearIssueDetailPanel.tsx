@@ -10,6 +10,7 @@ import type {
   ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
+  CheckIcon,
   CopyIcon,
   CornerLeftUpIcon,
   ExternalLinkIcon,
@@ -32,7 +33,11 @@ import { formatRelativeTimeLabel } from "~/timestampFormat";
 import { useRightPanelStore } from "../../rightPanelStore";
 import ChatMarkdown from "../ChatMarkdown";
 import { LinearIcon } from "../Icons";
-import { showAnchoredCopyErrorToast, showAnchoredCopySuccessToast } from "../ui/anchoredCopyToast";
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import {
+  ANCHORED_COPY_TOAST_TIMEOUT_MS,
+  showAnchoredCopyErrorToast,
+} from "../ui/anchoredCopyToast";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
@@ -252,20 +257,10 @@ function DetailRow({ label, children }: { label: string; children: ReactNode }) 
 
 function CopyButton({ value, label }: { value: string; label: string }) {
   const ref = useRef<HTMLButtonElement>(null);
-  const copy = () => {
-    if (!navigator.clipboard?.writeText) {
-      showAnchoredCopyErrorToast(ref, new Error("Clipboard API unavailable."));
-      return;
-    }
-    void navigator.clipboard.writeText(value).then(
-      () => showAnchoredCopySuccessToast(ref),
-      (error: unknown) =>
-        showAnchoredCopyErrorToast(
-          ref,
-          error instanceof Error ? error : new Error("An error occurred."),
-        ),
-    );
-  };
+  const { copyToClipboard, isCopied } = useCopyToClipboard<void>({
+    onError: (error) => showAnchoredCopyErrorToast(ref, error),
+    timeout: ANCHORED_COPY_TOAST_TIMEOUT_MS,
+  });
   return (
     <Tooltip>
       <TooltipTrigger
@@ -275,9 +270,13 @@ function CopyButton({ value, label }: { value: string; label: string }) {
             aria-label={label}
             size="icon-micro"
             variant="ghost-muted"
-            onClick={copy}
+            onClick={() => copyToClipboard(value, undefined)}
           >
-            <CopyIcon className="size-3" />
+            {isCopied ? (
+              <CheckIcon className="size-3 text-success" />
+            ) : (
+              <CopyIcon className="size-3" />
+            )}
           </Button>
         }
       />

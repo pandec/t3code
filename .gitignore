@@ -69,3 +69,5 @@ rev/
 .cy-review-run/
 # pnpm content-addressable store; never belongs in the repo.
 .pnpm-store/
+
+/packages/ssh/.ssh-launcher-test-*/

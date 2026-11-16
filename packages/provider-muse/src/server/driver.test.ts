@@ -241,6 +241,6 @@ it.layer(layerTest)("MuseDriver usage", (it) => {
       usageOutput = JSON.stringify({ allowance: null, reason: "api_key" });
       const signedOut = yield* instance.snapshot.refresh;
       expect(signedOut.usageLimits?.unavailable?.reason).toBe("unsupported");
-    }).pipe(Effect.scoped),
+    }),
   );
 });

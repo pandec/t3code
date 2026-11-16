@@ -1,3 +1,4 @@
+import { resolveProviderProbeTimeoutMs } from "@t3tools/provider-core/server/snapshotProbe";
 import { CodexSettings, ProviderDriverKind } from "@t3tools/contracts";
 import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -5,10 +6,11 @@ import type * as Signature from "effect/crypto/Signature";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { HttpClient } from "effect/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
 import type * as CodexUsageHistory from "../../usage/CodexUsageHistory.ts";
@@ -27,7 +29,7 @@ import * as ResetCreditCoordinator from "../resetCreditCoordinator.ts";
 import {
   checkCodexProviderStatus,
   makePendingCodexProvider,
-  probeCodexSkillsForCwd,
+  makeCodexSkillsProbe,
   withCodexAppServerClient,
 } from "../CodexProvider.ts";
 import { resolveCodexLaunchArgs } from "../codexLaunchArgs.ts";
@@ -42,6 +44,7 @@ import {
   makeCachedProviderMaintenanceResolution,
   makePackageManagedProviderMaintenanceResolver,
   resolveProviderMaintenanceCapabilitiesEffect,
+  type ProviderMaintenanceCapabilities,
 } from "@t3tools/provider-core/server/maintenanceResolver";
 import {
   haveProviderSnapshotSettingsChanged,
@@ -97,6 +100,31 @@ function makeCodexMaintenanceResolver(sharedHomePath: string) {
       }),
     },
   });
+}
+
+// `codex update` installs this channel's release, which can lag npm's latest tag.
+const CODEX_NATIVE_CHANNEL = "https://releases.openai.com/codex/channels/latest";
+const CodexNativeRelease = Schema.Struct({ tag_name: Schema.String });
+
+function withCodexNativeLatestVersion(
+  capabilities: ProviderMaintenanceCapabilities,
+  http: HttpClient.HttpClient,
+): ProviderMaintenanceCapabilities {
+  if (capabilities.update?.lockKey !== `${DRIVER_KIND}-native`) return capabilities;
+  return {
+    ...capabilities,
+    latestVersion: null,
+    latestVersionCacheKey: CODEX_NATIVE_CHANNEL,
+    lookupLatestVersion: http.get(CODEX_NATIVE_CHANNEL).pipe(
+      Effect.flatMap(HttpClientResponse.filterStatusOk),
+      Effect.flatMap((response) => response.json),
+      Effect.flatMap(Schema.decodeUnknownEffect(CodexNativeRelease)),
+      Effect.map((release) => /^rust-v(\d+\.\d+\.\d+)$/.exec(release.tag_name)?.[1] ?? null),
+      Effect.timeoutOption("4 seconds"),
+      Effect.map(Option.getOrNull),
+      Effect.orElseSucceed(() => null),
+    ),
+  };
 }
 
 export type CodexDriverEnv =
@@ -191,7 +219,7 @@ export const CodexDriver: ProviderDriver<
       binaryPath: expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
       homePath: homeLayout.effectiveHomePath ?? "",
     } satisfies CodexSettings;
-    const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
+    const resolveInstallation = yield* makeCachedProviderMaintenanceResolution(
       resolveProviderMaintenanceCapabilitiesEffect(
         makeCodexMaintenanceResolver(homeLayout.sharedHomePath),
         {
@@ -204,6 +232,10 @@ export const CodexDriver: ProviderDriver<
         Effect.provideService(Path.Path, pathService),
       ),
     );
+    const resolveMaintenance: typeof resolveInstallation = (options) =>
+      resolveInstallation(options).pipe(
+        Effect.map((capabilities) => withCodexNativeLatestVersion(capabilities, httpClient)),
+      );
 
     const orchestrationAdapter = yield* createCodexAdapterV2(
       {
@@ -218,6 +250,9 @@ export const CodexDriver: ProviderDriver<
         onUsageLimits: (update) => snapshot.applyUsageLimits(update),
         // Fork (DECISIONS 5.9): thread identity in the commands Codex runs.
         t3Paths: { baseDir: serverConfig.baseDir, stateDir: serverConfig.stateDir },
+        models: Effect.suspend(() => snapshot.getSnapshot).pipe(
+          Effect.map((value) => value.models),
+        ),
         compatibility: installation.compatibility,
       },
     ).pipe(
@@ -293,22 +328,21 @@ export const CodexDriver: ProviderDriver<
       homePath: effectiveConfig.homePath,
       environment: processEnv,
     });
+    const probeSkills = yield* makeCodexSkillsProbe().pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    );
     const snapshotForCwd = (cwd: string) =>
       !effectiveConfig.enabled
         ? snapshot.getSnapshot
         : Effect.all([
             snapshot.getSnapshot,
-            probeCodexSkillsForCwd({
+            probeSkills({
               binaryPath: effectiveConfig.binaryPath,
               homePath: effectiveConfig.homePath,
               launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
               cwd,
               environment: processEnv,
-            }).pipe(
-              Effect.scoped,
-              Effect.timeout("20 seconds"),
-              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-            ),
+            }).pipe(Effect.timeout(resolveProviderProbeTimeoutMs("codex", 20_000, processEnv))),
           ]).pipe(
             Effect.map(([machineSnapshot, skills]) => ({ ...machineSnapshot, skills })),
             Effect.mapError(

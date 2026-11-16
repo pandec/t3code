@@ -512,6 +512,7 @@ it.live("the follow worker moves the thread for the live process only", () =>
               ? Option.some({
                   projectId,
                   title: name,
+                  hasCustomTitle: false,
                   workspaceRoot: root,
                   defaultModelSelection: modelSelection,
                   defaultThreadEnvMode: null,

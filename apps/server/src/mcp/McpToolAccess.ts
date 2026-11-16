@@ -7,6 +7,7 @@ import {
   type RuntimeMode,
   type ThreadId,
 } from "@t3tools/contracts";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
@@ -14,6 +15,7 @@ import * as Ref from "effect/Ref";
 import * as Struct from "effect/Struct";
 import type * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
+import { McpSchema } from "effect/ai";
 import type { Tool, Toolkit } from "effect/ai";
 
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
@@ -421,7 +423,8 @@ export const dependsOnParams = <P, A, E, R>(
   const read = checkedHandler(reads(handle));
   const own = checkedHandler(actsOnOwnThread(handle));
   const environment = checkedHandler(writesEnvironment((params: P) => handle(params)));
-  // Local only: fork tools act as or for the calling thread and take no `environmentId`.
+  // Local only: fork tools take no `environmentId`. A remote check, unlike `undefined`,
+  // keeps them offered to outside clients, which their target-thread branches serve.
   return declare(
     (params: P) =>
       Effect.gen(function* () {
@@ -437,7 +440,13 @@ export const dependsOnParams = <P, A, E, R>(
             return yield* checkedHandler(writesThreads(() => choice.threads, handle))(params);
         }
       }),
-    undefined,
+    () =>
+      Effect.fail(
+        new OrchestratorMcpFailure({
+          code: "invalid_request",
+          message: "This tool runs only in this environment. Omit environmentId.",
+        }),
+      ),
   );
 };
 
@@ -508,8 +517,17 @@ const routed = Effect.fn("McpToolAccess.routed")(function* <Tools extends Record
   const handlers: Record<string, unknown> = { ...checked };
   for (const [name, declaration] of Object.entries<Declaration<unknown>>(declarations)) {
     const tool = toolkit.tools[name];
-    if (tool === undefined || !takesLinkedEnvironment(tool)) continue;
+    if (tool === undefined) continue;
     const remote = remoteCheckOf(declaration);
+    if (
+      remote === undefined &&
+      Context.getOrUndefined(tool.annotations, McpSchema.EnabledWhen) !==
+        McpInvocationContext.hiddenFromOutsideClients
+    )
+      return yield* Effect.die(
+        `${name} acts as its calling thread, so outside clients must not be offered it.`,
+      );
+    if (!takesLinkedEnvironment(tool)) continue;
     const forwarded = forwardedOf(declaration) as
       | Forwarded<object, unknown, Tool.Failure<Tools[keyof Tools]>, never>
       | undefined;

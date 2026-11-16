@@ -1146,6 +1146,7 @@ const makeClaudeRegistry = Effect.gen(function* () {
                 setModel: () => Effect.void,
                 applyFlagSettings: () => Effect.void,
                 setPermissionMode: () => Effect.void,
+                renameSession: () => Effect.void,
                 backgroundTasks: () => Effect.succeed(false),
                 mcpServerStatus: Effect.succeed([]),
                 readMcpResource: () => Effect.die("unexpected MCP resource read"),

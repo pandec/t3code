@@ -3,6 +3,7 @@ import {
   type EnvironmentId,
   type UsageBucket,
   type UsageProviderKind,
+  type UsageSource,
   type UsageSourceFingerprint,
   type UsageSummary,
   type UsageTokenTotals,
@@ -139,16 +140,45 @@ function fingerprintKey(fingerprint: UsageSourceFingerprint): string {
   ].join(" ");
 }
 
+// Sources are one directory when either their legacy key or their physicalSourceId matches.
+// physicalSourceId joins a directory read natively by Windows and through a WSL mount (path
+// and dev:ino both differ); the legacy key still joins installs whose host scopes differ.
+function sourceIdentity(
+  environments: readonly EnvironmentUsage[],
+): (fingerprint: UsageSourceFingerprint) => string {
+  const parent = new Map<string, string>();
+  const find = (key: string): string => {
+    const next = parent.get(key);
+    if (next === undefined || next === key) return key;
+    const root = find(next);
+    parent.set(key, root);
+    return root;
+  };
+  for (const environment of environments) {
+    for (const { fingerprint } of environment.summary.sources) {
+      if (fingerprint.physicalSourceId === undefined) continue;
+      const legacy = find(fingerprintKey(fingerprint));
+      const physical = find(`\u0000${fingerprint.provider}\u0000${fingerprint.physicalSourceId}`);
+      if (legacy !== physical) parent.set(legacy, physical);
+    }
+  }
+  return (fingerprint) => find(fingerprintKey(fingerprint));
+}
+
 /**
- * Decides which environment owns each physical transcript directory, so environments resolving one
- * provider home (worktree servers, for instance) don't double count. The most recently read summary
- * claims a fingerprint, the rest drop that provider's buckets; environment ids break read-time ties.
+ * Decides which source reading owns each physical transcript directory, so environments resolving
+ * one provider home (worktree servers, for instance) don't double count. The most recently read
+ * summary claims a directory, the rest drop its buckets; environment ids break read-time ties. By
+ * source, not environment: one server can reach a directory through two mounts.
  */
-function claimSources(environments: readonly EnvironmentUsage[]): {
-  readonly ownerByFingerprint: ReadonlyMap<string, EnvironmentId>;
+function claimSources(
+  environments: readonly EnvironmentUsage[],
+  sourceKey: (fingerprint: UsageSourceFingerprint) => string,
+): {
+  readonly ownerByFingerprint: ReadonlyMap<string, UsageSource>;
   readonly duplicates: readonly string[];
 } {
-  const ownerByFingerprint = new Map<string, EnvironmentId>();
+  const ownerByFingerprint = new Map<string, UsageSource>();
   const duplicates: string[] = [];
 
   const ordered = [...environments].sort(
@@ -160,12 +190,12 @@ function claimSources(environments: readonly EnvironmentUsage[]): {
   for (const environment of ordered) {
     for (const source of environment.summary.sources) {
       if (source.status === "missing") continue;
-      const key = fingerprintKey(source.fingerprint);
+      const key = sourceKey(source.fingerprint);
       if (ownerByFingerprint.has(key)) {
         duplicates.push(`${environment.label}: ${source.fingerprint.resolvedHomePath}`);
         continue;
       }
-      ownerByFingerprint.set(key, environment.environmentId);
+      ownerByFingerprint.set(key, source);
     }
   }
 
@@ -174,7 +204,8 @@ function claimSources(environments: readonly EnvironmentUsage[]): {
 
 function ownedContribution(
   environment: EnvironmentUsage,
-  ownerByFingerprint: ReadonlyMap<string, EnvironmentId>,
+  ownerByFingerprint: ReadonlyMap<string, UsageSource>,
+  sourceKey: (fingerprint: UsageSourceFingerprint) => string,
 ): {
   readonly buckets: readonly UsageBucket[];
   readonly unattributedProviders: ReadonlySet<UsageProviderKind>;
@@ -186,8 +217,7 @@ function ownedContribution(
   const sessionsByProvider = new Map<UsageProviderKind, number>();
   for (const source of environment.summary.sources) {
     if (source.status === "missing") continue;
-    const key = fingerprintKey(source.fingerprint);
-    if (ownerByFingerprint.get(key) === environment.environmentId) {
+    if (ownerByFingerprint.get(sourceKey(source.fingerprint)) === source) {
       const provider = source.fingerprint.provider;
       ownedProviders.add(provider);
       ownedSources.add(`${provider}\u0000${source.fingerprint.resolvedHomePath}`);
@@ -291,14 +321,14 @@ export function mergeUsage(
     }
   }
 
-  const { ownerByFingerprint, duplicates } = claimSources(current);
+  const sourceKey = sourceIdentity(current);
+  const { ownerByFingerprint, duplicates } = claimSources(current, sourceKey);
   const partialSources: PartialUsageSource[] = [];
   for (const environment of current) {
     for (const source of environment.summary.sources) {
-      const key = fingerprintKey(source.fingerprint);
       if (
         source.status === "partial" &&
-        ownerByFingerprint.get(key) === environment.environmentId
+        ownerByFingerprint.get(sourceKey(source.fingerprint)) === source
       ) {
         partialSources.push({
           environmentId: environment.environmentId,
@@ -366,11 +396,11 @@ export function mergeUsage(
       buckets: ownedBuckets,
       sessionsByProvider,
       unattributedProviders,
-    } = ownedContribution(environment, ownerByFingerprint);
+    } = ownedContribution(environment, ownerByFingerprint, sourceKey);
     for (const source of environment.summary.sources) {
       if (
         !unattributedProviders.has(source.fingerprint.provider) ||
-        ownerByFingerprint.get(fingerprintKey(source.fingerprint)) !== environment.environmentId
+        ownerByFingerprint.get(sourceKey(source.fingerprint)) !== source
       )
         continue;
       const message =
@@ -476,7 +506,9 @@ export function mergeUsage(
       };
       model.records += bucket.records;
       model.unpricedRecords += bucket.unpricedRecords;
-      if (bucket.records > 0) {
+      if (bucket.unpricedTokens !== undefined) {
+        model.unpricedTokens += bucket.unpricedTokens;
+      } else if (bucket.records > 0) {
         model.unpricedTokens += (tokens * bucket.unpricedRecords) / bucket.records;
       }
       modelAccumulator.set(modelKey, model);

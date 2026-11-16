@@ -71,7 +71,7 @@ describe("usage pricing", () => {
     const writes = (model: string, speed: UsageSpeed = "standard") => ({
       ...record(model, null, speed),
       totals: { ...totals, uncachedInputTokens: 0, cachedInputTokens: 0, outputTokens: 0 },
-      oneHourCacheCreationTokens: 250_000,
+      cacheCreation1hTokens: 250_000,
     });
 
     // 750k five-minute writes at $5/M plus 250k one-hour writes at $8/M.

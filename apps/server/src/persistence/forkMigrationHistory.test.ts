@@ -111,6 +111,8 @@ const seedForkLedger = (
     }
   });
 
+const migrationsFrom = (firstId: number) => migrationManifest.filter(([id]) => id >= firstId);
+
 const readLedger = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   return yield* sql<LedgerRow>`
@@ -137,36 +139,7 @@ describe("repairForkMigrationHistory", () => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* seedForkLedger();
-      assert.deepStrictEqual(yield* runMigrations(), [
-        [55, "OrchestrationV2"],
-        [56, "RemoveRedundantProjectionIndexes"],
-        [57, "ScheduledTaskWebhooks"],
-        [58, "WebhookRelayDeliveries"],
-        [59, "McpAppModelContext"],
-        [60, "ThreadSnapshotWindowIndexes"],
-        [61, "PullRequestReviewGuides"],
-        [62, "ThreadFailureLookupIndex"],
-        [63, "DropUnusedV1Projections"],
-        [64, "CanonicalizeThreadPullRequestLinks"],
-        [65, "CodexUsageNativeTurnIndex"],
-        [66, "RepairClientSettlementTimestamps"],
-        [67, "WebhookDedupe"],
-        [68, "ShellStopRequestIndex"],
-        [69, "ThreadMessageSearch"],
-        [70, "PeerLinks"],
-        [71, "PeerLinkFence"],
-        [72, "WaitingLinkRequestIndex"],
-        [73, "ActiveTurnItemIndexes"],
-        [74, "ExcludeAttachmentPlaceholdersFromSearch"],
-        [75, "SubagentDeliveryState"],
-        [76, "ProjectionProjectsPinArchive"],
-        [77, "RepairBooleanSettledOverride"],
-        [78, "DropOrchestrationEventCorrelationIndex"],
-        [79, "DelegatedRecoveryIndexes"],
-        [80, "ScheduledTaskThreadMode"],
-        [81, "ProjectionMessageSearchText"],
-        [82, "TurnItemConversationIndex"],
-      ]);
+      assert.deepStrictEqual(yield* runMigrations(), migrationsFrom(55));
       const ledger = yield* readLedger;
       assert.deepStrictEqual(
         ledger.map((row) => [row.migration_id, row.name] as const),
@@ -196,36 +169,7 @@ describe("repairForkMigrationHistory", () => {
       const sql = yield* SqlClient.SqlClient;
       const relocated = forkLedger.filter(([, name]) => !forkOnlyMigrationNames.has(name));
       yield* seedForkLedger(relocated);
-      assert.deepStrictEqual(yield* runMigrations(), [
-        [55, "OrchestrationV2"],
-        [56, "RemoveRedundantProjectionIndexes"],
-        [57, "ScheduledTaskWebhooks"],
-        [58, "WebhookRelayDeliveries"],
-        [59, "McpAppModelContext"],
-        [60, "ThreadSnapshotWindowIndexes"],
-        [61, "PullRequestReviewGuides"],
-        [62, "ThreadFailureLookupIndex"],
-        [63, "DropUnusedV1Projections"],
-        [64, "CanonicalizeThreadPullRequestLinks"],
-        [65, "CodexUsageNativeTurnIndex"],
-        [66, "RepairClientSettlementTimestamps"],
-        [67, "WebhookDedupe"],
-        [68, "ShellStopRequestIndex"],
-        [69, "ThreadMessageSearch"],
-        [70, "PeerLinks"],
-        [71, "PeerLinkFence"],
-        [72, "WaitingLinkRequestIndex"],
-        [73, "ActiveTurnItemIndexes"],
-        [74, "ExcludeAttachmentPlaceholdersFromSearch"],
-        [75, "SubagentDeliveryState"],
-        [76, "ProjectionProjectsPinArchive"],
-        [77, "RepairBooleanSettledOverride"],
-        [78, "DropOrchestrationEventCorrelationIndex"],
-        [79, "DelegatedRecoveryIndexes"],
-        [80, "ScheduledTaskThreadMode"],
-        [81, "ProjectionMessageSearchText"],
-        [82, "TurnItemConversationIndex"],
-      ]);
+      assert.deepStrictEqual(yield* runMigrations(), migrationsFrom(55));
       assert.deepStrictEqual(
         (yield* readLedger).map((row) => [row.migration_id, row.name] as const),
         migrationManifest,
@@ -240,13 +184,7 @@ describe("repairForkMigrationHistory", () => {
   it.effect("maps an older fork ledger and runs the remaining upstream migrations", () =>
     Effect.gen(function* () {
       yield* seedForkLedger(forkLedger.slice(0, 60), 49);
-      assert.deepStrictEqual(
-        (yield* runMigrations()).map(([id]) => id),
-        [
-          50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71,
-          72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82,
-        ],
-      );
+      assert.deepStrictEqual(yield* runMigrations(), migrationsFrom(50));
       assert.deepStrictEqual(
         (yield* readLedger).map((row) => [row.migration_id, row.name] as const),
         migrationManifest,

@@ -32,6 +32,9 @@ const publicConfigDefine = {
 export default defineConfig({
   test: {
     ...sharedTestDefaults,
+    // `require("electron")` downloads a missing binary, so concurrent workers race to
+    // extract it into the same dist/. Install it once before any worker starts.
+    globalSetup: ["./scripts/ensure-electron-runtime.mjs"],
     projects: [
       {
         extends: true,

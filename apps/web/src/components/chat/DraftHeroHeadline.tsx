@@ -15,7 +15,7 @@ import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useOrderWhileOpen } from "~/hooks/useOrderWhileOpen";
 import { useProjectPin } from "~/hooks/useProjectGroupUpdate";
 import { useScratchProject } from "~/hooks/useScratchProject";
-import { isTriagePrompt } from "~/hooks/useStartTriage";
+import { isTriagePrompt } from "@t3tools/shared/triagePrompt";
 import { useAccentTintSettings, useClientSettings } from "~/hooks/useSettings";
 import { useThreadGroupCatalog } from "~/hooks/useThreadGroups";
 import { hasExplicitComposerModelSelection } from "~/lib/chatThreadActions";
@@ -28,10 +28,9 @@ import { projectAccentTintStyle } from "~/projectAccentTint";
 import { projectIconColorClassName } from "~/projectIconColors";
 import {
   buildSidebarProjectPickerEntries,
-  buildSidebarProjectSnapshots,
   projectGroupsSpanEnvironments,
 } from "~/sidebarProjectGrouping";
-import { useProjects, useVisibleThreadShells } from "~/state/entities";
+import { useProjects } from "~/state/entities";
 import {
   useEnvironments,
   usePrimaryEnvironmentId,
@@ -40,7 +39,7 @@ import {
 import { ProjectEnvironmentBadge } from "../ProjectEnvironmentBadge";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { isProjectPinShortcut, ProjectPinButton } from "../ProjectPinButton";
-import { sortLogicalProjectsForSidebar } from "../Sidebar.logic";
+import { useSortedProjectGroups } from "../CommandPaletteLookups";
 import {
   Combobox,
   ComboboxEmpty,
@@ -90,12 +89,10 @@ export function DraftHeroHeadline({
   activeProjectTitle,
 }: DraftHeroHeadlineProps) {
   const projects = useProjects();
-  const threads = useVisibleThreadShells();
   const { environments } = useEnvironments();
   const providersByEnvironment = useEnvironmentProviders();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
-  const projectSortOrder = useClientSettings((settings) => settings.sidebarProjectSortOrder);
   // Same accents and same tint toggle as the sidebar and command palette, so
   // the picker rows read as the same projects.
   const projectAccentColors = useProjectAccentColors();
@@ -128,16 +125,7 @@ export function DraftHeroHeadline({
   const environmentLabelById = new Map(
     environments.map((environment) => [environment.environmentId, environment.label] as const),
   );
-  const projectGroups = sortLogicalProjectsForSidebar(
-    buildSidebarProjectSnapshots({
-      projects,
-      settings: projectGroupingSettings,
-      primaryEnvironmentId,
-      resolveEnvironmentLabel: (environmentId) => environmentLabelById.get(environmentId) ?? null,
-    }),
-    threads,
-    projectSortOrder,
-  );
+  const projectGroups = useSortedProjectGroups(environmentLabelById);
   const showProjectEnvironments = projectGroupsSpanEnvironments(projectGroups);
   const environmentMachineById = new Map(
     environments.map(

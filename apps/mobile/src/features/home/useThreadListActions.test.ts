@@ -8,6 +8,7 @@ import {
   ProviderInstanceId,
   RunId,
   ThreadId,
+  type ThreadTitleRegenerationOutcome,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
@@ -17,10 +18,14 @@ const state = vi.hoisted(() => ({
   connectedEnvironmentIds: [] as EnvironmentId[],
   pendingOrder: null as object | null,
   dropBusy: false,
+  holdingRows: false,
   failedAction: null as string | null,
+  titleOutcome: null as ThreadTitleRegenerationOutcome | null,
   archivedRefreshes: [] as string[],
+  onArchivedRefresh: undefined as (() => void) | undefined,
   scopes: new Map<string, Set<string>>(),
   shells: [] as EnvironmentThreadShell[],
+  lifecycleIntents: {} as Record<string, unknown>,
   requests: [] as {
     action: string;
     environmentId: string;
@@ -57,6 +62,7 @@ vi.mock("../../components/ui/Dialog", () => ({
 vi.mock("../archive/useArchivedThreadSnapshots", () => ({
   refreshArchivedThreadsForEnvironment: (environmentId: string) => {
     state.archivedRefreshes.push(environmentId);
+    state.onArchivedRefresh?.();
   },
 }));
 vi.mock("../../state/session", () => ({
@@ -69,8 +75,9 @@ vi.mock("../../state/presentation", () => ({
 vi.mock("../../state/server", () => ({
   environmentServerConfigsAtom: "server-configs",
 }));
-vi.mock("../../state/atom-registry", () => ({
-  appAtomRegistry: {
+vi.mock("../../state/atom-registry", async () => {
+  const registry = (await import("effect/reactivity")).AtomRegistry.make();
+  const stub = {
     set: (_atom: string, value: boolean) => {
       state.dropBusy = value;
     },
@@ -79,31 +86,46 @@ vi.mock("../../state/atom-registry", () => ({
         ? state.connectedEnvironmentIds
         : atom === "thread-drop-busy"
           ? state.dropBusy
-          : atom === "thread-shells"
-            ? state.shells
-            : atom === "queued-thread-keys"
-              ? new Set<string>()
-              : atom === "lifecycle-intents"
-                ? {}
-                : new Map(
-                    [...state.scopes.keys()].map((environmentId) => [
-                      environmentId,
-                      {
-                        settings: { threadGroups: [] },
-                        environment: {
-                          capabilities: {
-                            threadSettlement: true,
-                            threadSnooze: true,
-                            threadPinning: true,
-                            threadPinReorder: true,
-                            threadTitleRegeneration: true,
+          : atom === "steady-shells-holding"
+            ? state.holdingRows
+            : atom === "thread-shells"
+              ? state.shells
+              : atom === "queued-thread-keys"
+                ? new Set<string>()
+                : atom === "lifecycle-intents"
+                  ? state.lifecycleIntents
+                  : new Map(
+                      [...state.scopes.keys()].map((environmentId) => [
+                        environmentId,
+                        {
+                          settings: { threadGroups: [] },
+                          environment: {
+                            capabilities: {
+                              threadSettlement: true,
+                              threadSnooze: true,
+                              threadPinning: true,
+                              threadPinReorder: true,
+                              threadTitleRegeneration: true,
+                            },
                           },
                         },
-                      },
-                    ]),
-                  ),
-  },
-}));
+                      ]),
+                    ),
+  };
+  // Real atoms such as composerDraftsAtom go to a real registry; strings are stubbed state.
+  return {
+    appAtomRegistry: {
+      get: (atom: unknown) =>
+        typeof atom === "string"
+          ? stub.get(atom)
+          : registry.get(atom as Parameters<typeof registry.get>[0]),
+      set: (atom: unknown, value: unknown) =>
+        typeof atom === "string"
+          ? stub.set(atom, value as boolean)
+          : registry.set(atom as Parameters<typeof registry.set>[0], value),
+    },
+  };
+});
 // Fork dependencies: audio playback, the offline lifecycle outbox, connection
 // status, and forking each pull native modules into this permission test.
 vi.mock("../../state/listeningPlayer", () => ({
@@ -122,7 +144,10 @@ vi.mock("../../state/thread-lifecycle-outbox", () => ({
   enqueueThreadLifecycleIntent: async () => {},
   threadLifecycleOutboxManager: { intentsByThreadKeyAtom: "lifecycle-intents" },
 }));
-vi.mock("../../state/thread-lifecycle-outbox-model", () => ({
+vi.mock("../../state/thread-lifecycle-outbox-model", async (importOriginal) => ({
+  deriveThreadLifecyclePresentation: (
+    await importOriginal<typeof import("../../state/thread-lifecycle-outbox-model")>()
+  ).deriveThreadLifecyclePresentation,
   isThreadLifecycleUserAction: () => true,
   threadLifecycleActionUsesOutbox: () => false,
   threadLifecycleIntentRevision: () => ({ desiredArchived: true, requiresDispatch: false }),
@@ -152,10 +177,9 @@ vi.mock("../../state/thread-order", () => ({
   },
 }));
 vi.mock("../../state/threads", () => ({
-  environmentThreadShells: {
-    threadShellsAtom: "thread-shells",
-    navigationThreadShellsAtom: "thread-shells",
-  },
+  environmentThreadShells: { threadShellsAtom: "thread-shells" },
+  steadyNavigationThreadShellsAtom: "thread-shells",
+  steadyShellsHoldingAtom: "steady-shells-holding",
   threadEnvironment: Object.fromEntries(
     [
       "archive",
@@ -174,6 +198,7 @@ vi.mock("../../state/threads", () => ({
       "setCustomGroup",
       "setAutoSettle",
       "updateMetadata",
+      "regenerateTitle",
     ].map((action) => [
       action,
       async (request: {
@@ -188,12 +213,14 @@ vi.mock("../../state/threads", () => ({
         if (action === state.failedAction)
           return AsyncResult.failure(Cause.fail(new Error("Server rejected action")));
         state.afterRequest?.();
-        return AsyncResult.success(undefined);
+        return AsyncResult.success(action === "regenerateTitle" ? state.titleOutcome : undefined);
       },
     ]),
   ),
 }));
 
+import { appAtomRegistry } from "../../state/atom-registry";
+import { composerDraftsAtom } from "../../state/use-composer-drafts";
 import { dismissThreadUndoNotice, readThreadUndoNotice } from "./thread-undo-notice";
 import { useThreadListActions } from "./useThreadListActions";
 
@@ -219,21 +246,25 @@ const mutationCases = [
   ["unsnoozeThread", "unsnooze"],
   ["pinThread", "pin"],
   ["unpinThread", "unpin"],
-  ["regenerateThreadTitle", "updateMetadata"],
+  ["regenerateThreadTitle", "regenerateTitle"],
 ] as const;
 
 beforeEach(() => {
   state.connectedEnvironmentIds = [primaryEnvironmentId, otherEnvironmentId];
   state.failedAction = null;
+  state.titleOutcome = null;
   state.archivedRefreshes = [];
+  state.onArchivedRefresh = undefined;
   state.pendingOrder = null;
   state.dropBusy = false;
+  state.holdingRows = false;
   state.scopes = new Map([
     [primaryEnvironmentId, new Set([AuthOrchestrationOperateScope])],
     [otherEnvironmentId, new Set<string>()],
   ]);
   state.requests = [];
   state.shells = [];
+  state.lifecycleIntents = {};
   state.dialogs = [];
   state.alerts = [];
   state.afterRequest = undefined;
@@ -244,6 +275,16 @@ afterEach(() => {
   dismissThreadUndoNotice();
   vi.useRealTimers();
   vi.unstubAllEnvs();
+});
+
+it("reports a failed title generation as unsuccessful and allows another request", async () => {
+  const actions = useThreadListActions();
+  const thread = makeThread();
+  state.titleOutcome = { status: "failed", message: "Model unavailable" };
+  expect(await actions.regenerateThreadTitle(thread)).toBe(false);
+
+  state.titleOutcome = { status: "renamed" };
+  expect(await actions.regenerateThreadTitle(thread)).toBe(true);
 });
 
 describe("thread list operation permissions", () => {
@@ -268,7 +309,9 @@ describe("thread list operation permissions", () => {
     expect(state.requests).toEqual([]);
   });
 
-  it("rechecks permission after a retained delete confirmation", async () => {
+  it("rechecks permission after a retained delete confirmation, then clears the draft", async () => {
+    const draft = { text: "unsent", attachments: [] };
+    appAtomRegistry.set(composerDraftsAtom, { "primary:thread": draft, "primary:other": draft });
     useThreadListActions().confirmDeleteThread(makeThread());
     const confirm = state.dialogs[0]?.onConfirm;
     expect(confirm).toBeTypeOf("function");
@@ -277,6 +320,15 @@ describe("thread list operation permissions", () => {
     await confirm!();
 
     expect(state.requests).toEqual([]);
+    expect(Object.keys(appAtomRegistry.get(composerDraftsAtom))).toContain("primary:thread");
+
+    state.scopes.get(primaryEnvironmentId)!.add(AuthOrchestrationOperateScope);
+    const deleted = new Promise<void>((resolve) => (state.onArchivedRefresh = resolve));
+    confirm!();
+    await deleted;
+
+    expect(state.requests).toEqual([expect.objectContaining({ action: "delete" })]);
+    expect(Object.keys(appAtomRegistry.get(composerDraftsAtom))).toEqual(["primary:other"]);
   });
 
   it("archives a busy thread when done and cancels a pending archive", async () => {
@@ -345,6 +397,12 @@ describe("pinned thread operation permissions", () => {
         pinOrderKey: "g",
       }),
     ];
+
+    // Rows that wait to show can hold order keys the server has replaced.
+    state.holdingRows = true;
+    expect(await useThreadListActions().moveThread(moved, "up")).toBe(false);
+    expect(state.requests).toEqual([]);
+    state.holdingRows = false;
 
     expect(await useThreadListActions().moveThread(moved, "up")).toBe(true);
     expect(state.requests).toEqual([
@@ -566,6 +624,25 @@ describe("thread action undo", () => {
     },
   );
 
+  it.each(["settleThread", "unpinThread"] as const)(
+    "%s plans its undo from the live row when the list holds an older one",
+    async (handler) => {
+      const held = makeThread({ pinnedAt: "2026-09-02T00:00:00.000Z", pinOrderKey: "m" });
+      const live = makeThread({
+        pinnedAt: "2026-09-02T00:00:00.000Z",
+        pinOrderKey: "t",
+        snoozedUntil: "2099-01-01T09:00:00.000Z",
+      });
+      state.shells = [live];
+      await useThreadListActions()[handler](held);
+      await readThreadUndoNotice()!.undo();
+      expect(state.requests.slice(-2)).toMatchObject([
+        { action: "pin", input: { threadId: live.id, orderKey: "t" } },
+        { action: "snooze", input: { threadId: live.id, snoozedUntil: live.snoozedUntil } },
+      ]);
+    },
+  );
+
   // regression: #21401 restore archive and thread action undo
   it("does not restore snooze if undoing an unpin fails", async () => {
     const thread = makeThread({
@@ -623,5 +700,64 @@ describe("thread action undo", () => {
     expect(readThreadUndoNotice()).toBeNull();
     await undo();
     expect(state.requests.map(({ action }) => action)).toEqual(["unpin"]);
+  });
+
+  it("keeps the earlier Undo until archiving succeeds", async () => {
+    const actions = useThreadListActions();
+    const thread = makeThread();
+    await actions.settleThread(thread);
+    state.failedAction = "archive";
+    expect(await actions.archiveThread(thread)).toBe(false);
+    expect(readThreadUndoNotice()?.action).toBe("Settled");
+
+    state.failedAction = null;
+    expect(await actions.archiveThread(thread)).toBe(true);
+    expect(readThreadUndoNotice()).toBeNull();
+  });
+});
+
+describe("thread archive guard", () => {
+  it("archives again after a queued cancel of a canonical pending archive", async () => {
+    const archiveRequest = {
+      requestId: CommandId.make("request-1"),
+      runId: null,
+      worktreePath: null,
+      requestedAt: "2026-10-04T10:00:00.000Z",
+      status: "pending" as const,
+    };
+    state.shells = [makeThread({ archiveRequest })];
+    state.lifecycleIntents = {
+      "primary:thread": {
+        environmentId: primaryEnvironmentId,
+        threadId: ThreadId.make("thread"),
+        desiredArchived: false,
+      },
+    };
+    await useThreadListActions().archiveThread(makeThread());
+    expect(state.requests).toEqual([
+      expect.objectContaining({ action: "archive", input: { threadId: "thread" } }),
+    ]);
+  });
+
+  it("archives when done from a row held from before the run started", async () => {
+    state.shells = [
+      makeThread({
+        runtime: {
+          status: "running",
+          activeRunId: RunId.make("active-run"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          providerName: "codex",
+          lastError: null,
+          updatedAt: "2026-09-02T00:00:00.000Z",
+        },
+      }),
+    ];
+    expect(await useThreadListActions().archiveThread(makeThread())).toBe(true);
+    expect(state.requests).toEqual([
+      expect.objectContaining({
+        action: "scheduleArchive",
+        input: { threadId: "thread", afterTurn: true },
+      }),
+    ]);
   });
 });

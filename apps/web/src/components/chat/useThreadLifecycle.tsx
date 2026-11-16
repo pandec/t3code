@@ -50,6 +50,7 @@ import { useUiStateStore } from "../../uiStateStore";
 import { type ChatMessage, DEFAULT_INTERACTION_MODE } from "../../types";
 import { AlarmClockIcon, ArchiveIcon, CheckCircle2Icon } from "lucide-react";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { titleRegenerationToast } from "../threadTitleRegenerationToast";
 import { newMessageId } from "~/lib/utils";
 import { useOpenThreadInPane } from "../thread-split/useOpenThreadInPane";
 import { Button } from "../ui/button";
@@ -78,7 +79,7 @@ import { useAtomValue } from "@effect/atom-react";
 import type { RunStopPresentation } from "@t3tools/client-runtime/state/thread-execution";
 import { Atom } from "effect/reactivity";
 import { environmentThreadDetails } from "../../state/threads";
-import { openSideChatTab } from "../../lib/sideChatPane";
+import { resolveThreadOpenRoute } from "../../lib/sideChatPane";
 import type { useLocalDispatchState } from "./useLocalDispatchState";
 const RELATED_THREAD_SHELL_WAIT_MS = 1_000;
 const NO_RUN_STOP_ATOM = Atom.make<RunStopPresentation | null>(null).pipe(
@@ -201,6 +202,9 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
   const canWriteSourceControl = useEnvironmentScope(environmentId, AuthSourceControlWriteScope);
   const switchGitRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
+  const regenerateThreadTitle = useOrchestrationCommand(threadEnvironment.regenerateTitle, {
     reportFailure: false,
   });
   const startThreadTurn = useOrchestrationCommand(threadEnvironment.startTurn, {
@@ -519,8 +523,9 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
       toastManager.add({ type: "info", title: "This thread is no longer available" });
       return;
     }
-    if (activeThreadRef && openSideChatTab(activeThreadRef, shell)) return;
-    void openThreadInPane(threadRef);
+    const routeRef = resolveThreadOpenRoute(threadRef, shell);
+    if (scopedThreadKey(routeRef) === routeThreadKey) return;
+    void openThreadInPane(routeRef);
   };
   const onOpenRelatedThreadStable = useStableCallback(onOpenRelatedThread);
   const childThreadInputs = useChildThreadInputs(activeThreadRef);
@@ -767,10 +772,13 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
       if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return false;
       if (!activeThreadShell || !activeThreadRef || !serverConfigLoaded) return;
       if (activeThreadShell.titleRegeneration != null) return;
-      void updateThreadMetadata({
+      void regenerateThreadTitle({
         environmentId: activeThreadRef.environmentId,
-        input: { threadId: activeThreadRef.threadId, regenerateTitle: true },
-      }).then(toastThreadActionFailure("Failed to regenerate thread title"));
+        input: { threadId: activeThreadRef.threadId },
+      }).then((result) => {
+        const toast = titleRegenerationToast([result]);
+        if (toast) toastManager.add(toast);
+      });
     },
   } satisfies ChatShortcutCommands;
   return {

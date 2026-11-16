@@ -32,6 +32,13 @@ export function parseClaudeLine(line: string): readonly UsageRecord[] {
   return parseClaudeRecord(parsed);
 }
 
+function cacheCreation1h(usage: Record<string, unknown>): { cacheCreation1hTokens?: number } {
+  const split = usage["cache_creation"];
+  if (typeof split !== "object" || split === null) return {};
+  const tokens = tokenCount((split as Record<string, unknown>)["ephemeral_1h_input_tokens"]);
+  return tokens > 0 ? { cacheCreation1hTokens: tokens } : {};
+}
+
 function parseClaudeRecord(parsed: unknown): readonly UsageRecord[] {
   if (typeof parsed !== "object" || parsed === null) return [];
 
@@ -61,10 +68,6 @@ function parseClaudeRecord(parsed: unknown): readonly UsageRecord[] {
   const inputTokens = tokenCount(usageRecord["input_tokens"]);
   const outputTokens = tokenCount(usageRecord["output_tokens"]);
   const cacheCreationTokens = tokenCount(usageRecord["cache_creation_input_tokens"]);
-  const oneHourCacheCreationTokens = Math.min(
-    cacheCreationTokens,
-    tokenCount(nested(usageRecord["cache_creation"])["ephemeral_1h_input_tokens"]),
-  );
   // Claude Code fills the cache fields in once real usage arrives, and always
   // writes the output count, so a record with neither cache field and no
   // output is the placeholder estimate.
@@ -94,7 +97,7 @@ function parseClaudeRecord(parsed: unknown): readonly UsageRecord[] {
         tokenCount(nested(usageRecord["output_tokens_details"])["thinking_tokens"]),
       ),
     },
-    ...(oneHourCacheCreationTokens > 0 ? { oneHourCacheCreationTokens } : {}),
+    ...cacheCreation1h(usageRecord),
     reportedCostUsd: typeof cost === "number" && Number.isFinite(cost) ? cost : null,
     speed: usageRecord["speed"] === "fast" ? "fast" : "standard",
     dedupeKey,
@@ -127,6 +130,7 @@ function parseClaudeRecord(parsed: unknown): readonly UsageRecord[] {
         outputTokens: tokenCount(advisor["output_tokens"]),
         reasoningTokens: 0,
       },
+      ...cacheCreation1h(advisor),
       reportedCostUsd: null,
       speed: executor.speed,
       dedupeKey: dedupeKey === null ? null : `${dedupeKey}:advisor:${index}`,

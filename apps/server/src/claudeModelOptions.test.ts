@@ -3,6 +3,10 @@ import { describe, expect, it } from "@effect/vitest";
 import { ProviderInstanceId, type ModelSelection } from "@t3tools/contracts";
 
 import { compileClaudeModelSelection } from "./claudeModelOptions.ts";
+import {
+  BUNDLED_CLAUDE_MODEL_CATALOG,
+  scopeClaudeModelCatalog,
+} from "./provider/ClaudeModelCatalog.ts";
 
 const selection = (
   model: string,
@@ -66,14 +70,58 @@ describe("compileClaudeModelSelection", () => {
     ).toMatchObject({ effort: "high", promptEffort: "ultrathink" });
   });
 
-  it("keeps explicit effort for models missing from the local catalog", () => {
+  it("ignores thinking for catalog models without a thinking option", () => {
     expect(
-      compileClaudeModelSelection(
-        selection("claude-pool-model-not-in-catalog", [{ id: "effort", value: "max" }]),
-      ).effort,
-    ).toBe("max");
-    expect(
-      compileClaudeModelSelection(selection("claude-pool-model-not-in-catalog", [])).effort,
-    ).toBeUndefined();
+      compileClaudeModelSelection(selection("claude-opus-5-5", [{ id: "thinking", value: false }]))
+        .settings,
+    ).not.toHaveProperty("alwaysThinkingEnabled");
+  });
+
+  it.each(["gateway-route", "gateway-route[1m]"])(
+    "keeps explicit effort and thinking for %s outside the local catalog",
+    (model) => {
+      for (const thinking of [true, false]) {
+        expect(
+          compileClaudeModelSelection(
+            selection(model, [
+              { id: "effort", value: "max" },
+              { id: "thinking", value: thinking },
+            ]),
+          ),
+        ).toMatchObject({
+          apiModelId: model,
+          effort: "max",
+          settings: { alwaysThinkingEnabled: thinking },
+        });
+      }
+      const unconfigured = compileClaudeModelSelection(selection(model, []));
+      expect(unconfigured.effort).toBeUndefined();
+      expect(unconfigured.settings).toEqual({});
+    },
+  );
+
+  it("passes explicit thinking through for a configured custom model without a thinking option", () => {
+    const catalog = scopeClaudeModelCatalog(BUNDLED_CLAUDE_MODEL_CATALOG, [
+      {
+        slug: "gateway-sol",
+        name: "Gateway Sol",
+        capabilities: {
+          optionDescriptors: [
+            { id: "fastMode", label: "Fast mode", type: "boolean", currentValue: false },
+          ],
+        },
+      },
+    ]);
+    for (const thinking of [true, false]) {
+      expect(
+        compileClaudeModelSelection(
+          selection("gateway-sol", [{ id: "thinking", value: thinking }]),
+          catalog,
+        ),
+      ).toMatchObject({
+        apiModelId: "gateway-sol(high)",
+        settings: { alwaysThinkingEnabled: thinking },
+      });
+    }
   });
 });

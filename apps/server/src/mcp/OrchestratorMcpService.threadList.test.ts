@@ -32,6 +32,7 @@ import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 // Fork: t3_thread_list by worktree path.
 const projectA = ProjectId.make("project:list-a");
 const projectB = ProjectId.make("project:list-b");
+const projectC = ProjectId.make("project:list-c");
 
 const shell = (
   id: string,
@@ -57,6 +58,11 @@ const shell = (
     lineage: { parentThreadId: null, relationshipToParent: null },
     visibleItemCount: 0,
     worktreePath,
+    snoozedUntil: null,
+    snoozedAt: null,
+    snoozedUntilRunId: null,
+    pendingRuntimeRequest: null,
+    pendingBackgroundTasks: [],
     archivedAt: null,
     createdAt: DateTime.makeUnsafe("2026-10-01T00:00:00Z"),
     updatedAt: DateTime.makeUnsafe(updatedAt),
@@ -67,7 +73,17 @@ const threads = [
   shell("thread:a-tree", projectA, "/work/trees/feature", "2026-10-01T02:00:00Z"),
   shell("thread:b-tree", projectB, "/work/trees/feature/", "2026-10-01T03:00:00Z"),
   shell("thread:b-other", projectB, "/work/trees/feature-2", "2026-10-01T04:00:00Z"),
+  shell("thread:c-awake", projectC, null, "2026-10-01T05:00:00Z"),
+  {
+    ...shell("thread:c-until-done", projectC, null, "2026-10-01T06:00:00Z"),
+    status: "running",
+    latestRunId: "run:c",
+    snoozedAt: DateTime.makeUnsafe("2026-10-01T06:00:00Z"),
+    snoozedUntilRunId: "run:c",
+  } as unknown as OrchestrationV2ThreadShell,
 ];
+const inProject = (projectId: ProjectId | undefined) =>
+  projectId === undefined ? threads : threads.filter((thread) => thread.projectId === projectId);
 
 const layer = OrchestratorMcpService.layer.pipe(
   Layer.provide(
@@ -77,14 +93,15 @@ const layer = OrchestratorMcpService.layer.pipe(
         Layer.provide(
           Layer.mock(Orchestrator.OrchestratorV2)({
             // Like the projection store, a project-scoped read returns only that project.
+            listActiveThreads: (projectId) => Effect.succeed(inProject(projectId)),
             getShellSnapshot: (options) =>
               Effect.succeed({
                 schemaVersion: 1,
                 snapshotSequence: 1,
                 threads:
-                  options?.projectId === undefined
-                    ? threads
-                    : threads.filter((thread) => thread.projectId === options.projectId),
+                  options?.threadIds === undefined
+                    ? inProject(options?.projectId)
+                    : threads.filter((thread) => options.threadIds?.includes(thread.id)),
                 archivedThreads: [],
               }),
           }),
@@ -147,5 +164,15 @@ it.effect("lists the threads bound to a worktree and reports each one's checkout
       worktreePath: "/work/trees/feature",
     });
     expect(inProject.threads.map((thread) => thread.threadId)).toEqual(["thread:a-tree"]);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("lists until-done snoozes, which have no wake time, as snoozed", () =>
+  Effect.gen(function* () {
+    const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+    const snoozed = yield* service.listThreads(scope, { projectId: projectC, snoozed: true });
+    expect(snoozed.threads.map((thread) => [thread.threadId, thread.snoozed])).toEqual([
+      ["thread:c-until-done", true],
+    ]);
   }).pipe(Effect.provide(layer)),
 );

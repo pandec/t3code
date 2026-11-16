@@ -130,7 +130,7 @@ function restoreQueuedRunEdit(
   };
   // Attachments may go past the per-message limit here (sending still enforces it) so a rescue never drops one.
   const restoreAttachments = async () => {
-    appendComposerDraftAttachments(threadKey, editDraft.attachments, { allowOverflow: true });
+    appendComposerDraftAttachments(threadKey, editDraft.attachments, { restore: true });
     if (ref === null || saved.length === 0) return 0;
     const signal = new AbortController().signal;
     const results = await Promise.allSettled(
@@ -151,7 +151,7 @@ function restoreQueuedRunEdit(
     const downloaded = results.flatMap((result) =>
       result.status === "fulfilled" ? [result.value] : [],
     );
-    appendComposerDraftAttachments(threadKey, downloaded, { allowOverflow: true });
+    appendComposerDraftAttachments(threadKey, downloaded, { restore: true });
     saved.forEach((attachment, index) => {
       const localId = savedLocalIds.get(attachment.id);
       if (results[index]?.status === "rejected" && localId !== undefined) {

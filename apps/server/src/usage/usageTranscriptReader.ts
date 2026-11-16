@@ -1,8 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off
 // Cold windows span ~1.4 GB/1,500 files; node:fs buffer streaming is ~10x cheaper than materializing files.
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeStringDecoder from "node:string_decoder";
+import * as NodeUtil from "node:util";
 import * as NodeZlib from "node:zlib";
 
 import type {
@@ -43,8 +46,12 @@ export interface TranscriptParseResult {
 
 export const GUARD_LENGTH = 64;
 const STREAMING_THRESHOLD_BYTES = 8 * 1024 * 1024;
+const READ_CHUNK_BYTES = 256 * 1024;
 const NEWLINE = 0x0a;
 const STAT_CONCURRENCY = 32;
+const WALK_CONCURRENCY = 16;
+// Measured about 3x faster than the promise API's stat across 20,000 transcripts.
+const statFile = NodeUtil.promisify(NodeFS.stat);
 const CARRIAGE_RETURN = 0x0d;
 
 function selectUsageFields(fields: SelectedFields) {
@@ -73,38 +80,54 @@ export async function listTranscriptFiles(
   root: string,
   sinceMs: number,
   options?: { readonly fileName?: string },
-): Promise<{ readonly files: readonly TranscriptFile[]; readonly failedPaths: number }> {
+): Promise<{
+  readonly files: readonly TranscriptFile[];
+  readonly walked: readonly string[];
+  readonly failedPaths: number;
+}> {
   const fileName = options?.fileName;
-  const candidates: string[] = [];
   let failedPaths = 0;
-  const walk = async (dir: string): Promise<void> => {
+  let reading = 0;
+  const waiting: Array<() => void> = [];
+  // Sibling directories read together; each returns its own list so the result keeps readdir order.
+  const walk = async (dir: string): Promise<readonly string[]> => {
+    if (reading < WALK_CONCURRENCY) reading += 1;
+    else await new Promise<void>((resume) => waiting.push(resume));
     let entries;
     try {
       entries = await NodeFSP.readdir(dir, { withFileTypes: true });
     } catch {
       failedPaths += 1;
-      return;
+      return [];
+    } finally {
+      // A waiting directory takes over this slot, so the count only drops when none waits.
+      const next = waiting.shift();
+      if (next === undefined) reading -= 1;
+      else next();
     }
-    for (const entry of entries) {
-      const child = NodePath.join(dir, entry.name);
-      if (entry.isDirectory()) await walk(child);
-      else if (
-        fileName !== undefined
-          ? entry.name === fileName
-          : entry.name.endsWith(".jsonl") || entry.name.endsWith(".jsonl.zst")
-      ) {
-        candidates.push(child);
-      }
-    }
+    const found = await Promise.all(
+      entries.map((entry) => {
+        const child = NodePath.join(dir, entry.name);
+        if (entry.isDirectory()) return walk(child);
+        return (
+          fileName !== undefined
+            ? entry.name === fileName
+            : entry.name.endsWith(".jsonl") || entry.name.endsWith(".jsonl.zst")
+        )
+          ? [child]
+          : [];
+      }),
+    );
+    return found.flat();
   };
-  await walk(root);
+  const candidates = await walk(root);
 
   const found: Array<TranscriptFile | undefined> = Array.from({ length: candidates.length });
   const queue = candidates.entries();
   const statQueued = async (): Promise<void> => {
     for (const [index, path] of queue) {
       try {
-        const stats = await NodeFSP.stat(path);
+        const stats = await statFile(path);
         if (stats.mtimeMs >= sinceMs) {
           found[index] = { path, size: stats.size, mtimeMs: stats.mtimeMs };
         }
@@ -118,7 +141,7 @@ export async function listTranscriptFiles(
   await Promise.all(
     Array.from({ length: Math.min(STAT_CONCURRENCY, candidates.length) }, statQueued),
   );
-  return { files: found.filter((file) => file !== undefined), failedPaths };
+  return { files: found.filter((file) => file !== undefined), walked: candidates, failedPaths };
 }
 
 export async function readDirectoryVolumeId(path: string): Promise<string> {
@@ -127,6 +150,137 @@ export async function readDirectoryVolumeId(path: string): Promise<string> {
     return `${stats.dev}:${stats.ino}`;
   } catch {
     return "";
+  }
+}
+
+/**
+ * Set by the desktop app, from a value it persists, on its Windows server and
+ * the WSL server it manages, so both can name one Windows directory alike
+ * without merging separate machines that share a hostname and path.
+ */
+export const DESKTOP_HOST_SCOPE_ENV = "T3CODE_DESKTOP_HOST_SCOPE";
+
+const MOUNT_FIELD_ESCAPE = /\\([0-7]{3})/g;
+const WINDOWS_ROOT = /^(?:[A-Za-z]:|\\\\[^\\]+\\[^\\]+)\\?$/;
+
+const unescapeMountField = (field: string) =>
+  field.replace(MOUNT_FIELD_ESCAPE, (_, octal: string) =>
+    String.fromCharCode(Number.parseInt(octal, 8)),
+  );
+
+const normalizeWindowsPath = (path: string) =>
+  (/^[a-z]:/.test(path) ? path[0]!.toUpperCase() + path.slice(1) : path).replace(/\\$/, "");
+
+/**
+ * The Windows directory behind the deepest mount holding `dir`, read from
+ * `/proc/self/mountinfo` so a custom automount root resolves and an ext4
+ * mount under `/mnt` never passes for a drive.
+ */
+function windowsMountFor(
+  mountInfo: string,
+  dir: string,
+): { readonly mountPoint: string; readonly windowsRoot: string } | undefined {
+  let deepest: { mountPoint: string; windowsRoot: string | undefined } | undefined;
+  for (const line of mountInfo.split("\n")) {
+    const fields = line.split(" ");
+    const separator = fields.indexOf("-", 6);
+    if (separator === -1) continue;
+    const mountPoint = unescapeMountField(fields[4] ?? "");
+    const contains =
+      mountPoint === "/" ||
+      dir === mountPoint ||
+      dir.startsWith(mountPoint.endsWith("/") ? mountPoint : `${mountPoint}/`);
+    if (!contains || (deepest !== undefined && deepest.mountPoint.length > mountPoint.length)) {
+      continue;
+    }
+    // WSL2 mounts drives over 9p with `aname=drvfs;path=C:\`; WSL1 as `drvfs`.
+    const options = (fields[separator + 3] ?? "").split(/[,;]/);
+    const source = options.includes("aname=drvfs")
+      ? options.find((option) => option.startsWith("path="))?.slice("path=".length)
+      : fields[separator + 1] === "drvfs"
+        ? unescapeMountField(fields[separator + 2] ?? "")
+        : undefined;
+    const root = unescapeMountField(fields[3] ?? "/")
+      .split("/")
+      .filter(Boolean);
+    deepest = {
+      mountPoint,
+      windowsRoot:
+        source !== undefined && WINDOWS_ROOT.test(source)
+          ? [normalizeWindowsPath(source), ...root].join("\\")
+          : undefined,
+    };
+  }
+  return deepest?.windowsRoot === undefined
+    ? undefined
+    : { mountPoint: deepest.mountPoint, windowsRoot: deepest.windowsRoot };
+}
+
+/**
+ * drvfs keeps the casing a path was typed with, while Windows reports the
+ * on-disk names. Read those names rather than folding case, which would join
+ * distinct entries of a case-sensitive directory.
+ */
+async function onDiskNames(
+  mountPoint: string,
+  parts: readonly string[],
+): Promise<string[] | undefined> {
+  const names: string[] = [];
+  let current = mountPoint;
+  for (const part of parts) {
+    let entries: string[];
+    try {
+      entries = await NodeFSP.readdir(current);
+    } catch {
+      return undefined;
+    }
+    const folded = part.toUpperCase();
+    const [name, ...others] = entries.includes(part)
+      ? [part]
+      : entries.filter((entry) => entry.toUpperCase() === folded);
+    if (name === undefined || others.length > 0) return undefined;
+    names.push(name);
+    current = NodePath.posix.join(current, name);
+  }
+  return names;
+}
+
+export function physicalSourceIdOf(scope: string, windowsPath: string): string {
+  return NodeCrypto.createHash("sha256")
+    .update(`${scope}\0${windowsPath}`)
+    .digest("hex")
+    .slice(0, 32);
+}
+
+/**
+ * Identifies a Windows directory the same way from the Windows server and from
+ * a WSL server reading it through drvfs. Directories that are not Windows
+ * backed, and servers the desktop app did not start, get none.
+ */
+export async function readPhysicalSourceId(
+  dir: string,
+  scope: string | undefined,
+  platform: NodeJS.Platform,
+  mountInfoPath = "/proc/self/mountinfo",
+): Promise<string | undefined> {
+  if (scope === undefined || scope.length === 0) return undefined;
+  try {
+    if (platform === "win32") {
+      // The native realpath reports on-disk casing; the JS one keeps the input's.
+      return physicalSourceIdOf(scope, normalizeWindowsPath(await NodeFSP.realpath(dir)));
+    }
+    if (platform !== "linux") return undefined;
+    const mount = windowsMountFor(await NodeFSP.readFile(mountInfoPath, "utf8"), dir);
+    if (mount === undefined) return undefined;
+    const names = await onDiskNames(
+      mount.mountPoint,
+      dir.slice(mount.mountPoint.length).split("/").filter(Boolean),
+    );
+    return names === undefined
+      ? undefined
+      : physicalSourceIdOf(scope, [mount.windowsRoot, ...names].join("\\"));
+  } catch {
+    return undefined;
   }
 }
 
@@ -146,6 +300,29 @@ async function guardMatches(
     return bytesRead === position.guardLength && fnv1a(window) === position.guardHash;
   } catch {
     return false;
+  }
+}
+
+/** Plain files reuse one buffer, so a chunk is only valid until the next one is requested. */
+async function* readChunks(
+  handle: NodeFSP.FileHandle,
+  start: number,
+  compressed: boolean,
+): AsyncGenerator<Buffer> {
+  if (compressed) {
+    // Compressed snapshots cache a full parse; decoded byte offsets cannot
+    // resume the compressed input.
+    yield* handle
+      .createReadStream({ start, autoClose: true, highWaterMark: READ_CHUNK_BYTES })
+      .compose(NodeZlib.createZstdDecompress());
+    return;
+  }
+  const buffer = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+  for (let position = start; ;) {
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+    if (bytesRead === 0) return;
+    position += bytesRead;
+    yield buffer.subarray(0, bytesRead);
   }
 }
 
@@ -208,17 +385,27 @@ export async function readTranscriptRecords<State>(
     const accounting = format.malformed;
     const carriesUsage = (text: string) => accounting?.carriesUsage(text) ?? false;
     const skipsOf = (lineState: State) => accounting?.deliberateSkips?.(lineState) ?? 0;
-    /** Returns 1 when a usage-bearing line yielded nothing it chose to skip. */
+    const diagnosedOf = (lineState: State) => format.readMalformedRecords?.(lineState) ?? 0;
+    /**
+     * Counts a usage-bearing line that yielded nothing it chose to skip, or the reducer's own
+     * diagnostics for the line (such as requests a valid snapshot discarded), whichever is larger.
+     */
     const classify = (
       usageBearing: boolean,
       parsed: readonly UsageRecord[],
       lineState: State,
-      skipsBefore: number,
+      before: { readonly skips: number; readonly diagnosed: number },
       out: UsageRecord[],
     ): number => {
       for (const record of parsed) out.push(record);
-      return usageBearing && parsed.length === 0 && skipsOf(lineState) === skipsBefore ? 1 : 0;
+      const unexplained =
+        usageBearing && parsed.length === 0 && skipsOf(lineState) === before.skips ? 1 : 0;
+      return Math.max(unexplained, diagnosedOf(lineState) - before.diagnosed);
     };
+    const countersOf = (lineState: State) => ({
+      skips: skipsOf(lineState),
+      diagnosed: diagnosedOf(lineState),
+    });
 
     const toLineString = (lineBuffer: Buffer): string => {
       const content =
@@ -229,16 +416,16 @@ export async function readTranscriptRecords<State>(
     };
 
     const mightCarryUsage = transcriptLineGate(format.usageMarkers);
-    /** Returns 1 when a usage-bearing line was malformed (see `classify`). */
+    /** Returns the malformed records the line accounts for (see `classify`). */
     const parseLine = (lineBuffer: Buffer, lineState: State, out: UsageRecord[]): number => {
       if (!mightCarryUsage(lineBuffer)) return 0;
       const line = toLineString(lineBuffer);
-      const skipsBefore = skipsOf(lineState);
+      const before = countersOf(lineState);
       return classify(
         carriesUsage(line),
         format.parseLine(line, lineState),
         lineState,
-        skipsBefore,
+        before,
         out,
       );
     };
@@ -267,7 +454,8 @@ export async function readTranscriptRecords<State>(
 
     const append = (segment: Buffer) => {
       if (!streaming && pendingBytes + segment.length <= streamingThresholdBytes) {
-        if (segment.length > 0) pendingChunks.push(segment);
+        // Copy: the next read overwrites the chunk this segment points into.
+        if (segment.length > 0) pendingChunks.push(Buffer.from(segment));
         pendingBytes += segment.length;
         return;
       }
@@ -286,12 +474,12 @@ export async function readTranscriptRecords<State>(
       if (streaming) {
         writeStreaming(decoder!.end());
         const projected = streaming.finish();
-        const skipsBefore = skipsOf(lineState);
+        const before = countersOf(lineState);
         malformed = classify(
           streamingCarriesUsage,
           format.parseProjected(projected, lineState),
           lineState,
-          skipsBefore,
+          before,
           out,
         );
       } else if (pendingBytes > 0) {
@@ -309,15 +497,7 @@ export async function readTranscriptRecords<State>(
       usageProbeTail = "";
       return malformed;
     };
-    const input = handle.createReadStream({
-      start,
-      autoClose: compressed,
-      highWaterMark: 256 * 1024,
-    });
-    // Compressed snapshots cache a full parse; decoded byte offsets cannot
-    // resume the compressed input.
-    const stream = compressed ? input.compose(NodeZlib.createZstdDecompress()) : input;
-    for await (const chunk of stream) {
+    for await (const chunk of readChunks(handle, start, compressed)) {
       let lineStart = 0;
       while (lineStart < chunk.length) {
         const newlineIndex = chunk.indexOf(NEWLINE, lineStart);

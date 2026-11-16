@@ -4,7 +4,7 @@ import {
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/ai";
+import { McpSchema, Tool, Toolkit } from "effect/ai";
 
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadWorktreeSwitchScheduler from "../../../orchestration-v2/ThreadWorktreeSwitchScheduler.ts";
@@ -37,7 +37,8 @@ const SwitchWorktree = Tool.make("switch_worktree", {
   .annotate(Tool.Title, "Switch this thread to a worktree after the turn")
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const CancelWorktreeSwitch = Tool.make("cancel_worktree_switch", {
   description:
@@ -50,7 +51,8 @@ const CancelWorktreeSwitch = Tool.make("cancel_worktree_switch", {
   .annotate(Tool.Title, "Cancel worktree switch")
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const WorktreeSwitchStatus = Tool.make("worktree_switch_status", {
   description:

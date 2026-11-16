@@ -17,7 +17,10 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import { readLocalApi } from "../../localApi";
-import { awaitAttachmentUploads, getUploadedAttachments } from "../../lib/attachmentUploadQueue";
+import {
+  getUploadedAttachments,
+  refreshExpiredAttachmentUploads,
+} from "../../lib/attachmentUploadQueue";
 import { findRevertCheckpoint } from "../../session-logic";
 import { type ChatMessage } from "../../types";
 import { randomUUID } from "~/lib/utils";
@@ -26,10 +29,14 @@ import { newThreadId } from "~/lib/utils";
 import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,
+  type ComposerThreadTarget,
   useComposerDraftStore,
   DraftId,
 } from "../../composerDraftStore";
-import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@t3tools/shared/composerContextReferences";
+import {
+  ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
+  collectComposerContextReferences,
+} from "@t3tools/shared/composerContextReferences";
 import { createModelSelection } from "@t3tools/shared/model";
 import type { ProviderInstanceEntry } from "../../providerInstances";
 import { getComposerPromptInjectionState, getComposerProviderState } from "./composerProviderState";
@@ -150,8 +157,8 @@ export async function startFanoutThread(input: {
 }
 
 /**
- * Reverts the thread to before `message` and puts that message's text and
- * attachments back in the composer draft. Returns the restored prompt, or the
+ * Reverts the thread to before `message` and puts that message's text, mentions
+ * and attachments back in the composer draft. Returns the restored prompt, or the
  * error to show; on error the draft is untouched.
  */
 export async function rewindToMessage(input: {
@@ -235,9 +242,15 @@ export async function rewindToMessage(input: {
       existingTerminalContexts: currentDraft?.terminalContexts ?? [],
       labelUnmatchedReferences: true,
     });
-    const restoredPrompt = recallableComposerPrompt(restoredContext.text, {
-      keepContextReferences: true,
-    });
+    // Every chip left after planning has its restored record.
+    const restoredPrompt = recallableComposerPrompt(
+      restoredContext.text,
+      new Set(
+        collectComposerContextReferences(restoredContext.text).map(
+          (reference) => reference.contextId,
+        ),
+      ),
+    );
     const nextPrompt =
       restoredPrompt.length === 0
         ? currentPrompt
@@ -353,12 +366,17 @@ export function prepareTurnAttachments(input: {
   readonly environmentId: EnvironmentId;
   readonly attachments: ReadonlyArray<ComposerImageAttachment | ComposerFileAttachment>;
   readonly usesAttachmentUploads: boolean;
+  readonly draftTarget: ComposerThreadTarget;
 }) {
-  const { environmentId, usesAttachmentUploads } = input;
+  const { environmentId, usesAttachmentUploads, draftTarget } = input;
   return Promise.all(
     input.attachments.map(async (attachment) => {
       if (usesAttachmentUploads) {
-        await awaitAttachmentUploads([attachment.id]);
+        await refreshExpiredAttachmentUploads({
+          environmentId,
+          images: [attachment],
+          draftTarget,
+        });
         const uploaded = getUploadedAttachments({ environmentId, images: [attachment] })?.[0];
         if (!uploaded) {
           throw new Error(`Attachment '${attachment.name}' failed to upload.`);

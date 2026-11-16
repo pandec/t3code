@@ -187,6 +187,7 @@ import {
   useServerConfigs,
   useThreadShell,
   useAnyEnvironmentHiding,
+  useDelegatedUnderParent,
   useHiddenThreadKeys,
   useEnvironmentThreadRefs,
   useVisibleThreadShells,
@@ -195,8 +196,12 @@ import {
 } from "../state/entities";
 import { useIsLabsPanelProject } from "../state/labs";
 import { openLabsPanel } from "./labs/labsPanelStore";
-import { visibleLinkedThreads } from "@t3tools/client-runtime/state/threads";
-import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
+import { isShownUnderParent, visibleLinkedThreads } from "@t3tools/client-runtime/state/threads";
+import {
+  resolveThreadActionProjectRef,
+  startNewThreadFromContext,
+  threadHasStarted,
+} from "../lib/chatThreadActions";
 import {
   appendBrowsePathSegment,
   ensureBrowseDirectoryPath,
@@ -294,7 +299,6 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { openThreadGroupsDialog } from "./sidebar/threadGroupsDialogStore";
 import { threadGroupId } from "@t3tools/shared/threadGroups";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
-import { isSidebarHiddenThread } from "./Sidebar.logic";
 import { CommandPaletteContent, type PendingInputSelection } from "./CommandPaletteContent";
 import {
   selectCommandPaletteClientSettings,
@@ -335,6 +339,7 @@ import { CommandDialog, CommandDialogPopup, CommandFooterAction } from "./ui/com
 import { Kbd, KbdGroup } from "./ui/kbd";
 import { Button } from "./ui/button";
 import { stackedThreadToast, toastManager } from "./ui/toast";
+import { titleRegenerationToast } from "./threadTitleRegenerationToast";
 import { suggestAppAccessForRemote } from "./sourceControlAppAccessToast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { ComposerHandleContext, useComposerHandleContext } from "../composerHandleContext";
@@ -664,6 +669,9 @@ function OpenCommandPaletteDialog(props: {
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
+  const regenerateThreadTitle = useOrchestrationCommand(threadEnvironment.regenerateTitle, {
+    reportFailure: false,
+  });
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   // Snooze state, presets and move-to-top plans read the clock at minute precision.
   const nowMinute = useNowMinute();
@@ -727,8 +735,16 @@ function OpenCommandPaletteDialog(props: {
     if (target === null) return;
     await copyThreadReference(target);
   };
-  // Side chats and subagents open inside their parent, so opening a project never lands on one.
-  const threads = useVisibleThreadShells().filter((thread) => !isSidebarHiddenThread(thread));
+  // Threads the sidebar shows under their parent open there, so opening a project never lands on one.
+  const delegatedUnderParent = useDelegatedUnderParent();
+  const threads = useVisibleThreadShells().filter(
+    (thread) =>
+      !isShownUnderParent(
+        { environmentId: thread.environmentId, threadId: thread.id },
+        thread.lineage,
+        delegatedUnderParent,
+      ),
+  );
   const allThreads = useThreadShells();
   const serverConfigs = useServerConfigs();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -1025,9 +1041,14 @@ function OpenCommandPaletteDialog(props: {
           ),
         )
       : null;
+    // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
+    const now = new Date().toISOString();
+    const openableThreads = threads.filter(
+      (thread) => thread.settledOverride !== "settled" && !effectiveSnoozed(thread, { now }),
+    );
     const latestThread = groupedProjectKeys
       ? (sortThreads(
-          threads.filter(
+          openableThreads.filter(
             (thread) =>
               thread.archivedAt === null &&
               groupedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`),
@@ -1035,7 +1056,7 @@ function OpenCommandPaletteDialog(props: {
           clientSettings.sidebarThreadSortOrder,
         )[0] ?? null)
       : getLatestThreadForProject(
-          threads.filter((thread) => thread.environmentId === project.environmentId),
+          openableThreads.filter((thread) => thread.environmentId === project.environmentId),
           project.id,
           clientSettings.sidebarThreadSortOrder,
         );
@@ -1304,6 +1325,10 @@ function OpenCommandPaletteDialog(props: {
     environments.find((environment) => environment.environmentId === environmentId)?.serverConfig
       ?.newProjectsRoot ?? null;
 
+  const offeredProvidersFor = (environmentId: EnvironmentId | null) =>
+    environments.find((environment) => environment.environmentId === environmentId)?.serverConfig
+      ?.settings.offeredSourceControlProviders;
+
   const startNewProject = (
     environmentId: EnvironmentId,
     sourcesEnvironmentId: EnvironmentId | null,
@@ -1360,7 +1385,7 @@ function OpenCommandPaletteDialog(props: {
 
     const orderedSources: ReadonlyArray<AddProjectRemoteSource> = [
       "url",
-      ...sortAddProjectProviderSources(readinessBySource),
+      ...sortAddProjectProviderSources(readinessBySource, offeredProvidersFor(environmentId)),
     ];
 
     for (const source of orderedSources) {
@@ -1864,6 +1889,7 @@ function OpenCommandPaletteDialog(props: {
               ? providersByEnvironment.get(promptLinkProjectRef.environmentId)
               : undefined) ?? [],
           threadModelSelection: promptLinkThread?.modelSelection ?? null,
+          threadStarted: threadHasStarted(promptLinkThread),
         };
   const plainPromptLink = promptLinkInput
     ? composerPromptLink({ ...promptLinkInput, withContext: false })
@@ -2594,12 +2620,13 @@ function OpenCommandPaletteDialog(props: {
                   );
                 },
                 regenerate: async () => {
-                  await reportThreadActionFailure("Failed to regenerate thread title", () =>
-                    updateThreadMetadata({
+                  const toast = titleRegenerationToast([
+                    await regenerateThreadTitle({
                       environmentId: openUnarchivedThreadRef.environmentId,
-                      input: { threadId: openUnarchivedThreadRef.threadId, regenerateTitle: true },
+                      input: { threadId: openUnarchivedThreadRef.threadId },
                     }),
-                  );
+                  ]);
+                  if (toast) toastManager.add(toast);
                 },
               }),
             },
@@ -2863,7 +2890,12 @@ function OpenCommandPaletteDialog(props: {
   };
 
   const newProjectPublishTargets =
-    newProjectFlow === null ? [] : getNewProjectPublishTargets(sourceControlDiscovery.data ?? null);
+    newProjectFlow === null
+      ? []
+      : getNewProjectPublishTargets(
+          sourceControlDiscovery.data ?? null,
+          offeredProvidersFor(newProjectFlow.environmentId),
+        );
   const newProjectPublishTarget = getNewProjectPublishTarget(
     newProjectPublishTargets,
     newProjectPublishKind,
@@ -3280,6 +3312,7 @@ function OpenCommandPaletteDialog(props: {
                 ),
                 ...(isCreatingNewProject ? { disabled: true } : {}),
                 keepOpen: true,
+                checked: newProjectPublishes,
                 run: async () => {
                   setNewProjectPublishes((publishes) => !publishes);
                 },

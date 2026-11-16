@@ -17,6 +17,20 @@ import {
 import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 import { randomUUID } from "~/lib/utils";
 import { applyMessageContextRestore, planMessageContextRestore } from "./messageContextRestore";
+import { releaseDraftAttachments } from "../../lib/attachmentUploadQueue";
+
+/** Staged attachments upload as soon as they are added, so a dropped edit must release them. */
+export function discardQueuedEditDraft(target: ComposerThreadTarget): void {
+  const store = useComposerDraftStore.getState();
+  const draft = store.getComposerDraft(target);
+  if (draft) {
+    releaseDraftAttachments([...draft.images, ...draft.files]);
+    for (const image of draft.images) {
+      if (image.previewUrl.startsWith("blob:")) URL.revokeObjectURL(image.previewUrl);
+    }
+  }
+  store.clearComposerContent(target);
+}
 
 /**
  * Keep an unsaved edit when its queued run leaves the queue by appending it to
@@ -58,7 +72,7 @@ export function recoverQueuedMessageEdit(input: {
   const hasContent =
     composerDraftHasUserContent(edit) || (input.original?.savedAttachmentLocalIds.size ?? 0) > 0;
   if (edit === null || !dirty || !hasContent) {
-    store.clearComposerContent(input.editTarget);
+    discardQueuedEditDraft(input.editTarget);
     return { outcome: "clean", skippedAttachmentCount: 0 };
   }
   const destination = store.getComposerDraft(input.threadTarget);
@@ -120,12 +134,17 @@ export function recoverQueuedMessageEdit(input: {
   if (edit.threadContexts.length > 0) {
     store.addThreadContexts(input.threadTarget, edit.threadContexts, { appendReference: false });
   }
+  if (edit.environmentContexts.length > 0) {
+    store.addEnvironmentContexts(input.threadTarget, edit.environmentContexts, {
+      appendReference: false,
+    });
+  }
   if (restoredContext !== null) applyMessageContextRestore(input.threadTarget, restoredContext);
   if (input.modelSelection !== undefined) {
     store.setModelSelection(input.threadTarget, input.modelSelection, { replaceOptions: true });
   }
   // Files the thread draft already holds stay behind as duplicates; anything
-  // else left (a file that cannot cross environments) is reported.
+  // else left is reported.
   const leftover = store.getComposerDraft(input.editTarget);
   const destinationFileIds = new Set(destination?.files.map((file) => file.id));
   const destinationFileKeys = new Set(destination?.files.map(composerFileDedupKey));
@@ -135,7 +154,7 @@ export function recoverQueuedMessageEdit(input: {
       (file) =>
         !destinationFileIds.has(file.id) && !destinationFileKeys.has(composerFileDedupKey(file)),
     ).length ?? 0);
-  store.clearComposerContent(input.editTarget);
+  discardQueuedEditDraft(input.editTarget);
   return { outcome: "kept", skippedAttachmentCount };
 }
 

@@ -21,6 +21,8 @@ import * as ThreadManagementService from "../../../orchestration-v2/ThreadManage
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../../../project/ProjectSetupScriptRunner.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
+import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
+import * as EnvironmentTheme from "../../../environmentTheme.ts";
 import * as ProviderRegistry from "../../../provider/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../../../secrets/SecretRequests.ts";
@@ -83,6 +85,8 @@ const StubServicesLive = Layer.mergeAll(
   Layer.mock(RemoteDelegation.RemoteDelegation)({}),
   Layer.mock(ThreadWorktreeSwitchScheduler.ThreadWorktreeSwitchScheduler)({}),
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
+  Layer.mock(PullRequestService.PullRequestService)({}),
+  Layer.mock(EnvironmentTheme.EnvironmentThemeService)({}),
 );
 
 const threadId = ThreadId.make("thread-fork-thread-tools-mcp");

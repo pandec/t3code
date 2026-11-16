@@ -35,6 +35,7 @@ import {
 } from "~/browserHistoryStore";
 import { type ComposerImageAttachment, useComposerDraftStore } from "~/composerDraftStore";
 import { capturePreviewAnnotationScreenshot } from "~/lib/previewAnnotation";
+import { readComposerImageBytes } from "../chat/composerAttachmentFiles";
 import { ensureLocalApi } from "~/localApi";
 import { getClientSettings } from "~/hooks/useSettings";
 import {
@@ -83,7 +84,6 @@ import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
 import { isBrowserSettingsReadError } from "~/browser/openFileInPreview";
 import { PreviewFileNotShown, PreviewUnreachable } from "./PreviewUnreachable";
 import { revealInFileExplorerLabel } from "./fileExplorerLabel";
-import { shouldShowPreviewEmptyState } from "./previewEmptyStateLogic";
 import { Badge } from "~/components/ui/badge";
 import { BrowserSurfaceSlot } from "~/browser/BrowserSurfaceSlot";
 import { alternatePreviewRuntime, useRendersServerTabNatively } from "~/browser/previewRuntime";
@@ -216,6 +216,7 @@ export function PreviewView({
   const isServerTab = snapshot?.runtime === "server" && !nativeServerTab;
   const serverOwnsRendering = snapshot?.runtime === "server";
   const serverSurfaceRef = useRef<ServerBrowserHandle | null>(null);
+  const serverSurfaceBoxRef = useRef<HTMLDivElement | null>(null);
   const [serverAspectRatioLocked, setServerAspectRatioLocked] = useState(false);
   const [serverToolbarWidth, setServerToolbarWidth] = useState(0);
   const serverToolbarShown =
@@ -237,14 +238,19 @@ export function PreviewView({
     tabId && !isServerTab ? (previewState.desktopByTabId[tabId] ?? null) : null;
   const layoutZoomFactor = useBrowserLayoutZoomFactor(desktopOverlay?.zoomFactor ?? 1);
   const extensions = usePreviewExtensions(desktopOverlay?.webContentsId ?? null);
-  const navStatus = snapshot?.navStatus ?? { _tag: "Idle" as const };
+  // A new Electron tab is Idle until its first URL commits, while the server already has it Loading.
+  const desktopNavStatus =
+    !serverOwnsRendering && desktopOverlay?.navStatus._tag !== "Idle"
+      ? desktopOverlay?.navStatus
+      : undefined;
+  const navStatus = desktopNavStatus ?? snapshot?.navStatus ?? { _tag: "Idle" as const };
   const url = navStatus._tag === "Idle" ? "" : navStatus.url;
   const loading = desktopOverlay?.loading ?? navStatus._tag === "Loading";
   const canGoBack = desktopOverlay?.canGoBack ?? snapshot?.canGoBack ?? false;
   const canGoForward = desktopOverlay?.canGoForward ?? snapshot?.canGoForward ?? false;
   const refreshDisabled = navStatus._tag === "Idle";
   const isUnreachable = navStatus._tag === "LoadFailed";
-  const showEmptyState = shouldShowPreviewEmptyState(snapshot);
+  const showEmptyState = navStatus._tag === "Idle";
   const serverStreamPending =
     isServerTab && !showEmptyState && !isUnreachable && serverFrameTabId !== runtimeTabId;
   const controller = desktopOverlay?.controller ?? "none";
@@ -337,6 +343,11 @@ export function PreviewView({
     else if (previewBridge && runtimeTabId) void previewBridge.refresh(runtimeTabId);
   };
 
+  const handleStopLoading = () => {
+    if (isServerTab) serverSurfaceRef.current?.stopLoading();
+    else if (previewBridge && runtimeTabId) void previewBridge.stopLoading(runtimeTabId);
+  };
+
   const adjustServerTab = async (change: Omit<PreviewAdjustInput, "threadId" | "tabId">) => {
     if (!tabId) return;
     const result = await adjust({
@@ -418,7 +429,10 @@ export function PreviewView({
       target,
       browserResponsiveViewportForToggle({
         defaults: browserDefaults,
-        panelRect,
+        // Only BrowserSurfaceSlot publishes a store rect; streamed tabs measure their own box.
+        panelRect: isServerTab
+          ? (serverSurfaceBoxRef.current?.getBoundingClientRect() ?? null)
+          : panelRect,
         zoomFactor: isServerTab ? serverZoomFactor : layoutZoomFactor,
       }),
     ).catch(() => undefined);
@@ -850,6 +864,7 @@ export function PreviewView({
       const capture = capturePreviewAnnotationScreenshot(picked);
       const cropDropped = screenshotFailed || capture.status === "failed";
       const annotation = capture.status === "failed" ? { ...picked, screenshot: null } : picked;
+      if (capture.status === "captured") await readComposerImageBytes(capture.file);
       addPreviewAnnotation(threadRef, annotation);
       if (cropDropped) {
         toastManager.add(
@@ -954,6 +969,9 @@ export function PreviewView({
     const unsubscribeMenu = window.desktopBridge?.onMenuAction((action) => {
       if (!isThreadPaneActive(threadPaneId)) return;
       if (action === "preview.focusUrl") onPreviewAction("focus-url");
+      if (action === "preview.zoomIn") onPreviewAction("zoom-in");
+      if (action === "preview.zoomOut") onPreviewAction("zoom-out");
+      if (action === "preview.resetZoom") onPreviewAction("reset-zoom");
       if (action === "preview.find") onPreviewAction("find");
     });
     return () => {
@@ -987,6 +1005,7 @@ export function PreviewView({
         onBack={handleBack}
         onForward={handleForward}
         onRefresh={handleRefresh}
+        onStopLoading={handleStopLoading}
         onSubmit={(next) => void handleSubmitUrl(next)}
         onOpenInBrowser={tabId ? handleOpenInBrowser : undefined}
         onCapture={previewBridge && tabId && !isServerTab ? handleCapture : undefined}
@@ -1070,6 +1089,7 @@ export function PreviewView({
               </div>
             ) : null}
             <div
+              ref={serverSurfaceBoxRef}
               className={cn(
                 "absolute inset-x-0 bottom-0",
                 (showEmptyState || isUnreachable) && "invisible",

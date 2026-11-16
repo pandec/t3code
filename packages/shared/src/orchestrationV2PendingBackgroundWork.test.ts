@@ -9,6 +9,7 @@ import {
   backgroundWorkInDrainScope,
   backgroundWorkLiveness,
   derivePendingBackgroundWork,
+  monitorHoldsWakeCompletion,
 } from "./orchestrationV2PendingBackgroundWork.ts";
 
 describe("backgroundWorkHoldsCompletion", () => {
@@ -446,6 +447,39 @@ describe("derivePendingBackgroundWork kinds", () => {
         "pull-request-watch:github.com/acme/app#4",
         "pull-request-watch:github.com/acme/app#5",
       ]);
+    });
+
+    // Fork: every watch keeps holding until the merge wake, after its checks finish too.
+    it("keeps a watch whose checks all finished holding the thread", () => {
+      const tasks = derivePendingBackgroundWork({
+        latestRun: { id: "run-1" as never, ordinal: 1, status: "completed" },
+        providerThreads: [],
+        turnItems: [],
+        pullRequests: [{ ...link(1, {}), watch: { ...watch, passed: true, checksPending: false } }],
+      });
+      expect(tasks).toEqual([
+        {
+          taskId: "pull-request-watch:github.com/acme/app#1",
+          description: "Watching pull request #1",
+          kind: "monitor",
+          awaited: true,
+        },
+      ]);
+      expect(backgroundWorkHoldsCompletion(tasks)).toBe(true);
+      expect(
+        monitorHoldsWakeCompletion({
+          latestRunBackgroundWake: true,
+          pendingBackgroundTasks: tasks,
+        }),
+      ).toBe(true);
+
+      const running = derivePendingBackgroundWork({
+        latestRun: { id: "run-1" as never, ordinal: 1, status: "completed" },
+        providerThreads: [],
+        turnItems: [],
+        pullRequests: [{ ...link(1, {}), watch: { ...watch, checksPending: true } }],
+      });
+      expect(backgroundWorkHoldsCompletion(running)).toBe(true);
     });
 
     it("lists no watch while a run is active", () => {

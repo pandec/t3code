@@ -12,6 +12,7 @@ import {
   ProviderTurnId,
   ThreadId,
   type OrchestrationV2DomainEvent,
+  type OrchestrationV2ProviderTurn,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -50,6 +51,7 @@ it.effect.each([{ stop: false }, { stop: true }])(
         const rejectSteer = yield* Deferred.make<void>();
         let steerCalls = 0;
         let interruptCalls = 0;
+        let runningTurn: OrchestrationV2ProviderTurn | undefined;
         const capabilities = {
           ...CodexProviderCapabilitiesV2,
           turns: { ...CodexProviderCapabilitiesV2.turns, supportsActiveSteering: true },
@@ -104,7 +106,7 @@ it.effect.each([{ stop: false }, { stop: true }])(
                     yield* Queue.offer(events, {
                       type: "provider_turn.updated",
                       driver,
-                      providerTurn: {
+                      providerTurn: (runningTurn = {
                         id: ProviderTurnId.make(`provider-turn:${turn.attemptId}`),
                         providerThreadId: turn.providerThread.id,
                         nodeId: turn.rootNodeId,
@@ -118,7 +120,7 @@ it.effect.each([{ stop: false }, { stop: true }])(
                         status: "running",
                         startedAt: now,
                         completedAt: null,
-                      },
+                      }),
                     });
                   }),
                 // The first delivery parks until the test rejects it; retries
@@ -140,6 +142,12 @@ it.effect.each([{ stop: false }, { stop: true }])(
                 interruptTurn: ({ providerThread, providerTurnId }) =>
                   Effect.gen(function* () {
                     interruptCalls += 1;
+                    // Like a real provider, it reports the settled turn, then its terminal.
+                    yield* Queue.offer(events, {
+                      type: "provider_turn.updated",
+                      driver,
+                      providerTurn: { ...runningTurn!, status: "interrupted", completedAt: now },
+                    });
                     yield* Queue.offer(events, {
                       type: "turn.terminal",
                       driver,

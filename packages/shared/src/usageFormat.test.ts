@@ -5,6 +5,7 @@ import type { UsageSource } from "@t3tools/contracts";
 import {
   enumerateDays,
   formatHourShort,
+  formatTokens,
   makeWindow,
   refreshWindow,
   usageSourceMessages,
@@ -220,5 +221,13 @@ describe("hourly usage formatting", () => {
     } finally {
       resolvedOptions.mockRestore();
     }
+  });
+});
+
+describe("token formatting", () => {
+  it("moves to the next unit when rounding reaches it", () => {
+    expect(formatTokens(999_999)).toBe("1M");
+    expect(formatTokens(999_999_999)).toBe("1B");
+    expect(formatTokens(-999_999)).toBe("-1M");
   });
 });

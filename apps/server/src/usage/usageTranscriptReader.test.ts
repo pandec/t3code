@@ -12,6 +12,8 @@ import * as Schema from "effect/Schema";
 import { TEST_FORMATS } from "./usageTestFormats.ts";
 import {
   listTranscriptFiles,
+  physicalSourceIdOf,
+  readPhysicalSourceId,
   readTranscriptRecords,
   transcriptLineGate,
 } from "./usageTranscriptReader.ts";
@@ -204,6 +206,30 @@ describe("compressed transcripts", () => {
     assert.isAbove(listed.files.find((file) => file.path === compressed)?.size ?? 0, 0);
   });
 
+  it("lists files in directory order when more directories wait than it reads at once", async () => {
+    for (let index = 0; index < 40; index += 1) {
+      const nested = NodePath.join(dir, `project-${index}`, "sessions");
+      await NodeFSP.mkdir(nested, { recursive: true });
+      await NodeFSP.writeFile(NodePath.join(nested, "a.jsonl"), "");
+      await NodeFSP.writeFile(NodePath.join(nested, "..", "b.jsonl"), "");
+    }
+    // Usage that two transcripts share counts in the first one listed, so the order is part of the result.
+    const inOrder = async (folder: string): Promise<string[]> => {
+      const paths: string[] = [];
+      for (const entry of await NodeFSP.readdir(folder, { withFileTypes: true })) {
+        const child = NodePath.join(folder, entry.name);
+        if (entry.isDirectory()) paths.push(...(await inOrder(child)));
+        else paths.push(child);
+      }
+      return paths;
+    };
+    const listed = await listTranscriptFiles(dir, 0);
+    assert.deepStrictEqual(
+      listed.files.map((file) => file.path),
+      await inOrder(dir),
+    );
+  });
+
   it.each([
     { parser: "native", streamingThresholdBytes: undefined },
     { parser: "projected", streamingThresholdBytes: 1024 },
@@ -386,6 +412,59 @@ describe("readTranscriptRecords resume", () => {
     assert.strictEqual(second.records[0]?.model, "gpt-5.2-codex");
     assert.strictEqual(second.records[0]?.speed, "ultrafast");
     assert.strictEqual(second.records[0]?.sessionId, "codex-session-1");
+  });
+
+  it("reports the request a rewound Codex snapshot discards, across a resume", async () => {
+    const counters = (input: number, output: number) => ({
+      input_tokens: input,
+      cached_input_tokens: 0,
+      cache_write_input_tokens: 0,
+      output_tokens: output,
+      reasoning_output_tokens: 0,
+      total_tokens: input + output,
+    });
+    const snapshot = (second: number, last: unknown, total: unknown) =>
+      `${JSON.stringify({
+        type: "event_msg",
+        timestamp: `2026-08-01T10:00:0${second}Z`,
+        payload: {
+          type: "token_count",
+          info: { last_token_usage: last, total_token_usage: total },
+        },
+      })}\n`;
+    const anonymousRequest = (second: number, usage: unknown) =>
+      `${JSON.stringify({
+        type: "token_usage_record",
+        timestamp: `2026-08-01T10:00:0${second}Z`,
+        payload: { usage },
+      })}\n`;
+    const path = NodePath.join(dir, "rollout.jsonl");
+    await NodeFSP.writeFile(
+      path,
+      codexMetaLine() +
+        codexModelLine("gpt-5.2-codex") +
+        snapshot(2, counters(100, 20), counters(100, 20)) +
+        anonymousRequest(5, counters(40, 8)) +
+        anonymousRequest(6, counters(20, 4)),
+    );
+    const first = await readTranscriptRecords(path, TEST_FORMATS.codex);
+    assert.isNotNull(first);
+    assert.strictEqual(first.malformedRecords, 0);
+
+    // The rewound snapshot bills only the 20/4 request; the 40/8 one is lost.
+    await NodeFSP.appendFile(path, snapshot(7, counters(20, 4), counters(60, 12)));
+    const resumed = await readTranscriptRecords(path, TEST_FORMATS.codex, first.position);
+    assert.isNotNull(resumed);
+    assert.isTrue(resumed.resumed);
+    assert.deepStrictEqual(
+      resumed.records.map((record) => totalTokens(record.totals)),
+      [24],
+    );
+    assert.strictEqual(resumed.malformedRecords, 1);
+
+    const full = await readTranscriptRecords(path, TEST_FORMATS.codex);
+    assert.isNotNull(full);
+    assert.strictEqual(full.malformedRecords, 1);
   });
 
   it("suppresses a Codex duplicate usage event that straddles the boundary", async () => {
@@ -659,5 +738,51 @@ describe("transcriptLineGate", () => {
         assert.isFalse(gates[kind](Buffer.from(`{"text":"日本語 é ${marker.slice(1, -1)}"}`)));
       }
     }
+  });
+});
+
+describe("readPhysicalSourceId", () => {
+  const scope = "0123456789abcdef0123456789abcdef";
+  const windowsPath = "C:\\Users\\User\\.claude\\projects";
+
+  // One NTFS directory the Windows server reads natively and the WSL server
+  // through drvfs. The temp dir stands in for the drive's mount point.
+  async function drvfsFixture(extraMounts: (escapedMountPoint: string) => string = () => "") {
+    const mountPoint = NodePath.join(dir, "drive c");
+    await NodeFSP.mkdir(NodePath.join(mountPoint, "Users", "User", ".claude", "projects"), {
+      recursive: true,
+    });
+    const escaped = mountPoint.replaceAll(" ", "\\040");
+    const mountInfoPath = NodePath.join(dir, "mountinfo");
+    await NodeFSP.writeFile(
+      mountInfoPath,
+      [
+        "24 1 8:32 / / rw,relatime shared:1 - ext4 /dev/sdc rw,discard",
+        `81 24 0:61 / ${escaped} rw,noatime shared:2 - 9p C:\\134 rw,dirsync,aname=drvfs;path=C:\\;uid=1000;gid=1000;symlinkroot=/mnt/,mmap,access=client,msize=65536,trans=fd`,
+        extraMounts(escaped),
+      ].join("\n"),
+    );
+    return { mountPoint, mountInfoPath };
+  }
+
+  it("names a drvfs directory as the Windows server names it, whatever its typed case", async () => {
+    const { mountPoint, mountInfoPath } = await drvfsFixture();
+    const wslId = await readPhysicalSourceId(
+      `${mountPoint}/users/user/.claude/projects`,
+      scope,
+      "linux",
+      mountInfoPath,
+    );
+    assert.strictEqual(wslId, physicalSourceIdOf(scope, windowsPath));
+  });
+
+  it("gives no identity to native or shadowing Linux mounts, or without a desktop scope", async () => {
+    const { mountPoint, mountInfoPath } = await drvfsFixture(
+      (escaped) => `90 81 8:48 / ${escaped}/Users rw,relatime - ext4 /dev/sdd rw`,
+    );
+    const projects = `${mountPoint}/Users/User/.claude/projects`;
+    assert.isUndefined(await readPhysicalSourceId(projects, scope, "linux", mountInfoPath));
+    assert.isUndefined(await readPhysicalSourceId(dir, scope, "linux", mountInfoPath));
+    assert.isUndefined(await readPhysicalSourceId(projects, undefined, "linux", mountInfoPath));
   });
 });

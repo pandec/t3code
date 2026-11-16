@@ -45,6 +45,7 @@ export function ThreadContextChip(props: {
                 to="/$environmentId/$threadId"
                 params={{ environmentId, threadId }}
                 onClick={onClick}
+                draggable={false}
               />
             }
             aria-label={`Thread, ${title}`}

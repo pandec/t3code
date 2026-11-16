@@ -267,6 +267,9 @@ function CommandPaletteResultRow(props: {
         props.item.projectAccentColor,
         props.accentTintIntensityPercent,
       )}
+      {...(props.item.kind === "action" && props.item.checked !== undefined
+        ? { "aria-checked": props.item.checked }
+        : {})}
       onPointerDown={(event) => {
         if (props.item.threadRef) {
           startPaletteThreadDrag(

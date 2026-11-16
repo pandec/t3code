@@ -1,3 +1,4 @@
+import { threadKey } from "@t3tools/client-runtime/state/entities";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
@@ -1212,11 +1213,13 @@ describe("buildThreadActionItems", () => {
     ]);
   });
 
-  it("hides subagent threads but keeps forks", () => {
+  it("hides subagent threads and tasks shown under their parent but keeps forks", () => {
     const parentId = ThreadId.make("parent");
+    const delegatedId = ThreadId.make("delegated");
     const items = buildThreadActionItems({
       threads: [
         makeThread({ id: parentId, title: "Parent" }),
+        makeThread({ id: delegatedId, title: "Delegated task" }),
         makeThread({
           id: ThreadId.make("subagent"),
           title: "Subagent",
@@ -1236,6 +1239,9 @@ describe("buildThreadActionItems", () => {
           },
         }),
       ],
+      delegatedUnderParent: new Set([
+        threadKey({ environmentId: LOCAL_ENVIRONMENT_ID, threadId: delegatedId }),
+      ]),
       projectByKey: new Map(),
       icon: null,
       runThread: async () => undefined,
@@ -1341,6 +1347,26 @@ describe("filterPinnedBrowseEntries", () => {
       visibleEntries: windowsEntries,
       exactEntry: windowsEntries[0],
     });
+    const decomposed = { name: "De\u0301veloppement", fullPath: "/Users/me/De\u0301veloppement" };
+    expect(
+      filterPinnedBrowseEntries({
+        browseEntries: [decomposed],
+        filterQuery: "D\u00e9veloppement",
+        pinnedDirectoryName: "repo",
+        caseSensitive: true,
+      }).exactEntry,
+    ).toBe(decomposed);
+    expect(
+      filterPinnedBrowseEntries({
+        browseEntries: [
+          { name: "\u212B", fullPath: "/home/me/\u212B" },
+          { name: "A\u030A", fullPath: "/home/me/A\u030A" },
+        ],
+        filterQuery: "\u00C5",
+        pinnedDirectoryName: "repo",
+        caseSensitive: true,
+      }).exactEntry,
+    ).toBeNull();
   });
 });
 

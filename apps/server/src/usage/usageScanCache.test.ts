@@ -147,7 +147,7 @@ describe("scan cache round trip", () => {
     );
     expect(migrated).toEqual(expected);
     expect(migrated.get("/deleted/session.jsonl")?.records[0]?.speed).toBe("standard");
-    expect(encodeScanCache(migrated).version).toBe(13);
+    expect(encodeScanCache(migrated).version).toBe(18);
     expect(decodeScanCache(encodeScanCache(migrated), TEST_FORMAT_MAP)).toEqual(expected);
   });
 
@@ -241,7 +241,7 @@ describe("scan cache round trip", () => {
       totals: { ...record().totals, uncachedInputTokens: 0, outputTokens: 0 },
       provisional: true,
     });
-    const oneHour = record({ dedupeKey: "b", oneHourCacheCreationTokens: 7 });
+    const oneHour = record({ dedupeKey: "b", cacheCreation1hTokens: 7 });
     const original = cacheWith([["/claude.jsonl", 100, [provisional, oneHour], 2, 1]]);
     original.set("/deleted/codex.jsonl", {
       ...original.get("/claude.jsonl")!,
@@ -322,7 +322,7 @@ describe("scan cache round trip", () => {
     });
   });
 
-  it("migrates fork v9, re-parsing Claude and only Codex entries with malformed lines", () => {
+  it("migrates fork v9, re-parsing Claude and every Codex entry", () => {
     const codexRecord = record({ provider: "codex", model: "gpt-6-astra", dedupeKey: null });
     const original = cacheWith([["/claude.jsonl", 100, [record()], 2, 1]]);
     const codexEntry = (malformedRecords: number, tailMalformedRecords: number) => ({
@@ -340,11 +340,12 @@ describe("scan cache round trip", () => {
 
     const migrated = decodeScanCache(JSON.parse(JSON.stringify(forkV9)), TEST_FORMAT_MAP);
 
-    expect(migrated.get("/clean/codex.jsonl")).toEqual({
-      ...original.get("/clean/codex.jsonl")!,
-      position: MIGRATED_POSITION,
-    });
-    for (const path of ["/claude.jsonl", "/malformed/codex.jsonl", "/tail-malformed/codex.jsonl"]) {
+    for (const path of [
+      "/claude.jsonl",
+      "/clean/codex.jsonl",
+      "/malformed/codex.jsonl",
+      "/tail-malformed/codex.jsonl",
+    ]) {
       expect(migrated.get(path)).toEqual({
         ...original.get(path)!,
         requiresReparse: true,
@@ -358,7 +359,7 @@ describe("scan cache round trip", () => {
       totals: { ...record().totals, uncachedInputTokens: 0, outputTokens: 0 },
       provisional: true,
     });
-    const oneHour = record({ dedupeKey: "b", oneHourCacheCreationTokens: 7 });
+    const oneHour = record({ dedupeKey: "b", cacheCreation1hTokens: 7 });
     const original = cacheWith([
       ["/claude.jsonl", 100, [provisional, oneHour, record({ dedupeKey: "c" })]],
     ]);
@@ -371,7 +372,7 @@ describe("scan cache round trip", () => {
         record({
           provider: "codex",
           dedupeKey: null,
-          oneHourCacheCreationTokens: 3,
+          cacheCreation1hTokens: 3,
           unresolvedServiceTierTurnId: "turn-2",
         }),
       ],
@@ -478,7 +479,15 @@ describe("scan cache round trip", () => {
       [
         "/a.jsonl",
         100,
-        [record(), record({ dedupeKey: "msg_2:", model: "claude-opus-5-5", speed: "fast" })],
+        [
+          record(),
+          record({
+            dedupeKey: "msg_2:",
+            model: "claude-opus-5-5",
+            speed: "fast",
+            cacheCreation1hTokens: 8,
+          }),
+        ],
       ],
       [
         "/b.jsonl",
@@ -575,19 +584,28 @@ describe("scan cache round trip", () => {
     expect(restored).toEqual(original);
   });
 
-  it.each([6, 7, 8, 9, 10, 11, 12])(
+  it.each([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17])(
     "migrates upstream v%s by shape, keeping history and diagnostics but re-parsing",
     (version) => {
-      // Upstream v6–v12 share the fork's file names and versions. Its entries
-      // carry a whole-file `mr` instead of `x`/`tx`, and its v7–v12 rows put the
-      // tier turn at index 12, where the fork marks provisional records.
+      // Upstream v6–v13 share the fork's file names and versions. Its entries carry a whole-file
+      // `mr` instead of `x`/`tx`, its v7+ rows put a nullable tier turn at index 12, where the fork
+      // marks provisional records, and its v13+ rows put one-hour cache writes after it.
       const pending = record({
         provider: "codex",
         model: "gpt-6-astra",
         dedupeKey: null,
         ...(version >= 7 ? { unresolvedServiceTierTurnId: "native-turn" } : {}),
       });
-      const original = cacheWith([["/gone.jsonl", 100, [record({ speed: "fast" })]]]);
+      const original = cacheWith([
+        [
+          "/gone.jsonl",
+          100,
+          [
+            record({ speed: "fast" }),
+            ...(version >= 13 ? [record({ dedupeKey: "b", cacheCreation1hTokens: 7 })] : []),
+          ],
+        ],
+      ]);
       original.set("/gone-codex.jsonl", {
         ...original.get("/gone.jsonl")!,
         provider: "codex",
@@ -614,7 +632,11 @@ describe("scan cache round trip", () => {
         files: Object.fromEntries(
           Object.entries(encoded.files).map(([path, { x, tx: _tx, ...file }]) => {
             const upstreamRow = (row: readonly unknown[]) =>
-              typeof row[14] === "string" ? [...row.slice(0, 12), row[14]] : row.slice(0, 12);
+              typeof row[13] === "number" && row[13] > 0
+                ? [...row.slice(0, 12), row[14] ?? null, row[13]]
+                : typeof row[14] === "string"
+                  ? [...row.slice(0, 12), row[14]]
+                  : row.slice(0, 12);
             return [
               path,
               { ...file, mr: x, r: file.r.map(upstreamRow), t: file.t.map(upstreamRow) },
@@ -624,6 +646,9 @@ describe("scan cache round trip", () => {
       };
       if (version >= 7) {
         expect(upstream.files["/gone-codex.jsonl"]!.r[0]![12]).toBe("native-turn");
+      }
+      if (version >= 13) {
+        expect(upstream.files["/gone.jsonl"]!.r[1]!.slice(12)).toEqual([null, 7]);
       }
 
       const restored = decodeScanCache(JSON.parse(JSON.stringify(upstream)), TEST_FORMAT_MAP);
@@ -639,11 +664,18 @@ describe("scan cache round trip", () => {
     },
   );
 
-  it.each([10, 11, 12])(
-    "migrates fork v%s, re-parsing Claude for merged partial copies",
+  it.each([10, 11, 12, 13])(
+    "migrates fork v%s, re-parsing Claude and Codex under the current reducers",
     (version) => {
-      const original = cacheWith([["/claude.jsonl", 100, [record()], 2, 1]]);
-      // Before v12, malformed Codex entries re-parse immediately and clean ones retain records until growth.
+      const original = cacheWith([
+        [
+          "/claude.jsonl",
+          100,
+          [record(), record({ dedupeKey: "b", cacheCreation1hTokens: 7 })],
+          2,
+          1,
+        ],
+      ]);
       original.set("/codex.jsonl", {
         ...original.get("/claude.jsonl")!,
         provider: "codex",
@@ -677,23 +709,59 @@ describe("scan cache round trip", () => {
         requiresReparse: true,
         position: MIGRATED_POSITION,
       });
-      expect(migrated.get("/codex.jsonl")).toEqual(
-        version === 12
-          ? original.get("/codex.jsonl")
-          : {
-              ...original.get("/codex.jsonl")!,
-              requiresReparse: true,
-              position: MIGRATED_POSITION,
-            },
-      );
-      expect(migrated.get("/clean-codex.jsonl")).toEqual(
-        version === 12
-          ? original.get("/clean-codex.jsonl")
-          : { ...original.get("/clean-codex.jsonl")!, position: MIGRATED_POSITION },
-      );
+      // Older Codex state lacks request ledgers and dated baselines, so even clean entries re-parse.
+      for (const path of ["/codex.jsonl", "/clean-codex.jsonl"]) {
+        expect(migrated.get(path)).toEqual({
+          ...original.get(path)!,
+          requiresReparse: true,
+          position: MIGRATED_POSITION,
+        });
+      }
       expect(migrated.get("/pi.jsonl")).toEqual(original.get("/pi.jsonl"));
     },
   );
+
+  it.each([
+    ["upstream v16", "s:p:grok-4.5"],
+    ["upstream v16", "s:p:1786000000000:grok-4.5"],
+    ["fork v13", "s:p:grok-4.5"],
+  ])("re-parses %s Grok transcripts with key %s", (layout, dedupeKey) => {
+    const original = cacheWith([
+      ["/grok/updates.jsonl", 100, [record({ provider: "grok", model: "grok-4.5", dedupeKey })]],
+    ]);
+    original.set("/grok/updates.jsonl", {
+      ...original.get("/grok/updates.jsonl")!,
+      provider: "grok",
+    });
+    const encoded = encodeScanCache(original);
+    const legacy =
+      layout === "fork v13"
+        ? { ...encoded, version: 13 }
+        : {
+            ...encoded,
+            version: 16,
+            files: Object.fromEntries(
+              Object.entries(encoded.files).map(([path, { x, tx: _tx, ...file }]) => [
+                path,
+                { ...file, mr: x },
+              ]),
+            ),
+          };
+    const restored = decodeScanCache(JSON.parse(JSON.stringify(legacy)), TEST_FORMAT_MAP);
+    expect(restored.get("/grok/updates.jsonl")).toEqual({
+      ...original.get("/grok/updates.jsonl"),
+      requiresReparse: true,
+      position: MIGRATED_POSITION,
+      records: [
+        record({ provider: "grok", model: "grok-4.5", dedupeKey: "s:p:1786000000000:grok-4.5" }),
+      ],
+    });
+  });
+
+  it("ignores fork-shaped entries at versions only upstream wrote", () => {
+    const encoded = encodeScanCache(cacheWith([["/claude.jsonl", 100, [record()]]]));
+    expect(decodeScanCache({ ...encoded, version: 17 }, TEST_FORMAT_MAP).size).toBe(0);
+  });
 
   it("rewrites only changed entries and still restores the whole cache", () => {
     const write = makeScanCacheWriter();
@@ -808,14 +876,14 @@ describe("dedupeWithinFile", () => {
       record({ dedupeKey: "msg_2:" }),
       record({
         totals: { ...record().totals, outputTokens: 999 },
-        oneHourCacheCreationTokens: 7,
+        cacheCreation1hTokens: 7,
         speed: "fast",
       }),
       record({ totals: { ...record().totals, outputTokens: 6 } }),
     ]);
 
     expect(
-      kept.map((r) => [r.dedupeKey, r.totals.outputTokens, r.oneHourCacheCreationTokens, r.speed]),
+      kept.map((r) => [r.dedupeKey, r.totals.outputTokens, r.cacheCreation1hTokens, r.speed]),
     ).toEqual([
       ["msg_1:", 999, 7, "standard"],
       ["msg_2:", 50, undefined, "standard"],
