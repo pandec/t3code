@@ -4106,6 +4106,8 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   if (options.platform === "linux") {
     // fpm uses system xz through tar; threading cuts compression time on many-core runners.
     buildEnv.XZ_DEFAULTS = "-T0";
+    // Fork: linux-after-pack.ts skips the glibc ceiling for local-only Dev builds.
+    buildEnv.T3CODE_DESKTOP_BUILD_FLAVOR = options.flavor;
   }
   if (options.platform === "win") {
     // Windows signs only through Azure Trusted Signing. Off Windows,

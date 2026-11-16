@@ -115,6 +115,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("packaged ELF s
         await expect(
           afterPack({ appOutDir: app, electronPlatformName: "linux", targets: [deb] }),
         ).rejects.toThrow(/helper.*GLIBC_2\.40.*2\.39/s);
+        expect(await scanGlibcNeeds(app, { enforceCeiling: false })).toEqual({
+          minimum: "2.40",
+          elfCount: 3,
+        });
         await NodeFSP.writeFile(NodePath.join(native, "helper"), Buffer.from("\x7fELFbroken"));
         await expect(scanGlibcNeeds(app)).rejects.toThrow(/helper/);
       } finally {

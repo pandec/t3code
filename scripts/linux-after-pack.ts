@@ -22,7 +22,10 @@ interface AfterPackContext {
 export default async function afterPack(context: AfterPackContext): Promise<void> {
   await prepareServerCompileCache(context);
   await removeSharedWriteAccess(context.appOutDir);
-  const { minimum } = await scanGlibcNeeds(context.appOutDir);
+  // Fork: a Dev AppImage runs only on the host that built it, whose glibc may exceed the ceiling.
+  const { minimum } = await scanGlibcNeeds(context.appOutDir, {
+    enforceCeiling: process.env.T3CODE_DESKTOP_BUILD_FLAVOR !== "dev",
+  });
   for (const target of context.targets) {
     if (target.name !== "deb") continue;
     if (!target.options || !Array.isArray(target.options.depends)) {
