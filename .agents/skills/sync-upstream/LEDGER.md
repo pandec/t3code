@@ -57,4 +57,4 @@ When the upstream range touches a path, spawn one reviewer for its question.
 
 ## Full audit
 
-- Last run 2026-10-09 (all areas); next due: **2026-11-24** (postponed 2026-11-10 and 2026-11-16 after drops of 140, 581, and 1407 commits through a7d17cd2f5). Scope: fork hooks rebuilt in upstream v2 paths, especially lifecycle/worktree ownership, upstream thread actions that bypass split-pane targeting or archive-when-done, and reasoning propagation into voice and client caches.
+- Last run 2026-10-09 (all areas); next due: **2026-11-24** (postponed 2026-11-10, 2026-11-16, and 2026-11-19 after drops of 140, 581, 1407, and 447 commits through 082bc2cb7a). Scope: fork hooks rebuilt in upstream v2 paths, especially lifecycle/worktree ownership, upstream thread actions that bypass split-pane targeting or archive-when-done, and reasoning propagation into voice and client caches.
