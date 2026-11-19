@@ -1,5 +1,6 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
+import { msg } from "gt-react";
 import {
   pickSnoozePreset as pickSharedSnoozePreset,
   resolveSnoozePresets as resolveSharedSnoozePresets,
@@ -8,6 +9,7 @@ import {
   type SnoozePreset as SharedSnoozePreset,
 } from "@t3tools/client-runtime/state/thread-settled";
 
+import { m, type MessageResolver } from "../i18n/messages";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { serverEnvironment } from "../state/server";
 import { formatShortTimestamp } from "../timestampFormat";
@@ -34,9 +36,10 @@ export function resolveSnoozePresets(
   timestampFormat: TimestampFormat,
   environmentId: EnvironmentId,
   options?: { readonly untilDone?: boolean },
+  resolve: MessageResolver = m,
 ): ReadonlyArray<SnoozePreset> {
   const presets: SnoozePreset[] = [
-    ...resolveSharedSnoozePresets(now, snoozeOptions(timestampFormat, environmentId)),
+    ...resolveSharedSnoozePresets(now, snoozeOptions(timestampFormat, environmentId), resolve),
   ];
   if (options?.untilDone === true) {
     presets.unshift({ ...SNOOZE_UNTIL_DONE_PRESET, snoozedUntil: null, untilDone: true });
@@ -50,6 +53,7 @@ export function pickSnoozePreset(
   id: string,
   timestampFormat: TimestampFormat,
   environmentId: EnvironmentId,
+  resolve: MessageResolver = m,
 ): SnoozePreset | undefined {
   if (id === SNOOZE_UNTIL_DONE_PRESET.id) {
     return shown.find((preset) => preset.id === id);
@@ -61,12 +65,13 @@ export function pickSnoozePreset(
     id,
     now: new Date(),
     ...snoozeOptions(timestampFormat, environmentId),
+    resolve,
   });
   if (!picked) {
     toastManager.add({
       type: "warning",
-      title: "Could not snooze thread",
-      description: "That snooze time has passed. Choose another time.",
+      title: resolve(msg("Could not snooze thread")),
+      description: resolve(msg("That snooze time has passed. Choose another time.")),
     });
   }
   return picked;

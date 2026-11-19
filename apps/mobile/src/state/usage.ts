@@ -10,8 +10,10 @@ import { refreshUsage, usageSummaryInput } from "@t3tools/client-runtime/state/u
 import { resolveUsageAccess } from "@t3tools/client-runtime/state/usage-access";
 import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
 import { AsyncResult, Atom } from "effect/reactivity";
+import { useMessages } from "gt-react-native";
 import { useCallback, useMemo } from "react";
 
+import { keepMarked } from "../i18n/messages";
 import {
   classifyEnvironmentUsage,
   usageProgress,
@@ -46,11 +48,14 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
       const sessionResult = get(environmentSession.sessionStateAtom(environmentId));
       const session = AsyncResult.getOrElse(sessionResult, () => null);
       const hasSessionError = sessionResult._tag === "Failure";
-      const access = resolveUsageAccess({
-        connectionPhase: presentation.connection.phase,
-        session,
-        hasSessionError,
-      });
+      const access = resolveUsageAccess(
+        {
+          connectionPhase: presentation.connection.phase,
+          session,
+          hasSessionError,
+        },
+        keepMarked,
+      );
       if (!access.canReadDiagnostics) {
         // Map upstream's access check onto the fork's coverage states: a check
         // still running is reporting, an offline connection that never
@@ -156,7 +161,19 @@ export function useUsage(
       input.untilTime,
     ],
   );
-  const environments = useAtomValue(load ? usageByWindowAtom(windowKey) : usageEnvironmentsAtom);
+  const messages = useMessages();
+  const markedEnvironments = useAtomValue(
+    load ? usageByWindowAtom(windowKey) : usageEnvironmentsAtom,
+  );
+  const environments = useMemo(
+    () =>
+      markedEnvironments.map((environment) =>
+        environment.accessError === null
+          ? environment
+          : { ...environment, accessError: messages(environment.accessError) },
+      ),
+    [markedEnvironments, messages],
+  );
   const selectedEnvironments = useMemo(
     () =>
       selectedEnvironmentIds === null

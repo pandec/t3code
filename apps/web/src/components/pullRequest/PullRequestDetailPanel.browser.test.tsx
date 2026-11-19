@@ -326,12 +326,12 @@ describe("copy PR number shortcut in split view", () => {
         );
 
       press();
-      expect(copied.mock.calls).toEqual([["#2", "PR number"]]);
+      expect(copied.mock.calls).toEqual([["#2", "Failed to copy PR number"]]);
 
       copied.mockReset();
       await act(async () => useThreadSplitStore.setState({ activePaneId: "primary" }));
       press();
-      expect(copied.mock.calls).toEqual([["#1", "PR number"]]);
+      expect(copied.mock.calls).toEqual([["#1", "Failed to copy PR number"]]);
     } finally {
       useThreadSplitStore.setState(initialSplit, true);
     }

@@ -17,6 +17,7 @@ describe("mobile diagnostic events", () => {
         stage: null,
         attempt: 3,
         generation: 2,
+        refusedRouteIds: [],
         lastFailure: new ConnectionTransientError({
           reason: "transport",
           detail: "Private Grey Mac at https://secret.example/token=abc disconnected",
@@ -52,6 +53,7 @@ describe("mobile diagnostic events", () => {
         stage: null,
         attempt: 1,
         generation: 1,
+        refusedRouteIds: [],
         // The peer controls this field, so it is the one place free-form text
         // could otherwise reach durable on-device storage.
         lastFailure: new ConnectionTransientError({

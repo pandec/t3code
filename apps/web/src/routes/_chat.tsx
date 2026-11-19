@@ -19,6 +19,7 @@ import {
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { isElectron } from "../env";
 import { ThreadRouteView } from "../components/ThreadRouteView";
+import { GlobalVoiceInputIndicator } from "../components/chat/GlobalVoiceInputIndicator";
 import { isAppModalPage } from "../components/sidebar/mainAppLocation";
 import { SidebarInset } from "../components/ui/sidebar";
 import { retainThreadFindForRoute } from "../components/chat/threadFindStore";
@@ -264,6 +265,7 @@ function ChatRouteLayout() {
         )}
       </SplitThreadLayout>
       {modalOpen ? <Outlet /> : null}
+      <GlobalVoiceInputIndicator hidden={modalOpen} />
     </>
   );
 }

@@ -1,6 +1,7 @@
 import type { ThreadGroup } from "@t3tools/contracts";
 import { threadGroupId, threadGroupSections } from "@t3tools/shared/threadGroups";
 import { backgroundWorkLiveness } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import { msg } from "gt-react-native";
 import {
   canSnooze,
   effectiveSnoozed,
@@ -45,6 +46,7 @@ import type { ThreadMoveAvailability } from "./threadOrder";
 
 import { relativeTime } from "../../lib/time";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
+import { m, type MessageResolver } from "../../i18n/messages";
 
 import {
   applyPendingThreadOrder,
@@ -94,13 +96,16 @@ export type ThreadListV2SwipeAction = "archive" | "settle" | "unsettle" | "snooz
  * clock: the compiler keys a row's memo on its inputs, so a clock read inside
  * it would keep the times from the row's first render.
  */
-export function resolveThreadListV2SnoozePresets(input: {
-  readonly secondary: "snooze" | null;
-  readonly now: string;
-  readonly presets: ReadonlyArray<SnoozePresetSetting> | undefined;
-}): ReadonlyArray<SnoozePreset> {
+export function resolveThreadListV2SnoozePresets(
+  input: {
+    readonly secondary: "snooze" | null;
+    readonly now: string;
+    readonly presets: ReadonlyArray<SnoozePresetSetting> | undefined;
+  },
+  resolve: MessageResolver = m,
+): ReadonlyArray<SnoozePreset> {
   return input.secondary === "snooze"
-    ? resolveSnoozePresets(new Date(input.now), presetOptions(input.presets))
+    ? resolveSnoozePresets(new Date(input.now), presetOptions(input.presets), resolve)
     : [];
 }
 
@@ -123,6 +128,7 @@ export function resolveThreadListV2SnoozeMenuSelection(input: {
     id: input.event.slice("snooze:".length),
     now: input.now,
     ...presetOptions(input.presets),
+    resolve: m,
   });
   return preset ? { _tag: "selected", preset } : { _tag: "expired" };
 }
@@ -178,13 +184,16 @@ export function resolveThreadListV2SwipeActions(input: {
 
 // Nested keeps iOS menus short: UIKit scrolls a taller menu, and that scroll
 // cancels press-drag-release selection.
-export function layoutThreadListV2RowMenuActions(input: {
-  readonly nested: boolean;
-  readonly direct: readonly MenuAction[];
-  readonly reorder: readonly MenuAction[];
-  readonly pin: readonly MenuAction[];
-  readonly secondary: readonly MenuAction[];
-}): MenuAction[] {
+export function layoutThreadListV2RowMenuActions(
+  input: {
+    readonly nested: boolean;
+    readonly direct: readonly MenuAction[];
+    readonly reorder: readonly MenuAction[];
+    readonly pin: readonly MenuAction[];
+    readonly secondary: readonly MenuAction[];
+  },
+  resolve: MessageResolver = m,
+): MenuAction[] {
   if (!input.nested) {
     return [...input.direct, ...input.reorder, ...input.pin, ...input.secondary];
   }
@@ -193,14 +202,14 @@ export function layoutThreadListV2RowMenuActions(input: {
     ...input.pin,
     {
       id: "more",
-      title: "More",
+      title: resolve(msg("More", { $context: "menu that holds more thread actions" })),
       image: "ellipsis.circle",
       subactions: [
         ...(input.reorder.length > 1
           ? [
               {
                 id: "arrange-menu",
-                title: "Arrange",
+                title: resolve(msg("Arrange", { $context: "submenu for reordering threads" })),
                 image: "arrow.up.arrow.down",
                 subactions: [...input.reorder],
               },
@@ -323,30 +332,33 @@ export function resolveThreadListV2Status(
   return liveness ?? "ready";
 }
 
-export function threadListV2RowAccessibilityLabel(input: {
-  readonly title: string;
-  readonly variant: "card" | "slim";
-  readonly woke: boolean;
-  readonly statusLabel: string | undefined;
-  readonly timeLabel: string;
-  readonly snoozeWakeLabel: string | undefined;
-  readonly providerNameLabel: string | null;
-  readonly hasQueuedMessages: boolean;
-  readonly regeneratingTitle: boolean;
-}): string {
+export function threadListV2RowAccessibilityLabel(
+  input: {
+    readonly title: string;
+    readonly variant: "card" | "slim";
+    readonly woke: boolean;
+    readonly statusLabel: string | undefined;
+    readonly timeLabel: string;
+    readonly snoozeWakeLabel: string | undefined;
+    readonly providerNameLabel: string | null;
+    readonly hasQueuedMessages: boolean;
+    readonly regeneratingTitle: boolean;
+  },
+  resolve: MessageResolver = m,
+): string {
   // Mirrors the row's meta line: a card shows Woke, else its status, else the time.
   const meta =
     input.variant === "slim"
       ? (input.snoozeWakeLabel ?? input.timeLabel)
       : input.woke
-        ? "Woke"
+        ? resolve(msg("Woke", { $context: "thread came back from snooze" }))
         : (input.statusLabel ?? input.timeLabel);
   return [
     input.title,
     meta,
     input.providerNameLabel,
-    input.hasQueuedMessages ? "messages queued to send" : null,
-    input.regeneratingTitle ? "regenerating title" : null,
+    input.hasQueuedMessages ? resolve(msg("messages queued to send")) : null,
+    input.regeneratingTitle ? resolve(msg("regenerating title")) : null,
   ]
     .filter((part) => part !== null)
     .join(", ");
@@ -629,6 +641,7 @@ export function threadListV2ListItemsAreEqual(
 function resolveThreadListV2ItemTimeLabel(
   item: ThreadListV2Item,
   showSnoozeWakeLabel: boolean,
+  resolve: MessageResolver,
 ): string {
   const { thread, variant, snoozed } = item;
   if (showSnoozeWakeLabel) return "";
@@ -643,6 +656,8 @@ function resolveThreadListV2ItemTimeLabel(
     variant === "slim" && !snoozed ? resolveSettledThreadTimestamp(thread) : null;
   return relativeTime(
     settledTimestamp ?? resolveThreadActivityTimestamp(thread) ?? thread.createdAt,
+    undefined,
+    resolve,
   );
 }
 
@@ -688,12 +703,14 @@ export function buildThreadListV2ListItems(input: {
   readonly shelfPreferencesLoading?: boolean;
   /** Search results arrive ranked across shelves; grouping them would undo the ranking. */
   readonly searching?: boolean;
+  readonly resolve?: MessageResolver;
 }): ThreadListV2ListItem[] {
+  const resolve = input.resolve ?? m;
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
   const threadItems = input.items.map((item): ThreadListV2ListItem => {
     const snoozeWakeLabelText =
       item.snoozed && item.thread.snoozedUntil != null && input.snoozeLabelNow !== undefined
-        ? snoozeWakeLabel(item.thread.snoozedUntil, { now: input.snoozeLabelNow })
+        ? snoozeWakeLabel(item.thread.snoozedUntil, { now: input.snoozeLabelNow }, resolve)
         : item.snoozed && item.thread.snoozedUntil == null
           ? UNTIL_DONE_SNOOZE_LABEL
           : undefined;
@@ -714,7 +731,7 @@ export function buildThreadListV2ListItems(input: {
       key: `v2-thread:${item.thread.environmentId}:${item.thread.id}`,
       item,
       snoozeWakeLabelText,
-      timeLabel: resolveThreadListV2ItemTimeLabel(item, snoozeWakeLabelText !== undefined),
+      timeLabel: resolveThreadListV2ItemTimeLabel(item, snoozeWakeLabelText !== undefined, resolve),
       snoozePresetMinute,
       showTrailingDivider: false,
       hasQueuedMessages:

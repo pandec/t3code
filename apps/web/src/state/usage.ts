@@ -18,6 +18,7 @@ import {
   type UsageAttribution,
 } from "@t3tools/shared/usageMerge";
 import { AsyncResult, Atom } from "effect/reactivity";
+import { msg } from "gt-react";
 import { useState } from "react";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -29,6 +30,7 @@ import {
 import { environmentPresentations } from "./presentation";
 import { serverEnvironment } from "./server";
 import { environmentSession, readEnvironmentScope } from "./session";
+import { m } from "../i18n/messages";
 
 export interface EnvironmentUsageStatus {
   readonly environmentId: EnvironmentId;
@@ -108,7 +110,7 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
         isPending: result.waiting,
         canReadDiagnostics: true,
         isConnected,
-        error: state.kind === "failed" ? "This environment could not report usage." : null,
+        error: state.kind === "failed" ? m(msg("This environment could not report usage.")) : null,
         summary,
         state,
       });

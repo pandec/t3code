@@ -50,7 +50,7 @@ import {
   SettingsRow,
   SettingsSection,
 } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 import { SpLabsSettingsSection } from "./SpLabsSettings";
 import { VoiceSettingsSection } from "./VoiceSettingsSection";
 
@@ -176,6 +176,7 @@ function useSettingsWritableEnvironments<T extends { readonly environmentId: Env
 }
 
 function ProviderUsageExtrasSection() {
+  const searchableSetting = useSearchableSetting();
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
   const { environments } = useEnvironments();
@@ -247,7 +248,7 @@ function ProviderUsageExtrasSection() {
         resetAction={
           settings.maskProviderUsageEmails !== DEFAULT_UNIFIED_SETTINGS.maskProviderUsageEmails ? (
             <SettingResetButton
-              label="provider email masking"
+              ariaLabel="Reset provider email masking to default"
               onClick={() =>
                 updateSettings({
                   maskProviderUsageEmails: DEFAULT_UNIFIED_SETTINGS.maskProviderUsageEmails,
@@ -274,7 +275,7 @@ function ProviderUsageExtrasSection() {
           settings.providerUsageWarningPercent !==
           DEFAULT_UNIFIED_SETTINGS.providerUsageWarningPercent ? (
             <SettingResetButton
-              label="warning threshold"
+              ariaLabel="Reset warning threshold to default"
               onClick={() =>
                 updateSettings(
                   resolveProviderUsageThresholdCommit({
@@ -314,7 +315,7 @@ function ProviderUsageExtrasSection() {
           settings.providerUsageCriticalPercent !==
           DEFAULT_UNIFIED_SETTINGS.providerUsageCriticalPercent ? (
             <SettingResetButton
-              label="critical threshold"
+              ariaLabel="Reset critical threshold to default"
               onClick={() =>
                 updateSettings(
                   resolveProviderUsageThresholdCommit({
@@ -353,7 +354,7 @@ function ProviderUsageExtrasSection() {
         resetAction={
           settings.showOpenRouterCredits !== DEFAULT_UNIFIED_SETTINGS.showOpenRouterCredits ? (
             <SettingResetButton
-              label="OpenRouter credits"
+              ariaLabel="Reset OpenRouter credits to default"
               onClick={() =>
                 updateSettings({
                   showOpenRouterCredits: DEFAULT_UNIFIED_SETTINGS.showOpenRouterCredits,
@@ -380,7 +381,7 @@ function ProviderUsageExtrasSection() {
             description="A management key from openrouter.ai/settings/management-keys; regular inference keys don't work. Saved to every connected environment's secret store and used only server-side to read the balance."
             resetAction={
               <SettingResetButton
-                label="OpenRouter management key"
+                ariaLabel="Reset OpenRouter management key to default"
                 onClick={() => void applyOpenRouterApiKey("")}
               />
             }
@@ -416,7 +417,7 @@ function ProviderUsageExtrasSection() {
               settings.openRouterCreditsBudgetUsd !==
               DEFAULT_UNIFIED_SETTINGS.openRouterCreditsBudgetUsd ? (
                 <SettingResetButton
-                  label="OpenRouter budget"
+                  ariaLabel="Reset OpenRouter budget to default"
                   onClick={() =>
                     updateSettings({
                       openRouterCreditsBudgetUsd:
@@ -496,6 +497,7 @@ function LinearEnvironmentStatus({
 }
 
 function LinearExtrasSection() {
+  const searchableSetting = useSearchableSetting();
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
   const serverConfigs = useServerConfigs();
@@ -558,7 +560,10 @@ function LinearExtrasSection() {
         title="Linear API key"
         description="A personal API key from linear.app/settings/account/security. Saved to every connected environment's secret store and used only server-side to read issues and post comments."
         resetAction={
-          <SettingResetButton label="Linear API key" onClick={() => void applyLinearApiKey("")} />
+          <SettingResetButton
+            ariaLabel="Reset Linear API key to default"
+            onClick={() => void applyLinearApiKey("")}
+          />
         }
         control={
           <DraftInput
@@ -591,7 +596,10 @@ function LinearExtrasSection() {
         description="Comma-separated team keys (for example SP, OP). Bare identifiers like SP-123 in messages become issue links only for these keys; linear.app links always open in the panel."
         resetAction={
           settings.linearTeamKeys.length > 0 ? (
-            <SettingResetButton label="Linear team keys" onClick={() => setTeamKeys([])} />
+            <SettingResetButton
+              ariaLabel="Reset Linear team keys to default"
+              onClick={() => setTeamKeys([])}
+            />
           ) : null
         }
         control={
@@ -612,6 +620,7 @@ function LinearExtrasSection() {
 }
 
 function SidebarExtrasSection() {
+  const searchableSetting = useSearchableSetting();
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
   const archivedSectionVisibleCount = clampArchivedSectionVisibleCount(
@@ -627,7 +636,7 @@ function SidebarExtrasSection() {
           settings.sidebarActiveFilterIncludeDone !==
           DEFAULT_UNIFIED_SETTINGS.sidebarActiveFilterIncludeDone ? (
             <SettingResetButton
-              label="include Done threads in active filter"
+              ariaLabel="Reset include Done threads in active filter to default"
               onClick={() =>
                 updateSettings({
                   sidebarActiveFilterIncludeDone:
@@ -654,7 +663,7 @@ function SidebarExtrasSection() {
           settings.sidebarThreadProviderIconVisibility !==
           DEFAULT_UNIFIED_SETTINGS.sidebarThreadProviderIconVisibility ? (
             <SettingResetButton
-              label="thread provider icon"
+              ariaLabel="Reset thread provider icon to default"
               onClick={() =>
                 updateSettings({
                   sidebarThreadProviderIconVisibility:
@@ -696,7 +705,7 @@ function SidebarExtrasSection() {
           settings.sidebarThreadGroupsButton !==
           DEFAULT_UNIFIED_SETTINGS.sidebarThreadGroupsButton ? (
             <SettingResetButton
-              label="thread groups button"
+              ariaLabel="Reset thread groups button to default"
               onClick={() =>
                 updateSettings({
                   sidebarThreadGroupsButton: DEFAULT_UNIFIED_SETTINGS.sidebarThreadGroupsButton,
@@ -722,7 +731,7 @@ function SidebarExtrasSection() {
           settings.sidebarV2NewThreadButtonInProjectRow !==
           DEFAULT_UNIFIED_SETTINGS.sidebarV2NewThreadButtonInProjectRow ? (
             <SettingResetButton
-              label="new thread button position"
+              ariaLabel="Reset new thread button position to default"
               onClick={() =>
                 updateSettings({
                   sidebarV2NewThreadButtonInProjectRow:
@@ -749,7 +758,7 @@ function SidebarExtrasSection() {
         resetAction={
           settings.sidebarV2CompactCards !== DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards ? (
             <SettingResetButton
-              label="compact thread cards"
+              ariaLabel="Reset compact thread cards to default"
               onClick={() =>
                 updateSettings({
                   sidebarV2CompactCards: DEFAULT_UNIFIED_SETTINGS.sidebarV2CompactCards,
@@ -774,7 +783,7 @@ function SidebarExtrasSection() {
         resetAction={
           settings.sidebarHideSettleButton !== DEFAULT_UNIFIED_SETTINGS.sidebarHideSettleButton ? (
             <SettingResetButton
-              label="hide settle button"
+              ariaLabel="Reset hide settle button to default"
               onClick={() =>
                 updateSettings({
                   sidebarHideSettleButton: DEFAULT_UNIFIED_SETTINGS.sidebarHideSettleButton,
@@ -799,7 +808,7 @@ function SidebarExtrasSection() {
         resetAction={
           archivedSectionVisibleCount !== DEFAULT_UNIFIED_SETTINGS.archivedSectionVisibleCount ? (
             <SettingResetButton
-              label="recent archived threads"
+              ariaLabel="Reset recent archived threads to default"
               onClick={() =>
                 updateSettings({
                   archivedSectionVisibleCount: DEFAULT_UNIFIED_SETTINGS.archivedSectionVisibleCount,
@@ -829,6 +838,7 @@ function SidebarExtrasSection() {
 }
 
 function PanelsExtrasSection() {
+  const searchableSetting = useSearchableSetting();
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
 
@@ -840,7 +850,7 @@ function PanelsExtrasSection() {
         resetAction={
           settings.showPanelToggleButtons !== DEFAULT_UNIFIED_SETTINGS.showPanelToggleButtons ? (
             <SettingResetButton
-              label="panel toggle buttons"
+              ariaLabel="Reset panel toggle buttons to default"
               onClick={() =>
                 updateSettings({
                   showPanelToggleButtons: DEFAULT_UNIFIED_SETTINGS.showPanelToggleButtons,
@@ -864,6 +874,7 @@ function PanelsExtrasSection() {
 }
 
 function MessagesExtrasSection() {
+  const searchableSetting = useSearchableSetting();
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
 
@@ -875,7 +886,7 @@ function MessagesExtrasSection() {
         resetAction={
           settings.chatWideTables !== DEFAULT_UNIFIED_SETTINGS.chatWideTables ? (
             <SettingResetButton
-              label="wide tables"
+              ariaLabel="Reset wide tables to default"
               onClick={() =>
                 updateSettings({ chatWideTables: DEFAULT_UNIFIED_SETTINGS.chatWideTables })
               }
@@ -895,6 +906,7 @@ function MessagesExtrasSection() {
 }
 
 function ThreadsExtrasSection() {
+  const searchableSetting = useSearchableSetting();
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
 
@@ -906,7 +918,7 @@ function ThreadsExtrasSection() {
         resetAction={
           settings.snoozeShortcutUntilDone !== DEFAULT_UNIFIED_SETTINGS.snoozeShortcutUntilDone ? (
             <SettingResetButton
-              label="snooze until done shortcut"
+              ariaLabel="Reset snooze until done shortcut to default"
               onClick={() =>
                 updateSettings({
                   snoozeShortcutUntilDone: DEFAULT_UNIFIED_SETTINGS.snoozeShortcutUntilDone,
@@ -931,7 +943,7 @@ function ThreadsExtrasSection() {
         resetAction={
           settings.returnToPreviousThread !== DEFAULT_UNIFIED_SETTINGS.returnToPreviousThread ? (
             <SettingResetButton
-              label="return to previous thread"
+              ariaLabel="Reset return to previous thread to default"
               onClick={() =>
                 updateSettings({
                   returnToPreviousThread: DEFAULT_UNIFIED_SETTINGS.returnToPreviousThread,
@@ -955,6 +967,7 @@ function ThreadsExtrasSection() {
 }
 
 function ComposerExtrasSection() {
+  const searchableSetting = useSearchableSetting();
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
   const steerGraceWindowMs = clampSteerGraceWindowMs(settings.steerGraceWindowMs);
@@ -967,7 +980,7 @@ function ComposerExtrasSection() {
         resetAction={
           steerGraceWindowMs !== DEFAULT_UNIFIED_SETTINGS.steerGraceWindowMs ? (
             <SettingResetButton
-              label="steer grace window"
+              ariaLabel="Reset steer grace window to default"
               onClick={() =>
                 updateSettings({
                   steerGraceWindowMs: DEFAULT_UNIFIED_SETTINGS.steerGraceWindowMs,
@@ -1012,6 +1025,7 @@ function ComposerExtrasSection() {
 }
 
 function AccentTintsExtrasSection() {
+  const searchableSetting = useSearchableSetting();
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
   const intensityPercent = clampAccentTintIntensityPercent(settings.accentTintIntensityPercent);
@@ -1024,7 +1038,7 @@ function AccentTintsExtrasSection() {
         resetAction={
           settings.accentTintsEnabled !== DEFAULT_UNIFIED_SETTINGS.accentTintsEnabled ? (
             <SettingResetButton
-              label="project accent tints"
+              ariaLabel="Reset project accent tints to default"
               onClick={() =>
                 updateSettings({ accentTintsEnabled: DEFAULT_UNIFIED_SETTINGS.accentTintsEnabled })
               }
@@ -1046,7 +1060,7 @@ function AccentTintsExtrasSection() {
         resetAction={
           intensityPercent !== DEFAULT_UNIFIED_SETTINGS.accentTintIntensityPercent ? (
             <SettingResetButton
-              label="tint intensity"
+              ariaLabel="Reset tint intensity to default"
               onClick={() =>
                 updateSettings({
                   accentTintIntensityPercent: DEFAULT_UNIFIED_SETTINGS.accentTintIntensityPercent,

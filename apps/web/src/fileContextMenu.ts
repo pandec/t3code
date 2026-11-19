@@ -17,7 +17,7 @@ import {
   revealInFileExplorerLabelForKind,
   revealInFileExplorerLabelForOs,
 } from "~/components/preview/fileExplorerLabel";
-import { writeTextToClipboard } from "./hooks/useCopyToClipboard";
+import { namedClipboardTarget, writeTextToClipboard } from "./hooks/useCopyToClipboard";
 import { readLocalApi } from "./localApi";
 import { type RemoteOpenMode, useRemoteOpenResolution } from "./remoteOpen";
 import { serverEnvironment } from "./state/server";
@@ -27,6 +27,9 @@ import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
 import { isAbsolutePath } from "@t3tools/shared/path";
 import { toastManager } from "./components/ui/toast";
 import { useAtomValue } from "@effect/atom-react";
+import { msg, useMessages } from "gt-react";
+
+import type { MessageResolver } from "./i18n/messages";
 
 export type FileContextMenuAction =
   | "reveal-in-folder"
@@ -109,11 +112,16 @@ export function buildFileContextMenuItems(input: {
   /** False for a host file, whose only path is the full one. */
   readonly hasRelativePath: boolean;
   readonly capabilities: FileContextMenuCapabilities;
+  readonly resolve: MessageResolver;
 }): readonly ContextMenuItem<FileContextMenuAction>[] {
   if (!input.hasAbsolutePath) return [];
   const items: ContextMenuItem<FileContextMenuAction>[] = [];
   if (input.capabilities.canOpenDefault) {
-    items.push({ id: "open", label: "Open", icon: "pencil" });
+    items.push({
+      id: "open",
+      label: input.resolve(msg("Open", { $context: "verb, opens a file" })),
+      icon: "pencil",
+    });
   }
   if (input.capabilities.revealLabel !== undefined) {
     items.push({
@@ -126,7 +134,7 @@ export function buildFileContextMenuItems(input: {
   if (editorIds.length > 0) {
     items.push({
       id: "open-with",
-      label: "Open with",
+      label: input.resolve(msg("Open with")),
       children: editorIds.map((editorId) => ({
         id: `editor:${editorId}` as FileContextMenuAction,
         label: EDITOR_LABEL_BY_ID.get(editorId) ?? editorId,
@@ -164,7 +172,8 @@ export async function copyFilePathToClipboard(
   let failure: string | null = null;
   try {
     // The clipboard helper returns false, rather than throwing, for an empty value.
-    if (!(await writeTextToClipboard(value, noun.toLowerCase()))) failure = "The path is empty.";
+    if (!(await writeTextToClipboard(value, namedClipboardTarget(noun.toLowerCase()))))
+      failure = "The path is empty.";
   } catch (error) {
     failure = error instanceof Error ? error.message : "An error occurred.";
   }
@@ -187,6 +196,7 @@ export function revealInFileManagerLabel(input: {
   readonly serverConfig: ServerConfig | null;
   readonly remoteOpenMode: RemoteOpenMode;
   readonly remoteOpenResolved: boolean;
+  readonly resolve?: MessageResolver;
 }): string | undefined {
   const { serverConfig } = input;
   if (
@@ -199,8 +209,8 @@ export function revealInFileManagerLabel(input: {
     return undefined;
   }
   return serverConfig.shellRevealInFileManagerKind === undefined
-    ? revealInFileExplorerLabelForOs(serverConfig.environment.platform.os)
-    : revealInFileExplorerLabelForKind(serverConfig.shellRevealInFileManagerKind);
+    ? revealInFileExplorerLabelForOs(serverConfig.environment.platform.os, input.resolve)
+    : revealInFileExplorerLabelForKind(serverConfig.shellRevealInFileManagerKind, input.resolve);
 }
 
 /**
@@ -212,6 +222,7 @@ export function useFileContextMenu(environmentId: EnvironmentId | null) {
   const openInEditor = useAtomCommand(shellEnvironment.openInEditor, { reportFailure: false });
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const remoteOpen = useRemoteOpenResolution(environmentId);
+  const resolve = useMessages();
 
   const remoteOpenMode = remoteOpen.state.mode;
   const remoteOpenResolved = remoteOpen.isResolved;
@@ -224,6 +235,7 @@ export function useFileContextMenu(environmentId: EnvironmentId | null) {
       serverConfig,
       remoteOpenMode,
       remoteOpenResolved,
+      resolve,
     }),
     canOpenDefault: availableEditors.includes("file-manager"),
     editorIds: availableEditors,
@@ -233,6 +245,7 @@ export function useFileContextMenu(environmentId: EnvironmentId | null) {
       hasAbsolutePath: resolveFileContextMenuAbsolutePath(target) !== null,
       hasRelativePath: !isAbsolutePath(target.filePath),
       capabilities,
+      resolve,
     });
 
   const activate = async (
@@ -271,10 +284,14 @@ export function useFileContextMenu(environmentId: EnvironmentId | null) {
       type: "error",
       title:
         action === "open"
-          ? "Could not open file"
+          ? resolve(msg("Could not open file"))
           : reveal
-            ? "Unable to reveal file"
-            : `Could not open in ${EDITOR_LABEL_BY_ID.get(editor) ?? editor}`,
+            ? resolve(msg("Unable to reveal file"))
+            : resolve(
+                msg("Could not open in {editor}", {
+                  editor: EDITOR_LABEL_BY_ID.get(editor) ?? editor,
+                }),
+              ),
       description: absolutePath,
     });
   };

@@ -100,6 +100,25 @@ function extractTextContent(content: unknown): { text: string; hasText: boolean 
   return { text: parts.join("\n"), hasText: parts.length > 0 };
 }
 
+// Claude Code records its own UI as user turns: `!` shell runs and their output, command output,
+// task notifications. Slash-command markup stays, since previews and titles read its arguments.
+const CLAUDE_UI_OUTPUT =
+  /^(?:<(?:task-notification|local-command-stdout|local-command-stderr|local-command-caveat|bash-stdout|bash-stderr)>|\[Request interrupted by user(?: for tool use)?\]$)/;
+
+function claudeUserText(text: string): string {
+  if (CLAUDE_UI_OUTPUT.test(text)) return "";
+  const shellInput = /^<bash-input>([\s\S]*)<\/bash-input>$/.exec(text)?.[1];
+  return shellInput === undefined ? text : `!${shellInput}`;
+}
+
+/** Saved titles can be the raw markup of a user turn, such as the command that opened the session. */
+function claudeTitle(title: unknown): string | null {
+  if (typeof title !== "string") return null;
+  const trimmed = title.trim();
+  if (!trimmed || /^<command-(?:name|message)>/.test(trimmed)) return null;
+  return claudeUserText(trimmed) === trimmed ? trimmed : null;
+}
+
 const parseChainEntry = Effect.fn("parseChainEntry")(function* (
   record: Record<string, unknown>,
   line: number,
@@ -148,7 +167,7 @@ const parseChainEntry = Effect.fn("parseChainEntry")(function* (
     uuid,
     parentUuid: typeof record.parentUuid === "string" ? record.parentUuid : null,
     role,
-    text,
+    text: type === "user" ? claudeUserText(text) : text,
     timestamp,
     model: typeof model === "string" ? model : null,
     hasTextContent: hasText,
@@ -219,12 +238,14 @@ export const parseClaudeTranscript = Effect.fn("parseClaudeTranscript")(function
       continue;
     }
     if (type === "custom-title" || type === "ai-title") {
-      const title = type === "custom-title" ? objectRecord.customTitle : objectRecord.aiTitle;
-      if (typeof title === "string" && title.trim().length > 0) {
+      const title = claudeTitle(
+        type === "custom-title" ? objectRecord.customTitle : objectRecord.aiTitle,
+      );
+      if (title !== null) {
         if (type === "custom-title") {
-          latestCustomTitle = title.trim();
+          latestCustomTitle = title;
         } else {
-          latestAiTitle = title.trim();
+          latestAiTitle = title;
         }
       }
       continue;

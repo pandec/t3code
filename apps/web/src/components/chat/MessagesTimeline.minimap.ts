@@ -1,4 +1,8 @@
-import { isAttachmentOnlyBootstrapPrompt } from "@t3tools/shared/composerContextReferences";
+import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
+import {
+  isAttachmentOnlyBootstrapPrompt,
+  replaceComposerContextReferences,
+} from "@t3tools/shared/composerContextReferences";
 import { parseThreadLinkHref } from "@t3tools/shared/threadLinks";
 import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
 
@@ -118,7 +122,14 @@ function resolveCachedPreview(
       contentVersion,
       compactText: canAppendStreamingTail
         ? appendCompactMinimapPreview(cached, contentVersion)
-        : compactMinimapPreview(contentVersion),
+        : compactMinimapPreview(
+            // A user's quotes and context chips preview as their text, not their raw links.
+            row.message.role === "user"
+              ? assistantCitationsToPlainText(
+                  replaceComposerContextReferences(contentVersion, (reference) => reference.label),
+                )
+              : contentVersion,
+          ),
       streaming,
       endsWithWhitespace: textEndsWithWhitespace(contentVersion),
     };

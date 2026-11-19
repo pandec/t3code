@@ -8,6 +8,7 @@ import {
   resolveFileContextMenuRelativePath,
   revealInFileManagerLabel,
 } from "./fileContextMenu";
+import { m } from "./i18n/messages";
 
 const BASE_TARGET = {
   environmentId: EnvironmentId.make("environment-local"),
@@ -108,6 +109,7 @@ describe("buildFileContextMenuItems", () => {
     const items = buildFileContextMenuItems({
       hasAbsolutePath: true,
       hasRelativePath: true,
+      resolve: m,
       capabilities: {
         revealLabel: "Reveal in Finder",
         canOpenDefault: true,
@@ -138,6 +140,7 @@ describe("buildFileContextMenuItems", () => {
       hasAbsolutePath: true,
       hasRelativePath: true,
       capabilities: EMPTY_CAPABILITIES,
+      resolve: m,
     });
 
     expect(items.map((item) => item.id)).toEqual(["copy-relative-path", "copy-full-path"]);
@@ -149,6 +152,7 @@ describe("buildFileContextMenuItems", () => {
       hasAbsolutePath: true,
       hasRelativePath: false,
       capabilities: { ...EMPTY_CAPABILITIES, revealLabel: "Reveal in Finder" },
+      resolve: m,
     });
 
     expect(items.map((item) => item.id)).toEqual(["reveal-in-folder", "copy-full-path"]);

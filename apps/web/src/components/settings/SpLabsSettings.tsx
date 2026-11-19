@@ -10,7 +10,7 @@ import { DraftInput } from "../ui/draft-input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
 
 type LabsPatch = NonNullable<ServerSettingsPatch["labs"]>;
@@ -19,6 +19,7 @@ const AUTO_PROJECT_VALUE = "auto";
 
 /** Fork: SP Labs for the selected environment's server. */
 export function SpLabsSettingsSection() {
+  const searchableSetting = useSearchableSetting();
   const { environment } = useSettingsScope();
   const environmentId =
     environment?.connection.phase === "connected" && environment.serverConfig !== null
@@ -39,6 +40,7 @@ export function SpLabsSettingsSection() {
 }
 
 function SpLabsSettingsRows({ environmentId }: { readonly environmentId: EnvironmentId }) {
+  const searchableSetting = useSearchableSetting();
   const saved = useEnvironmentSettings(environmentId, (settings) => settings.labs);
   const inventory = useLabsInventory(environmentId);
   const canWrite = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
@@ -84,7 +86,7 @@ function SpLabsSettingsRows({ environmentId }: { readonly environmentId: Environ
         resetAction={
           saved.spLabsDirectory !== null ? (
             <SettingResetButton
-              label="sp-labs directory"
+              ariaLabel="Reset sp-labs directory to default"
               onClick={() => void save({ spLabsDirectory: null })}
             />
           ) : null
@@ -120,7 +122,7 @@ function SpLabsSettingsRows({ environmentId }: { readonly environmentId: Environ
         resetAction={
           saved.projectId !== null ? (
             <SettingResetButton
-              label="Labs project"
+              ariaLabel="Reset Labs project to default"
               onClick={() => void save({ projectId: null })}
             />
           ) : null

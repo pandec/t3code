@@ -1,38 +1,48 @@
+import { msg } from "gt-react";
+
 import { ensureClientSettingsHydrated, getClientSettings } from "~/hooks/useSettings";
+import { m } from "~/i18n/messages";
 import { readLocalApi } from "~/localApi";
 
 let pendingConfirmations = 0;
 
+/** Whether a terminal-close action is waiting on settings or user confirmation. */
 export function isTerminalCloseConfirmPending(): boolean {
   return pendingConfirmations > 0;
 }
 
-/**
- * For individual closes (drawer/panel buttons, `terminal.close`, the tab strip);
- * auto-exit cleanup and bulk tab closes skip it. Awaits hydration because the
- * pre-hydration snapshot is the schema default and would prompt even when
- * `confirmTerminalClose` is off.
- */
 export async function confirmTerminalClose(
   labels: readonly [string, ...string[]],
 ): Promise<boolean> {
-  await ensureClientSettingsHydrated();
-  if (!getClientSettings().confirmTerminalClose) return true;
   const localApi = readLocalApi();
   if (!localApi) return true;
   pendingConfirmations += 1;
   try {
+    let shouldConfirm = true;
+    try {
+      await ensureClientSettingsHydrated();
+      shouldConfirm = getClientSettings().confirmTerminalClose;
+    } catch {
+      // If saved settings cannot be read, keep the destructive confirmation.
+    }
+    if (!shouldConfirm) return true;
     return await localApi.dialogs.confirm(
       labels.length === 1
         ? [
-            `Close terminal "${labels[0]}"?`,
-            "This stops the running process and clears its history.",
+            m(msg('Close terminal "{label}"?', { label: labels[0] })),
+            m(msg("This stops the running process and clears its history.")),
           ].join("\n")
         : [
-            `Close ${labels.length} terminals?`,
-            `This stops their running processes and clears their histories: ${labels
-              .map((label) => `"${label}"`)
-              .join(", ")}.`,
+            m(
+              msg("Close {count, plural, one {{count} terminal} other {{count} terminals}}?", {
+                count: labels.length,
+              }),
+            ),
+            m(
+              msg("This stops their running processes and clears their histories: {labels}.", {
+                labels: labels.map((label) => `"${label}"`).join(", "),
+              }),
+            ),
           ].join("\n"),
       { variant: "destructive" },
     );

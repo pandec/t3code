@@ -4,7 +4,7 @@ import React, { type FormEvent, useId, useState } from "react";
 
 import { useSavedPrompts } from "~/hooks/useSavedPrompts";
 import { cn, randomUUID } from "~/lib/utils";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -42,6 +42,7 @@ interface SavedPromptEditorRequest {
 }
 
 export function PromptsSettings() {
+  const searchableSetting = useSearchableSetting();
   const { prompts, hasConnectedEnvironment, canEdit, saveAll } = useSavedPrompts();
   const [editorRequest, setEditorRequest] = useState<SavedPromptEditorRequest | null>(null);
 

@@ -8,6 +8,7 @@ import {
   type TimelineMinimapItem,
 } from "./MessagesTimeline.minimap";
 import { memo, useRef, useState, type MouseEvent } from "react";
+import { useGT } from "gt-react";
 import { ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { Button } from "../ui/button";
@@ -67,6 +68,7 @@ export const TimelineMinimap = memo(function TimelineMinimap({
   onWheel: (event: WheelEvent) => void;
   onSelect: (item: TimelineMinimapItem) => void;
 }) {
+  const gt = useGT();
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const pinnedIdSet = new Set(pinnedIds);
   const wheelTargetRef = (node: HTMLDivElement | null) => {
@@ -266,12 +268,6 @@ export const TimelineMinimap = memo(function TimelineMinimap({
               style={{ maskImage: railFadeMask }}
             >
               <div
-                className={cn(
-                  "absolute inset-y-1 w-px bg-border/15",
-                  side === "left" ? "left-3" : "right-3",
-                )}
-              />
-              <div
                 className="absolute inset-x-0 top-1"
                 style={{ transform: `translateY(${-scrollOffset}px)` }}
               >
@@ -350,7 +346,7 @@ export const TimelineMinimap = memo(function TimelineMinimap({
                   </span>
                   <span className="block max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-sm font-medium leading-5">
                     {activeItem.primaryText ??
-                      (side === "left" ? "User message" : "Agent response")}
+                      (side === "left" ? gt("User message") : "Agent response")}
                   </span>
                   {activeItem.secondaryText ? (
                     <span
@@ -395,8 +391,9 @@ function TimelineMinimapNavigationButton({
   interactive: boolean;
   onClick: () => void;
 }) {
+  const gt = useGT();
   const previous = direction === "previous";
-  const label = previous ? "Previous turn" : "Next turn";
+  const label = previous ? gt("Previous turn") : gt("Next turn");
   const Icon = previous ? ChevronUpIcon : ChevronDownIcon;
 
   return (

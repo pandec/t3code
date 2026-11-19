@@ -37,7 +37,7 @@ import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 import {
   createTtsTestAudioSession,
   describeCatalogModel,
@@ -491,7 +491,7 @@ function OpenRouterTtsKeyRow() {
       resetAction={
         configured ? (
           <SettingResetButton
-            label="OpenRouter speech key"
+            ariaLabel="Reset OpenRouter speech key to default"
             tooltip="Remove key"
             onClick={() => void apply("")}
           />
@@ -517,6 +517,7 @@ function OpenRouterTtsKeyRow() {
 }
 
 export function VoiceSettingsSection() {
+  const searchableSetting = useSearchableSetting();
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -543,7 +544,7 @@ export function VoiceSettingsSection() {
         resetAction={
           defaultDirty ? (
             <SettingResetButton
-              label="text-to-speech"
+              ariaLabel="Reset text-to-speech to default"
               onClick={() =>
                 updateSettings({
                   voice: {
@@ -586,7 +587,7 @@ export function VoiceSettingsSection() {
           settings.voice.enableAgentVoiceReplies !==
           DEFAULT_UNIFIED_SETTINGS.voice.enableAgentVoiceReplies ? (
             <SettingResetButton
-              label="agent voice replies"
+              ariaLabel="Reset agent voice replies to default"
               onClick={() =>
                 updateSettings({
                   voice: {
@@ -615,7 +616,7 @@ export function VoiceSettingsSection() {
         resetAction={
           override !== null ? (
             <SettingResetButton
-              label="separate voice for agent replies"
+              ariaLabel="Reset separate voice for agent replies to default"
               onClick={() => updateSettings({ voice: { agentReplyTts: null } })}
             />
           ) : null

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
-import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@t3tools/shared/composerContextReferences";
+import { EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
+import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
+import {
+  ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
+  formatComposerContextReference,
+  toComposerContextId,
+} from "@t3tools/shared/composerContextReferences";
 import type { MessagesTimelineRow } from "./MessagesTimeline.logic";
 import {
   computeTimelineMinimapState,
@@ -117,6 +123,32 @@ describe("deriveTimelineMinimapItems", () => {
     ];
 
     expect(deriveTimelineMinimapItems(rows, "user-turn")[0]?.primaryText).toBeNull();
+  });
+
+  it("previews a quote and a context chip in the user's message as their text", () => {
+    const quote = serializeAssistantCitation({
+      version: 1,
+      environmentId: EnvironmentId.make("env-1"),
+      threadId: ThreadId.make("thread-1"),
+      messageId: MessageId.make("assistant-1"),
+      text: "The cache misses on a cold start.",
+      start: 0,
+      end: 33,
+      prefix: "",
+      suffix: "",
+    });
+    const file = formatComposerContextReference({
+      kind: "file",
+      contextId: toComposerContextId("readme"),
+      label: "README.md",
+    });
+    const rows = [
+      messageRow({ id: "user-1", role: "user", text: `${quote}\nWhere does ${file} cover this?` }),
+    ];
+
+    expect(deriveTimelineMinimapItems(rows, "user-turn")[0]?.primaryText).toBe(
+      "The cache misses on a cold start. Where does README.md cover this?",
+    );
   });
 });
 

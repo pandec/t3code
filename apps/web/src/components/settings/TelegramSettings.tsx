@@ -9,7 +9,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { Button, InlineButton } from "../ui/button";
 import { Input } from "../ui/input";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
 
 type TelegramPatch = NonNullable<ServerSettingsPatch["telegram"]>;
@@ -26,6 +26,7 @@ function botStartUrl(botUsername: string, linkCode: string): string {
 
 /** Telegram dispatches for the selected environment's server. */
 export function TelegramIntegrationSettings() {
+  const searchableSetting = useSearchableSetting();
   const { environment: selected } = useSettingsScope();
   const environmentId =
     selected?.connection.phase === "connected" && selected.serverConfig !== null

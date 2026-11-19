@@ -80,6 +80,39 @@ describe("parseClaudeTranscript", () => {
     }),
   );
 
+  it.effect("shows shell runs as typed and drops Claude Code's own output and markup titles", () =>
+    Effect.gen(function* () {
+      const result = yield* run([
+        entry({
+          uuid: "u1",
+          parentUuid: null,
+          type: "user",
+          content: "<bash-input>ls</bash-input>",
+        }),
+        entry({
+          uuid: "u2",
+          parentUuid: "u1",
+          type: "user",
+          content: "<bash-stdout>README.md</bash-stdout><bash-stderr></bash-stderr>",
+        }),
+        entry({
+          uuid: "u3",
+          parentUuid: "u2",
+          type: "user",
+          content: "[Request interrupted by user]",
+        }),
+        toJsonLine({ type: "ai-title", aiTitle: "List files", sessionId: SESSION_ID }),
+        toJsonLine({
+          type: "ai-title",
+          aiTitle: "<command-name>/review</command-name>",
+          sessionId: SESSION_ID,
+        }),
+      ]);
+      expect(result.messages.map((message) => message.text)).toEqual(["!ls"]);
+      expect(result.name).toBe("List files");
+    }),
+  );
+
   it.effect("captures the latest custom-title record as the session name", () =>
     Effect.gen(function* () {
       const result = yield* run([

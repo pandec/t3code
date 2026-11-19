@@ -6,6 +6,7 @@ import {
 } from "@t3tools/contracts";
 import { UNKNOWN_SOURCE_CONTROL_CLIENT } from "@t3tools/client-runtime/source-control-clients";
 import * as Schema from "effect/Schema";
+import { decodeMsg } from "gt-react";
 
 import {
   filterAvailableSettingsSearchItems,
@@ -13,7 +14,6 @@ import {
   getThreadAutoSettlementSearchAvailability,
   isSettingsSearchScopeAvailable,
   movedSettingsPath,
-  searchableSetting,
   searchSettings,
   SETTINGS_NAV_GROUPS,
   SETTINGS_SEARCH_ITEMS,
@@ -117,10 +117,9 @@ describe("searchSettings", () => {
   it("finds the thread groups toolbar setting", () => {
     expect(searchSettings("thread groups button")[0]?.id).toBe("sidebar-thread-groups-button");
     expect(searchSettings("sidebar toolbar")[0]?.id).toBe("sidebar-thread-groups-button");
-    expect(searchableSetting("sidebar-thread-groups-button")).toEqual({
-      id: "sidebar-thread-groups-button",
-      title: "Thread groups button",
-    });
+    expect(getSettingsSearchTargetScope("sidebar-thread-groups-button")?.title).toBe(
+      "Thread groups button",
+    );
   });
 
   it("lists thread confirmations in panel order", () => {
@@ -128,7 +127,6 @@ describe("searchSettings", () => {
       "unpin-confirmation",
       "archive-confirmation",
       "delete-confirmation",
-      // Fork-only entry; rendered in the General panel's confirmations group.
       "terminal-close-confirmation",
     ]);
   });
@@ -271,10 +269,11 @@ describe("searchSettings", () => {
   it("does not index fork-only project rows", () => {
     expect(searchSettings("thread accent")).toEqual([]);
     expect(searchSettings("import cli").map((item) => item.id)).toEqual(["providers"]);
-    // Upstream's storage cleanup row legitimately matches "archived threads";
+    // Upstream's storage cleanup and archive rows legitimately match;
     // only the fork's per-project archived-threads shortcut must stay out.
     expect(searchSettings("project archived").map((item) => item.id)).toEqual([
       "storage-worktrees",
+      "archive",
     ]);
   });
 
@@ -391,7 +390,7 @@ describe("source control host search items", () => {
 
   it("lists a host by its label, its keywords, and its settings fields", () => {
     const items = sourceControlHostSearchItems([UNKNOWN_SOURCE_CONTROL_CLIENT, definition]);
-    expect(items.map((item) => item.title)).toEqual(["Example credentials"]);
+    expect(items.map((item) => decodeMsg(item.title))).toEqual(["Example credentials"]);
     expect(searchSettings("sample apitoken", items).map((item) => item.id)).toEqual([
       sourceControlHostSettingsSearchId("example"),
     ]);
@@ -411,7 +410,7 @@ describe("source control host search items", () => {
         },
       },
     ]);
-    expect(items.map((item) => item.title)).toEqual(["Example accounts and token"]);
+    expect(items.map((item) => decodeMsg(item.title))).toEqual(["Example accounts and token"]);
     expect(searchSettings("ex switch accounts", items)).toHaveLength(1);
   });
 

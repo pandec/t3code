@@ -29,14 +29,8 @@ export function clampThreadSidebarWidth(
   return Math.min(maximumWidth, Math.max(minimumWidth, width));
 }
 
-export function resolveInitialThreadSidebarWidth(
-  storedWidth: number | null,
-  viewportWidth: number,
-  minimumWidth = THREAD_SIDEBAR_MIN_WIDTH,
-): number {
-  return clampThreadSidebarWidth(
-    storedWidth ?? THREAD_SIDEBAR_DEFAULT_WIDTH,
-    minimumWidth,
-    resolveThreadSidebarMaximumWidth(viewportWidth, minimumWidth),
-  );
+export function resolveInitialThreadSidebarWidth(storedWidth: number | null): number {
+  return storedWidth === null
+    ? THREAD_SIDEBAR_DEFAULT_WIDTH
+    : Math.max(THREAD_SIDEBAR_MIN_WIDTH, storedWidth);
 }

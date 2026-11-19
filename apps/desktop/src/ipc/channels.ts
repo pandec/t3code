@@ -137,6 +137,8 @@ export const PREVIEW_EXTENSION_OPEN_POPUP_CHANNEL = "desktop:preview-extension-o
 export const PREVIEW_EXTENSION_ACTIONS_CHANGE_CHANNEL = "desktop:preview-extension-actions-change";
 export const PREVIEW_EXTENSION_POPUP_REQUEST_CHANNEL = "desktop:preview-extension-popup-request";
 export const PREVIEW_FIND_RESULT_CHANNEL = "desktop:preview-find-result";
+export const PREVIEW_TUNNEL_ACCESS_REQUEST_CHANNEL = "desktop:preview-tunnel-access-request";
+export const PREVIEW_TUNNEL_ACCESS_RESOLVE_CHANNEL = "desktop:preview-tunnel-access-resolve";
 
 export const MAC_PERMISSION_HELPER_CHANNEL = "desktop:mac-permission-helper";
 
@@ -153,3 +155,5 @@ export const TAKE_LEGACY_LOCAL_STORAGE_CHANNEL = "desktop:take-legacy-local-stor
 export const COMPLETE_LEGACY_LOCAL_STORAGE_CHANNEL = "desktop:complete-legacy-local-storage";
 
 export const RESTART_AUDIO_SERVICE_CHANNEL = "desktop:restart-audio-service";
+
+export const START_FILE_DRAG_CHANNEL = "desktop:start-file-drag";

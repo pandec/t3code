@@ -1,6 +1,7 @@
 import type { Icon, IconProps } from "@tabler/icons-react-native/types";
 /* Package-root imports eagerly register the entire Tabler icon set in Metro. */
 import IconAdjustmentsHorizontal from "@tabler/icons-react-native/IconAdjustmentsHorizontal";
+import IconAlarm from "@tabler/icons-react-native/IconAlarm";
 import IconAlignLeft from "@tabler/icons-react-native/IconAlignLeft";
 import IconAlertCircle from "@tabler/icons-react-native/IconAlertCircle";
 import IconAlertCircleFilled from "@tabler/icons-react-native/IconAlertCircleFilled";
@@ -204,6 +205,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "git.pull-request.closed": IconGitPullRequestClosed,
   "git.pull-request.draft": IconGitPullRequestDraft,
   "git.commit": IconGitCommit,
+  "git.issue": IconCircleDot,
   "arrow.branch": IconGitBranch,
   "arrow.left": IconArrowLeft,
   "arrow.right": IconArrowRight,
@@ -249,6 +251,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "circle.inset.filled": IconCircleDot,
   "circle.dashed.inset.filled": IconCircleDot,
   "calendar.badge.clock": IconCalendarClock,
+  alarm: IconAlarm,
   clock: IconClock,
   timer: IconClock,
   "face.smiling": IconMoodPlus,
@@ -371,6 +374,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
     | "git.pull-request.closed"
     | "git.pull-request.draft"
     | "git.commit"
+    | "git.issue"
     | "file.diff"
     | "robot",
     Icon
@@ -382,6 +386,7 @@ const SF_ICON_LOOKUP: Partial<
     | "git.pull-request.closed"
     | "git.pull-request.draft"
     | "git.commit"
+    | "git.issue"
     | "file.diff"
     | "robot",
     Icon

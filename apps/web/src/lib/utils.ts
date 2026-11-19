@@ -1,7 +1,9 @@
 import { CommandId, MessageId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { isMacPlatform } from "@t3tools/shared/keybindings";
 import * as Hex from "effect/encoding/Hex";
+import { msg } from "gt-react";
 import { DraftId } from "../composerDraftStore";
+import { m, type MessageResolver } from "../i18n/messages";
 
 export { cn } from "./cn";
 
@@ -15,14 +17,14 @@ export function normalizeSearchText(value: string): string {
   return value.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-export function getLocalFileManagerName(platform: string): string {
+export function getLocalFileManagerName(platform: string, resolve: MessageResolver = m): string {
   if (isMacPlatform(platform)) {
     return "Finder";
   }
   if (isWindowsPlatform(platform)) {
-    return "File Explorer";
+    return resolve(msg("File Explorer", { $context: "the Windows file manager app" }));
   }
-  return "Files";
+  return resolve(msg("Files", { $context: "the Linux file manager app" }));
 }
 
 export function randomUUID(): string {

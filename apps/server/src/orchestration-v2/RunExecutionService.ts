@@ -48,6 +48,7 @@ import * as CheckpointService from "./CheckpointService.ts";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import { PROVIDER_STOP_REASON_SIGNAL } from "@t3tools/provider-core/server/subagentProjection";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ProviderUsageAnalytics from "../telemetry/ProviderUsageAnalytics.ts";
 import type { ProjectionStoreV2Error } from "./ProjectionStore.ts";
@@ -934,6 +935,42 @@ export const layer: Layer.Layer<
                   },
                 ]
               : []),
+            // Codex reports a hook that stops the turn as completed; keep its reason visible.
+            ...(input.terminal.status === "completed" && input.terminal.reason !== undefined
+              ? [
+                  {
+                    id: yield* allocateEventId(),
+                    type: "turn-item.updated" as const,
+                    threadId: input.run.threadId,
+                    runId: input.run.id,
+                    nodeId: input.rootNode.id,
+                    providerInstanceId: input.run.providerInstanceId,
+                    occurredAt: completedAt,
+                    payload: {
+                      id: idAllocator.derive.runSignalTurnItem({
+                        runId: input.run.id,
+                        signal: PROVIDER_STOP_REASON_SIGNAL,
+                      }),
+                      threadId: input.run.threadId,
+                      runId: input.run.id,
+                      nodeId: input.rootNode.id,
+                      providerThreadId: input.providerThread.id,
+                      providerTurnId: input.rootNode.providerTurnId,
+                      nativeItemRef: null,
+                      parentItemId: null,
+                      ordinal: input.run.ordinal * 100 + 98,
+                      status: "completed" as const,
+                      title: "Stopped by the provider",
+                      startedAt: completedAt,
+                      completedAt,
+                      updatedAt: completedAt,
+                      type: "system_notice" as const,
+                      level: "warning" as const,
+                      message: input.terminal.reason,
+                    },
+                  },
+                ]
+              : []),
             ...(input.terminal.status === "failed" && !input.failureItemPersisted
               ? [
                   {
@@ -1249,38 +1286,45 @@ export const layer: Layer.Layer<
             ),
           ),
         );
-        const endOrphanedToolTurnItems = Effect.gen(function* () {
-          const open = yield* Ref.getAndSet(openToolTurnItems, new Map());
-          if (open.size === 0) return;
-          // Ended here, so the failed run's cascade and lost-tool-call path must not end them again.
-          for (const id of open.keys()) openRootToolCalls.delete(id);
-          yield* Ref.update(openRunOwnedSubagents, (current) => ({
-            ...current,
-            childTurnItems: new Map([...current.childTurnItems].filter(([id]) => !open.has(id))),
-          }));
-          const completedAt = yield* DateTime.now;
-          const events: Array<OrchestrationV2DomainEvent> = [];
-          for (const turnItem of open.values()) {
-            events.push({
-              id: yield* idAllocator.allocate.event({ threadId: input.run.threadId }),
-              type: "turn-item.updated",
-              threadId: turnItem.threadId,
-              // A child thread's item may have no run; it is this run's work.
-              runId: turnItem.runId ?? input.run.id,
-              ...(turnItem.nodeId === null ? {} : { nodeId: turnItem.nodeId }),
-              providerInstanceId: input.run.providerInstanceId,
-              occurredAt: completedAt,
-              payload: {
-                ...turnItem,
-                ...("streaming" in turnItem ? { streaming: false } : {}),
-                status: "interrupted",
-                completedAt,
-                updatedAt: completedAt,
-              },
-            });
-          }
-          yield* eventSink.writeWithEffects({ effects: [], events });
-        }).pipe(
+        // A failed stream leaves root tool calls to the lost-tool-call path or the session's releaser,
+        // whose writes hold only while the stored row is unchanged; ending them here races those.
+        const endOrphanedToolTurnItems = Effect.fn("RunExecutionService.endOrphanedToolTurnItems")(
+          function* (leaveRootToolCalls: boolean) {
+            const open = new Map(
+              [...(yield* Ref.getAndSet(openToolTurnItems, new Map()))].filter(
+                ([id]) => !leaveRootToolCalls || !openRootToolCalls.has(id),
+              ),
+            );
+            if (open.size === 0) return;
+            // Ended here, so the failed run's cascade and lost-tool-call path must not end them again.
+            for (const id of open.keys()) openRootToolCalls.delete(id);
+            yield* Ref.update(openRunOwnedSubagents, (current) => ({
+              ...current,
+              childTurnItems: new Map([...current.childTurnItems].filter(([id]) => !open.has(id))),
+            }));
+            const completedAt = yield* DateTime.now;
+            const events: Array<OrchestrationV2DomainEvent> = [];
+            for (const turnItem of open.values()) {
+              events.push({
+                id: yield* idAllocator.allocate.event({ threadId: input.run.threadId }),
+                type: "turn-item.updated",
+                threadId: turnItem.threadId,
+                // A child thread's item may have no run; it is this run's work.
+                runId: turnItem.runId ?? input.run.id,
+                ...(turnItem.nodeId === null ? {} : { nodeId: turnItem.nodeId }),
+                providerInstanceId: input.run.providerInstanceId,
+                occurredAt: completedAt,
+                payload: {
+                  ...turnItem,
+                  ...("streaming" in turnItem ? { streaming: false } : {}),
+                  status: "interrupted",
+                  completedAt,
+                  updatedAt: completedAt,
+                },
+              });
+            }
+            yield* eventSink.writeWithEffects({ effects: [], events });
+          },
           Effect.catchCause((cause) =>
             Effect.logWarning("failed to end tool items of a closed event stream", {
               runId: input.run.id,
@@ -1290,7 +1334,7 @@ export const layer: Layer.Layer<
         );
         // Open tool calls on the root thread, to end from their stored rows if the runtime is lost.
         const openRootToolCalls = new Set<TurnItemId>();
-        // The last stored root snapshot's pendingBackgroundWork; adapters that omit it leave it false.
+        // The last stored root snapshot still reports background work, by flag or task roster.
         let rootSnapshotPendingWork = false;
         // Owned child threads whose last snapshot reported pending work, such as a queued native
         // continuation. Unlike the root's, these must hold the stream past owner loss.
@@ -1672,6 +1716,21 @@ export const layer: Layer.Layer<
           const childSubagents = yield* Ref.get(activeChildSubagents);
           return childSubagents.size === 0;
         });
+        // Claude background Bash has no turn-item projection. Use only the
+        // thread-scoped probe: session-wide pending work (siblings, wake
+        // buffers, session subagents) must not pin this root subscription.
+        const threadHasPendingBackgroundWork = Effect.gen(function* () {
+          // The live probe reads adapter state, which can be ahead of the events consumed here.
+          if (rootSnapshotPendingWork) {
+            return true;
+          }
+          if (input.session.hasPendingBackgroundWorkForThread === undefined) {
+            return false;
+          }
+          return yield* input.session
+            .hasPendingBackgroundWorkForThread(yield* Ref.get(latestProviderThread))
+            .pipe(Effect.catchCause(() => Effect.succeed(false)));
+        });
         const shouldStopProviderEventIngestion = Effect.gen(function* () {
           if (!(yield* agentTurnsSettled)) {
             return false;
@@ -1682,7 +1741,12 @@ export const layer: Layer.Layer<
             terminal.status !== "completed" &&
             !childTurnsContinue(terminal)
           ) {
-            return true;
+            // A failed turn can leave background work running in a live provider process.
+            return (
+              terminal.status !== "failed" ||
+              (yield* Ref.get(providerThreadOwnerLost)) ||
+              !(yield* threadHasPendingBackgroundWork)
+            );
           }
           // Newly owned items depend on adapters emitting a non-terminal event before the root
           // terminal. Owner loss (a newer run claimed lastRunOrdinal) must not close this stream
@@ -1695,23 +1759,7 @@ export const layer: Layer.Layer<
           if (yield* Ref.get(providerThreadOwnerLost)) {
             return true;
           }
-          // The live probe reads adapter state, which can be ahead of the events consumed here.
-          if (rootSnapshotPendingWork) {
-            return false;
-          }
-          // Claude background Bash has no turn-item projection. Use only the
-          // thread-scoped probe: session-wide pending work (siblings, wake
-          // buffers, session subagents) must not pin this root subscription.
-          const latestProviderThreadSnapshot = yield* Ref.get(latestProviderThread);
-          if (input.session.hasPendingBackgroundWorkForThread !== undefined) {
-            const hasPendingWork = yield* input.session
-              .hasPendingBackgroundWorkForThread(latestProviderThreadSnapshot)
-              .pipe(Effect.catchCause(() => Effect.succeed(false)));
-            if (hasPendingWork) {
-              return false;
-            }
-          }
-          return true;
+          return !(yield* threadHasPendingBackgroundWork);
         });
         // Held text writes nothing, so its item would take a position only
         // when finally written, behind every item that began after it.
@@ -2006,7 +2054,9 @@ export const layer: Layer.Layer<
           if (event.type === "provider_thread.updated") {
             if (event.providerThread.id === input.providerThread.id && storedEventCount > 0) {
               yield* Ref.set(latestProviderThread, event.providerThread);
-              rootSnapshotPendingWork = event.pendingBackgroundWork === true;
+              rootSnapshotPendingWork =
+                event.pendingBackgroundWork === true ||
+                (event.providerThread.pendingBackgroundTasks?.length ?? 0) > 0;
             } else if (event.providerThread.id !== input.providerThread.id) {
               if (event.pendingBackgroundWork === true) {
                 childSnapshotPendingWork.add(event.providerThread.id);
@@ -2060,7 +2110,7 @@ export const layer: Layer.Layer<
             // crash): the tool calls it had open will never report an end.
             Effect.tapError((error) =>
               error._tag === "ProviderAdapterEventStreamError"
-                ? endOrphanedToolTurnItems
+                ? endOrphanedToolTurnItems(true)
                 : Effect.void,
             ),
             Effect.ensuring(closeIdleFlush),
@@ -2071,7 +2121,7 @@ export const layer: Layer.Layer<
                 if (terminal === null) {
                   // A session release interrupts or fails the stream; a clean
                   // end without a terminal means the run would never settle.
-                  yield* endOrphanedToolTurnItems;
+                  yield* endOrphanedToolTurnItems(false);
                   return yield* new RunExecutionIngestError({
                     runId: input.run.id,
                     cause: new ProviderAdapter.ProviderAdapterEventStreamError({
@@ -2281,21 +2331,10 @@ export const layer: Layer.Layer<
           }),
         );
         yield* touchMcpCredential;
-        const appContext = (yield* mcpAppModelContext
-          .forThread(input.run.threadId)
-          .pipe(
-            Effect.catch((cause) =>
-              Effect.logWarning("Failed to read MCP app model context.", { cause }).pipe(
-                Effect.as([]),
-              ),
-            ),
-          )).map((entry) => ({
-          // The item id alone is unique and needs no escaping; server and
-          // tool names are free text that would break the tag Codex wraps
-          // the context in.
-          key: `mcp_app_${entry.itemId.replace(/[^\w.-]/g, "_")}`,
-          text: entry.text,
-        }));
+        const appContext = yield* McpAppModelContext.forProvider(
+          mcpAppModelContext,
+          input.run.threadId,
+        );
         const turnInput = {
           appThread: input.appThread,
           threadId: input.run.threadId,

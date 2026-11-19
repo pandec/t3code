@@ -1,3 +1,4 @@
+import { T } from "gt-react";
 import { type ReactNode } from "react";
 
 import { Sheet, SheetHeader, SheetPopup, SheetTitle } from "./ui/sheet";
@@ -29,7 +30,9 @@ export function RightPanelSheet(props: {
         backdrop={props.nonModal ? "none" : "default"}
       >
         <SheetHeader className="sr-only">
-          <SheetTitle>Workspace panel</SheetTitle>
+          <SheetTitle>
+            <T>Workspace panel</T>
+          </SheetTitle>
         </SheetHeader>
         {props.children}
       </SheetPopup>

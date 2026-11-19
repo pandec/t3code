@@ -2,8 +2,10 @@ import type {
   NativeStackHeaderItem,
   NativeStackHeaderItemMenu,
 } from "@react-navigation/native-stack";
+import { msg } from "gt-react-native";
 
 import type { AppBarMenuItem } from "../../../components/ui/AppBar.types";
+import { m, type MessageResolver } from "../../../i18n/messages";
 import { ACTIVE_WORK_TOGGLE_LABEL, activeWorkToggleIcon } from "../../threads/active-work-toggle";
 import { withNativeGlassHeaderItem } from "../native-glass-header-items";
 
@@ -43,7 +45,9 @@ export function createWorkspaceListHeaderItems(input: {
   /** Fork: the Active work filter toggle, beside the filter menu. */
   readonly activeWork?: { readonly enabled: boolean; readonly onToggle: () => void };
   readonly onOpenSettings?: () => void;
+  readonly resolve?: MessageResolver;
 }): NativeStackHeaderItem[] {
+  const resolve = input.resolve ?? m;
   return [
     withNativeGlassHeaderItem({
       type: "menu",
@@ -74,8 +78,8 @@ export function createWorkspaceListHeaderItems(input: {
           withNativeGlassHeaderItem({
             type: "button",
             axisBehavior: "horizontalOnly",
-            label: "Settings",
-            accessibilityLabel: "Open settings",
+            label: resolve(msg("Settings")),
+            accessibilityLabel: resolve(msg("Open settings")),
             icon: sfSymbolIcon("gearshape"),
             onPress: input.onOpenSettings,
           }),

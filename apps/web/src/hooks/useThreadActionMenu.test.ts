@@ -110,6 +110,7 @@ vi.mock("../components/Sidebar.snooze", () => ({
 }));
 vi.mock("./useCopyToClipboard", () => ({
   useCopyToClipboard: () => ({ copyToClipboard: () => recordEffect("copy") }),
+  namedClipboardTarget: (name: string) => name,
 }));
 vi.mock("./useHandleNewThread", () => ({
   useNewThreadHandler: () => async () => recordEffect("draft"),
