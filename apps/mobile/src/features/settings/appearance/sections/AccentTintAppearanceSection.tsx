@@ -1,4 +1,3 @@
-import { useAtomSet } from "@effect/atom-react";
 import {
   MAX_ACCENT_TINT_INTENSITY_PERCENT,
   MIN_ACCENT_TINT_INTENSITY_PERCENT,
@@ -6,7 +5,8 @@ import {
 import { View } from "react-native";
 
 import { AppText as Text } from "../../../../components/ui/AppText";
-import { updateMobilePreferencesAtom } from "../../../../state/preferences";
+import { saveMobilePreferences } from "../../../../state/preferences";
+import { useAtomCommand } from "../../../../state/use-atom-command";
 import {
   useAccentTintSettings,
   useMobilePreferencesHydrated,
@@ -26,7 +26,7 @@ import {
  * the footer says where they come from instead of offering a picker.
  */
 export function AccentTintAppearanceSection() {
-  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const savePreferences = useAtomCommand(saveMobilePreferences);
   const hydrated = useMobilePreferencesHydrated();
   const { enabled, intensityPercent } = useAccentTintSettings();
 
@@ -37,7 +37,9 @@ export function AccentTintAppearanceSection() {
           disabled={!hydrated}
           icon="paintbrush"
           label="Project accent tints"
-          onValueChange={(value) => savePreferences({ accentTintsEnabled: value })}
+          onValueChange={(value) => {
+            void savePreferences({ accentTintsEnabled: value });
+          }}
           value={enabled}
         />
         <SettingsSliderRow
@@ -46,11 +48,11 @@ export function AccentTintAppearanceSection() {
           label="Tint intensity"
           max={MAX_ACCENT_TINT_INTENSITY_PERCENT}
           min={MIN_ACCENT_TINT_INTENSITY_PERCENT}
-          onChange={(value) =>
-            savePreferences({
+          onChange={(value) => {
+            void savePreferences({
               accentTintIntensityPercent: toStoredAccentTintIntensityPercent(value),
-            })
-          }
+            });
+          }}
           step={ACCENT_TINT_INTENSITY_STEP_PERCENT}
           value={intensityPercent}
           valueLabel={formatAccentTintIntensityPercent(intensityPercent)}

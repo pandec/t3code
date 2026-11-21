@@ -99,7 +99,7 @@ import { useNowMinute } from "../../hooks/useNowMinute";
 import { useNowSecond } from "../../hooks/useNowSecond";
 import { useReportedModelIcon } from "../../hooks/useReportedModelIcon";
 import { vcsEnvironment, vcsBranchRevalidation } from "../../state/vcs";
-import { useLinkedIssueDetail } from "../../state/issues";
+import { useSidebarLinkedIssueState } from "../../state/issues";
 import { useEnvironmentQuery } from "../../state/query";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { parseTimestampDate, formatCompactRelativeTimeLabel } from "../../timestampFormat";
@@ -199,7 +199,7 @@ function SidebarProviderIcon(props: {
   );
 }
 
-function JumpHintBadge(props: { label: string }) {
+export function JumpHintBadge(props: { label: string }) {
   return (
     <Kbd aria-hidden data-jump-hint>
       {props.label}
@@ -207,7 +207,7 @@ function JumpHintBadge(props: { label: string }) {
   );
 }
 
-const JUMP_HINT_SLOT_CLASS_NAME =
+export const JUMP_HINT_SLOT_CLASS_NAME =
   "[&>:not([data-jump-hint])]:invisible [&>:not([data-jump-hint])]:absolute";
 
 function WorkingDuration(props: { environmentId: EnvironmentId; startedAt: string | null }) {
@@ -1301,12 +1301,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     ) : null;
   const firstIssue = thread.issues?.[0];
   const issueCount = thread.issues?.length ?? 0;
-  const issueDetail = useLinkedIssueDetail(
+  const issueState = useSidebarLinkedIssueState(
     thread.environmentId,
-    leaseLiveStatus && issueCount === 1 ? firstIssue : undefined,
-    "sidebar",
+    leaseLiveStatus ? thread.issues : undefined,
   );
-  const issueStatus = issueDetail === null ? null : issueStatePresentation(issueDetail.state);
+  const issueStatus = issueState === null ? null : issueStatePresentation(issueState);
   const IssueIcon = issueStatus?.Icon ?? IssueGlyph.issue;
   const issueLabel =
     issueCount === 1 && firstIssue
@@ -2189,6 +2188,11 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
   searchMatchQuery?: string;
   onHighlight: () => void;
   onSelect: () => void;
+  onContextMenu: (
+    threadRef: ScopedThreadRef,
+    position: { x: number; y: number },
+    source: ContextMenuSource,
+  ) => void;
   onFileDropThreads: (threadRef: ScopedThreadRef, files: File[]) => void;
 }) {
   const messages = useMessages();
@@ -2293,6 +2297,14 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
                 event.preventDefault();
               }}
               onClick={props.onSelect}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                props.onContextMenu(
+                  threadRef,
+                  { x: event.clientX, y: event.clientY },
+                  contextMenuSourceOf(event),
+                );
+              }}
               className={cn(
                 "group/sidebar-row group/v2-row flex min-h-9 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1 text-left text-sm outline-none",
                 props.isHighlighted || props.isRouteActive

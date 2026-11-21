@@ -8,7 +8,7 @@ import {
 import { useEnvironmentsWithScope } from "../../state/session";
 import { AutoSettleDaysField } from "./components/AutoSettleDaysField";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
-import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useState, type ComponentProps } from "react";
 import { View } from "react-native";
@@ -24,7 +24,7 @@ import {
 import { supportsSharedSettingsSync } from "@t3tools/client-runtime/state/shared-settings";
 import { AppText as Text } from "../../components/ui/AppText";
 import { useEnvironments } from "../../state/environments";
-import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { mobilePreferencesAtom, saveMobilePreferences } from "../../state/preferences";
 import {
   didEnvironmentPrewarmRunsAdvance,
   threadPrewarmTriggerCommand,
@@ -241,7 +241,7 @@ export function AutoSettleSettingsRows(props: {
  */
 export function DeviceThreadSettingsSection() {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
-  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const savePreferences = useAtomCommand(saveMobilePreferences);
   const hydrated = AsyncResult.isSuccess(preferencesResult);
   const steerGraceWindowMs = useSteerGraceWindowMs();
   const archivedSectionVisibleCount = useArchivedSectionVisibleCount();
@@ -255,9 +255,9 @@ export function DeviceThreadSettingsSection() {
         label="Steer grace window"
         max={MAX_STEER_GRACE_WINDOW_MS}
         min={MIN_STEER_GRACE_WINDOW_MS}
-        onChange={(value) =>
-          savePreferences({ steerGraceWindowMs: toStoredSteerGraceWindowMs(value) })
-        }
+        onChange={(value) => {
+          void savePreferences({ steerGraceWindowMs: toStoredSteerGraceWindowMs(value) });
+        }}
         step={STEER_GRACE_WINDOW_STEP_MS}
         value={steerGraceWindowMs}
         valueLabel={formatSteerGraceWindowSeconds(steerGraceWindowMs)}
@@ -269,11 +269,11 @@ export function DeviceThreadSettingsSection() {
         label="Recent archived threads"
         max={MAX_ARCHIVED_SECTION_VISIBLE_COUNT}
         min={MIN_ARCHIVED_SECTION_VISIBLE_COUNT}
-        onChange={(value) =>
-          savePreferences({
+        onChange={(value) => {
+          void savePreferences({
             archivedSectionVisibleCount: toStoredArchivedSectionVisibleCount(value),
-          })
-        }
+          });
+        }}
         step={1}
         value={archivedSectionVisibleCount}
         valueLabel={`${archivedSectionVisibleCount}`}
@@ -284,7 +284,9 @@ export function DeviceThreadSettingsSection() {
         label="Include Done threads in active filter"
         subtitle="Include threads with an unread completed reply when the active threads filter is on. Snoozed, archived, and settled threads stay hidden."
         value={hydrated && preferencesResult.value.activeFilterIncludeDone === true}
-        onValueChange={(value) => savePreferences({ activeFilterIncludeDone: value })}
+        onValueChange={(value) => {
+          void savePreferences({ activeFilterIncludeDone: value });
+        }}
       />
       <ThreadSyncRow />
     </SettingsSection>
@@ -355,7 +357,7 @@ function ThreadSyncRow() {
 
 export function WorkingSectionSettings() {
   const gt = useGT();
-  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const savePreferences = useAtomCommand(saveMobilePreferences);
   const workingShelfEnabled = useWorkingShelfEnabled();
 
   return (
@@ -365,7 +367,9 @@ export function WorkingSectionSettings() {
           icon="bolt.circle"
           label={gt("Working section")}
           value={workingShelfEnabled}
-          onValueChange={(value) => savePreferences({ workingShelfEnabled: value })}
+          onValueChange={(value) => {
+            void savePreferences({ workingShelfEnabled: value });
+          }}
         />
       </SettingsSection>
       <Text className="px-2 text-sm text-foreground-muted">
@@ -381,7 +385,7 @@ export function WorkingSectionSettings() {
 
 export function NewThreadSettingsSection() {
   const gt = useGT();
-  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const savePreferences = useAtomCommand(saveMobilePreferences);
   const preferences = useAtomValue(mobilePreferencesAtom);
   const useLastProject =
     AsyncResult.isSuccess(preferences) && preferences.value.useLastProjectForNewThreads !== false;
@@ -393,7 +397,9 @@ export function NewThreadSettingsSection() {
         label={gt("Use last project")}
         subtitle={gt("Start new threads in the last project you used on this device.")}
         value={useLastProject}
-        onValueChange={(value) => savePreferences({ useLastProjectForNewThreads: value })}
+        onValueChange={(value) => {
+          void savePreferences({ useLastProjectForNewThreads: value });
+        }}
       />
     </SettingsSection>
   );

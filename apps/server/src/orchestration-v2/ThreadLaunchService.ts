@@ -28,6 +28,7 @@ import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -36,6 +37,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -87,6 +89,8 @@ export interface ThreadLaunchInitialMessage {
   readonly attachments: ReadonlyArray<ChatAttachment>;
   readonly context?: import("@t3tools/contracts").OrchestrationMessageContext | undefined;
   readonly inputOrigin?: import("@t3tools/contracts").MessageInputOrigin | undefined;
+  /** Ask the first run for a result as data matching this JSON Schema. */
+  readonly outputSchema?: Readonly<Record<string, Schema.Json>> | undefined;
 }
 
 export interface ThreadLaunchInput {
@@ -1296,51 +1300,93 @@ const make = Effect.gen(function* () {
     threadId: ThreadId,
     runId: RunId | null,
     cause: unknown,
+    retryPersistence = true,
     notify = true,
-  ) =>
-    runId === null
-      ? Effect.logWarning("Thread workspace preparation failed", {
+  ) => {
+    if (runId === null) {
+      return Effect.logWarning("Thread workspace preparation failed", {
+        commandId: input.commandId,
+        threadId,
+        cause,
+      });
+    }
+    const persistFailure = threads.dispatch({
+      type: "prepared-run.fail",
+      commandId: CommandId.make(`${input.commandId}:fail`),
+      threadId,
+      runId,
+      failure: makeProviderFailure({
+        cause,
+        message: failureDetail(cause),
+        class: "validation_error",
+        retryable: false,
+      }),
+    });
+    const notifyFailure = (
+      notify ? notifyLauncher(input.commandId, threadId, runId, failureDetail(cause)) : Effect.void
+    ).pipe(
+      Effect.catchCause((notifyCause) =>
+        Effect.logWarning("Failed to notify the launcher of a preparation failure", {
           commandId: input.commandId,
           threadId,
-          cause,
-        })
-      : threads
-          .dispatch({
-            type: "prepared-run.fail",
-            commandId: CommandId.make(`${input.commandId}:fail`),
+          cause: notifyCause,
+        }),
+      ),
+    );
+    const runIsPreparing = threads.getThreadRecords(threadId, ["runs"], { runIds: [runId] }).pipe(
+      Effect.map((current) =>
+        current.runs.some((run) => run.id === runId && run.status === "preparing"),
+      ),
+      // The read can fail in the same outage, which says nothing about the run.
+      Effect.catchCause(() => Effect.succeed(true)),
+    );
+    return persistFailure.pipe(
+      Effect.andThen(notifyFailure),
+      Effect.catchCause((persistCause) =>
+        Effect.gen(function* () {
+          yield* Effect.logWarning("Failed to persist thread workspace preparation failure", {
+            commandId: input.commandId,
             threadId,
-            runId,
-            failure: makeProviderFailure({
-              cause,
-              message: failureDetail(cause),
-              class: "validation_error",
-              retryable: false,
-            }),
-          })
-          .pipe(
-            Effect.andThen(
-              (notify
-                ? notifyLauncher(input.commandId, threadId, runId, failureDetail(cause))
-                : Effect.void
-              ).pipe(
-                Effect.catchCause((notifyCause) =>
-                  Effect.logWarning("Failed to notify the launcher of a preparation failure", {
-                    commandId: input.commandId,
-                    threadId,
-                    cause: notifyCause,
-                  }),
+            cause,
+            persistCause,
+          });
+          if (
+            !retryPersistence ||
+            Cause.hasInterruptsOnly(persistCause) ||
+            !(yield* runIsPreparing)
+          )
+            return;
+          // A full disk rejects this write as well, and nothing else moves the run out of
+          // "preparing", so it would hold the thread's queue until a restart. Retry until
+          // storage recovers or the run settles another way.
+          yield* persistFailure.pipe(
+            Effect.as(true),
+            // Storage failures can be defects; retry both failure channels.
+            Effect.catchCauseIf(
+              (retryCause) => !Cause.hasInterruptsOnly(retryCause),
+              (retryCause) =>
+                runIsPreparing.pipe(
+                  Effect.flatMap((preparing) =>
+                    preparing ? Effect.fail(retryCause) : Effect.succeed(false),
+                  ),
+                ),
+            ),
+            Effect.retry(
+              Schedule.exponential("1 second").pipe(
+                Schedule.modifyDelay(({ duration }) =>
+                  Effect.succeed(Duration.min(duration, Duration.seconds(30))),
                 ),
               ),
             ),
-            Effect.catchCause((persistCause) =>
-              Effect.logWarning("Failed to persist thread workspace preparation failure", {
-                commandId: input.commandId,
-                threadId,
-                cause,
-                persistCause,
-              }),
-            ),
+            Effect.flatMap((persisted) => (persisted ? notifyFailure : Effect.void)),
+            Effect.ignoreCause,
+            // Callers reach this from finalizers; shutdown must still be able to stop it.
+            Effect.interruptible,
           );
+        }),
+      ),
+    );
+  };
 
   const reservePreparation = (commandId: CommandId) =>
     Ref.modify(scheduledLaunches, (scheduled) => {
@@ -1398,6 +1444,7 @@ const make = Effect.gen(function* () {
           threadId,
           runId,
           cancelled ? "Worktree setup cancelled." : Cause.squash(cause),
+          true,
           !cancelled,
         );
       }),
@@ -1531,7 +1578,9 @@ const make = Effect.gen(function* () {
             branch: reserved.branch,
           };
         }
-        const initialBranch = yield* launchBranch(workspaceStrategy, project.workspaceRoot);
+        const initialBranch = yield* Effect.interruptible(
+          launchBranch(workspaceStrategy, project.workspaceRoot),
+        );
         const initialWorktreePath =
           workspaceStrategy.type === "existing_worktree" ? workspaceStrategy.worktreePath : null;
         const initialMessage =
@@ -1555,6 +1604,9 @@ const make = Effect.gen(function* () {
                 ...(input.initialMessage.inputOrigin
                   ? { inputOrigin: input.initialMessage.inputOrigin }
                   : {}),
+                ...(input.initialMessage.outputSchema === undefined
+                  ? {}
+                  : { outputSchema: input.initialMessage.outputSchema }),
                 ...(input.generateTitle === true ? { titleSeed: input.title } : {}),
               };
         const claimDispatch =
@@ -1731,6 +1783,9 @@ const make = Effect.gen(function* () {
         };
       });
     },
+    // The message commits a preparing run that only this call schedules, so a
+    // caller that goes away must not stop the launch between the two.
+    Effect.uninterruptible,
   );
 
   const prepareRun: ThreadLaunchService["Service"]["prepareRun"] = Effect.fn(
@@ -1749,7 +1804,13 @@ const make = Effect.gen(function* () {
       );
     }).pipe(Effect.exit);
     if (Exit.isFailure(scheduled)) {
-      yield* failPreparedRun(input, input.threadId, input.runId, Cause.squash(scheduled.cause));
+      yield* failPreparedRun(
+        input,
+        input.threadId,
+        input.runId,
+        Cause.squash(scheduled.cause),
+        false,
+      );
     }
   });
 
@@ -1802,6 +1863,7 @@ const make = Effect.gen(function* () {
                 text: message.text,
                 attachments: message.attachments,
                 ...(message.context ? { context: message.context } : {}),
+                ...(run.outputSchema === undefined ? {} : { outputSchema: run.outputSchema }),
               },
             }),
       },

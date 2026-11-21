@@ -8,6 +8,7 @@ import {
   ProviderTurnId,
   RunAttemptId,
   ThreadId,
+  withMessageSenderNote,
 } from "@t3tools/contracts";
 import type * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
@@ -451,12 +452,15 @@ export const layer: Layer.Layer<
               cause: "The persisted steering message or target run is missing.",
             });
           }
-          const userText = withInputOriginNotice(
-            projectComposerContextForProvider({
-              text: message.text,
-              records: message.context?.records ?? [],
-            }),
-            message.inputOrigin,
+          const userText = withMessageSenderNote(
+            message,
+            withInputOriginNotice(
+              projectComposerContextForProvider({
+                text: message.text,
+                records: message.context?.records ?? [],
+              }),
+              message.inputOrigin,
+            ),
           );
           // Fork: a steer is the user's next message too, so it carries pending hidden notes
           // (not worktree-bound ones; the steer does not read the thread's worktree).

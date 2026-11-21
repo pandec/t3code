@@ -187,7 +187,7 @@ const backgroundWaitExample = {
 } satisfies typeof backgroundWaitParameters.Encoded;
 
 const BackgroundWaitTool = Tool.make("t3_background_wait", {
-  description: `Keep this thread in Working while background work runs. Pass its task IDs once started. Not for dev servers or watchers. \`waiting=false\` clears without stopping tasks. Claude/OpenCode only. Example: \`${Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(backgroundWaitExample)}\`.`,
+  description: `Keep this thread in Working while background work runs. Pass its task IDs once started. Not for dev servers or watchers. \`waiting=false\` clears without stopping tasks. Example: \`${Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(backgroundWaitExample)}\`.`,
   parameters: backgroundWaitParameters,
   success: Schema.Struct({
     matched: Schema.Array(Schema.String),
@@ -201,7 +201,7 @@ const BackgroundWaitTool = Tool.make("t3_background_wait", {
   // Only marks which tasks keep the thread Working; Claude Plan mode blocks tools without this.
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
-  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWithoutBackgroundWait);
 
 const ScheduleTaskTool = Tool.make("schedule_task", {
   description:
@@ -244,7 +244,7 @@ const DeleteScheduledTaskTool = Tool.make("delete_scheduled_task", {
 
 const RequestSecretTool = Tool.make("request_secret", {
   description:
-    'Ask for one secret per single-line card; never combine values. Open it, don\'t offer it. Returns one-use `secretRef`, or `delivery: "file"` a file read only in its command, e.g. `adb pair <ip:port> "$(cat <file>)"`. Asked how: call now. Sign-in link: `url`. Pasted secret for child/script: `value`. Never from an old thread.',
+    'Ask for secrets in a private card, one value per single-line input; never combine values in one. Open it, don\'t offer it. Returns one-use `secretRef`, or `delivery: "file"` a file read only in its command, e.g. `adb pair <ip:port> "$(cat <file>)"`. Asked how: call now. Sign-in link: `url`. Pasted secret for child/script: `value`. Never from an old thread.',
   parameters: OrchestratorMcpRequestSecretInput,
   success: OrchestratorMcpRequestSecretResult,
   failure: OrchestratorMcpFailure,

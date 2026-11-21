@@ -324,6 +324,10 @@ import {
 import { useCommandPaletteThreadItems } from "./CommandPaletteThreadItems";
 import { useCommandPaletteThemeItems } from "./CommandPaletteThemeItems";
 import {
+  PORT_FORWARD_GROUP_PREFIX,
+  useCommandPalettePortForwardItem,
+} from "./CommandPalettePortForwardItems";
+import {
   CommandPaletteVirtualizedResults,
   scrollCommandPaletteRowIntoView,
 } from "./CommandPaletteResults";
@@ -361,7 +365,10 @@ import {
 } from "./thread-split/threadSplitStore";
 import { openThreadInActivePane } from "./thread-split/threadOpenTarget";
 import { useMediaQuery } from "../hooks/useMediaQuery";
-import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-grouping";
+import {
+  isPickableProjectMember,
+  pickableProjectGroups,
+} from "@t3tools/client-runtime/state/project-grouping";
 import { buildSidebarProjectPickerEntries } from "../sidebarProjectGrouping";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { readPullRequestListPreferences } from "~/components/pullRequest/pullRequestListPreferences";
@@ -769,6 +776,10 @@ function OpenCommandPaletteDialog(props: {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const providersByEnvironment = useEnvironmentProviders();
   const { changeThemeItem, changeAppearanceItem, themeEditorItem } = useCommandPaletteThemeItems();
+  const portForwardItem = useCommandPalettePortForwardItem({
+    activeThread: paneActiveThread ?? null,
+    query: deferredQuery,
+  });
   const currentView = viewStack.at(-1)?.view ?? null;
   const isRenameThreadView = currentView?.groups[0]?.value === RENAME_THREAD_VIEW_VALUE;
   const isSnoozeThreadView = currentView?.groups[0]?.value === SNOOZE_THREAD_VIEW_VALUE;
@@ -1107,17 +1118,18 @@ function OpenCommandPaletteDialog(props: {
   );
 
   // A pick lands on the contextual member when the project is part of the
-  // viewed logical project.
+  // viewed logical project and that member can take a new thread.
   const resolveNewThreadTargetRef = (project: CommandPaletteProject) => {
     const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
-    const contextualRefBelongsToGroup =
+    const contextualProjectIsEligible =
       contextualProjectRef !== null &&
-      group?.memberProjectRefs.some(
-        (projectRef) =>
-          projectRef.environmentId === contextualProjectRef.environmentId &&
-          projectRef.projectId === contextualProjectRef.projectId,
+      group?.memberProjects.some(
+        (member) =>
+          member.environmentId === contextualProjectRef.environmentId &&
+          member.id === contextualProjectRef.projectId &&
+          isPickableProjectMember(member),
       );
-    return contextualRefBelongsToGroup
+    return contextualProjectIsEligible
       ? contextualProjectRef
       : scopeProjectRef(project.environmentId, project.id);
   };
@@ -1894,6 +1906,8 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
+  if (portForwardItem) actionItems.push(portForwardItem);
+
   // Fork: the secondary split pane, when the palette opened over it, owns the link.
   const promptLinkTarget = secondaryPaneActive
     ? splitSecondaryRef
@@ -2647,11 +2661,13 @@ function OpenCommandPaletteDialog(props: {
             ]
           : currentView?.groups[0]?.value === OPEN_IN_SPLIT_GROUP
             ? openInSplitGroups()
-            : currentView?.groups[0]?.value === "themes"
-              ? changeThemeItem.groups
-              : currentView?.groups[0]?.value === "appearance"
-                ? changeAppearanceItem.groups
-                : (currentView?.groups ?? rootGroups);
+            : currentView?.groups[0]?.value.startsWith(PORT_FORWARD_GROUP_PREFIX) && portForwardItem
+              ? portForwardItem.groups
+              : currentView?.groups[0]?.value === "themes"
+                ? changeThemeItem.groups
+                : currentView?.groups[0]?.value === "appearance"
+                  ? changeAppearanceItem.groups
+                  : (currentView?.groups ?? rootGroups);
 
   // Both views derive rows from the query. Only rename bypasses filtering;
   // snooze keeps matching presets alongside the parsed time.

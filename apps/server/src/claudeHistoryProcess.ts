@@ -65,6 +65,8 @@ export const runClaudeHistoryProcess = Effect.fn("runClaudeHistoryProcess")(func
       [...workerArguments, input.method, input.sessionId, encodeHistoryOptions(input.options)],
       { env: { ...input.environment, ELECTRON_RUN_AS_NODE: "1" } },
     ),
+    // Complete session histories have no status-probe size limit; stderr stays bounded.
+    input.method === "forkSession" ? undefined : { maxStdoutBytes: Number.POSITIVE_INFINITY },
   ).pipe(
     Effect.timeout("30 seconds"),
     Effect.mapError(

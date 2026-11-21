@@ -4,13 +4,16 @@ import { Link } from "@tanstack/react-router";
 import { MessagesSquareIcon } from "lucide-react";
 import { useGT } from "gt-react";
 
+import { resolveThreadOpenRoute } from "~/lib/sideChatPane";
 import { useProject, useThreadShell } from "~/state/entities";
 import { orchestrationEnvironment } from "~/state/orchestration";
 import { useEnvironmentQuery } from "~/state/query";
 import { ContextChip, ContextChipLabel } from "./ContextChip";
 import { ProjectFavicon } from "./ProjectFavicon";
-import { useThreadLinkClick } from "./thread-split/useOpenThreadInPane";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { useOpenThreadInPane } from "./thread-split/useOpenThreadInPane";
+import { ThreadChipHoverCard } from "./ThreadChipHoverCard";
+import { ThreadHoverCardPopup } from "./ThreadHoverCard";
+import { Tooltip, TooltipTrigger } from "./ui/tooltip";
 
 export function ThreadContextChip(props: {
   record: Pick<ThreadContextRecord, "environmentId" | "threadId" | "title">;
@@ -34,7 +37,7 @@ export function ThreadContextChip(props: {
   const project = useProject(projectId ? scopeProjectRef(environmentId, projectId) : null);
   const title = shell?.title?.trim() || metadata?.title.trim() || props.record.title;
   // Fork: in split view the thread opens in the pane the chip sits in.
-  const onClick = useThreadLinkClick({ environmentId, threadId });
+  const openThreadInPane = useOpenThreadInPane();
   return (
     <Tooltip>
       <TooltipTrigger
@@ -46,7 +49,13 @@ export function ThreadContextChip(props: {
               <Link
                 to="/$environmentId/$threadId"
                 params={{ environmentId, threadId }}
-                onClick={onClick}
+                onClick={(event) => {
+                  if (event.defaultPrevented || event.button !== 0) return;
+                  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                  event.preventDefault();
+                  // A side chat opens as a tab beside its parent, not as its own page.
+                  void openThreadInPane(resolveThreadOpenRoute({ environmentId, threadId }, shell));
+                }}
                 draggable={false}
               />
             }
@@ -63,13 +72,14 @@ export function ThreadContextChip(props: {
           </ContextChip>
         }
       />
-      <TooltipPopup side="top">
-        {props.unreadable
-          ? gt(
-              "On another machine, so this machine's agent can't read it. Remove it or switch back to send.",
-            )
-          : gt("Open thread")}
-      </TooltipPopup>
+      <ThreadHoverCardPopup side="top">
+        <ThreadChipHoverCard
+          title={title}
+          project={project}
+          shell={shell}
+          unreadable={props.unreadable === true}
+        />
+      </ThreadHoverCardPopup>
     </Tooltip>
   );
 }

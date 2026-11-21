@@ -5,6 +5,7 @@ import * as DateTime from "effect/DateTime";
 import {
   canForkProjectedAssistantItem,
   deriveThreadQueueWorkflowState,
+  getUserQueuedThreadRuns,
   newestHeldSteerRun,
   remainingSteerGraceWindowMs,
   resolveLatestMergeBackRun,
@@ -33,6 +34,24 @@ const capabilities = (input?: {
   }) as never;
 
 describe("thread workflows", () => {
+  it("skips message history classification when no runs are queued", () => {
+    let metadataReads = 0;
+    const message = {
+      id: "message",
+      get delegatedCompletion() {
+        metadataReads++;
+        return undefined;
+      },
+    };
+    const projection = {
+      runs: [{ id: "active", status: "running", userMessageId: "message", ordinal: 1 }],
+      messages: [message],
+    } as never;
+
+    expect(getUserQueuedThreadRuns(projection)).toEqual([]);
+    expect(metadataReads).toBe(0);
+  });
+
   it("allows a completed thread to switch providers after its session detaches", () => {
     const projection = {
       thread: {

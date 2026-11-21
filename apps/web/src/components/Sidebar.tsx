@@ -253,6 +253,7 @@ import {
   resolveSidebarReorderableThreadKeys,
   searchSidebarThreads,
   shouldCreateNewThreadInCurrentProject,
+  resolveScopedNewThreadProjectRef,
   shouldNavigateAfterThreadPark,
   shouldReleaseSidebarGroupDrop,
   isSidebarGroupMarker,
@@ -317,7 +318,11 @@ import {
   type SidebarProviderEntry,
   type SidebarSweepAction,
 } from "./sidebar/SidebarThreadRow";
-import { SidebarDraftBlock } from "./sidebar/SidebarDraftBlock";
+import {
+  SidebarDraftBlock,
+  useDraftsShelfExpanded,
+  useSidebarDrafts,
+} from "./sidebar/SidebarDraftBlock";
 import {
   SidebarProjectFolderHeader,
   sidebarFolderRowId,
@@ -381,6 +386,7 @@ const sidebarProviderEntriesAtom = Atom.make((get) => {
 
 const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, SidebarProviderEntry> = new Map();
 const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
+const EMPTY_DRAFT_IDS: readonly DraftId[] = [];
 
 const SETTLED_TAIL_INITIAL_COUNT = 10;
 const SETTLED_TAIL_PAGE_COUNT = 25;
@@ -2213,13 +2219,34 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     visibleThreads: visibleArchivedThreads,
   } = recentArchive;
 
+  const { draftIds, routeDraftComposer } = useSidebarDrafts(
+    scopedProjectKeys,
+    routeDraftIdForRows,
+    {
+      scopedEnvironmentIds: environmentFilter.resolvedScope,
+      hiddenProjectKeys: hiddenPhysicalProjectKeys,
+    },
+  );
+  const [draftsShelfExpanded] = useDraftsShelfExpanded();
+  // Draft rows sit above the threads, so jumps and traversal reach them first.
+  // Search hides them, so they drop out while it is open; a folded shelf keeps only the open one.
+  const listedDraftIds = isSearchingThreads
+    ? EMPTY_DRAFT_IDS
+    : draftsShelfExpanded
+      ? draftIds
+      : draftIds.filter((id) => id === routeDraftIdForRows);
+  const draftIdByRowKey = new Map<string, DraftId>(listedDraftIds.map((id) => [`draft:${id}`, id]));
+  const orderedRowKeys = [...draftIdByRowKey.keys(), ...orderedThreadKeys];
+  const routeDraftRowKey = `draft:${routeDraftIdForRows}`;
+  const routeRowKey = draftIdByRowKey.has(routeDraftRowKey) ? routeDraftRowKey : routeRowThreadKey;
+
   const jumpLabelByKey = (() => {
     const mapping = new Map<string, string>();
-    for (const [index, threadKey] of orderedThreadKeys.entries()) {
+    for (const [index, rowKey] of orderedRowKeys.entries()) {
       const jumpCommand = threadJumpCommandForIndex(index);
       if (!jumpCommand) break;
       const label = shortcutLabelForCommand(keybindings, jumpCommand);
-      if (label) mapping.set(threadKey, label);
+      if (label) mapping.set(rowKey, label);
     }
     return mapping;
   })();
@@ -3555,17 +3582,30 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   );
 
   const handleThreadContextMenu = useStableCallback(
-    (threadRef: ScopedThreadRef, position: { x: number; y: number }, source: ContextMenuSource) => {
+    (
+      threadRef: ScopedThreadRef,
+      position: { x: number; y: number },
+      source: ContextMenuSource,
+      fromSearch = false,
+    ) => {
       void (async () => {
         const api = readLocalApi();
         if (!api) return;
         const threadKey = scopedThreadKey(threadRef);
         const selectionState = useThreadSelectionStore.getState();
-        if (selectionState.hasSelection() && selectionState.selectedThreadKeys.has(threadKey)) {
+        // Search results are not selectable rows, so they always act on their own thread.
+        if (
+          !fromSearch &&
+          selectionState.hasSelection() &&
+          selectionState.selectedThreadKeys.has(threadKey)
+        ) {
           await handleMultiSelectContextMenu(position, source);
           return;
         }
-        const thread = threadByKeyRef.current.get(threadKey);
+        // Search results also reach threads in collapsed shelves, which are not rendered rows.
+        const thread =
+          threadByKeyRef.current.get(threadKey) ??
+          searchableThreads.find((candidate) => threadShellKey(candidate) === threadKey);
         if (!thread) return;
         const threadWorkspacePath =
           thread.worktreePath ??
@@ -3624,6 +3664,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           archiveAction: resolveArchiveToggleAction(thread),
           canShareWithGuest: appAtomRegistry.get(canShareWithGuestAtom(threadRef.environmentId)),
           canTurnIntoProject: canTurnThreadIntoProject(threadRef),
+          canRename: !fromSearch,
           supports: {
             settlement: configLoaded,
             autoSettleOptOut: supportsAutoSettleOptOut,
@@ -3898,6 +3939,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       })();
     },
   );
+  const handleSearchResultContextMenu = useStableCallback(
+    (threadRef: ScopedThreadRef, position: { x: number; y: number }, source: ContextMenuSource) =>
+      handleThreadContextMenu(threadRef, position, source, true),
+  );
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to window keydown for thread navigation shortcuts using the current thread list
   useEffect(() => {
@@ -3909,21 +3954,24 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         platform: navigator.platform,
         context: threadShortcutContext(routeThreadRef),
       });
-      const navigateToThreadKey = (targetThreadKey: string | null) => {
-        if (!targetThreadKey) return false;
-        const targetThread = threadByKey.get(targetThreadKey);
-        if (!targetThread) return false;
+      const navigateToRowKey = (targetRowKey: string | null) => {
+        if (!targetRowKey) return false;
+        const targetDraftId = draftIdByRowKey.get(targetRowKey);
+        const targetThread = threadByKey.get(targetRowKey);
+        if (targetDraftId === undefined && !targetThread) return false;
         event.preventDefault();
         event.stopPropagation();
-        navigateToThread(scopeThreadRef(targetThread.environmentId, targetThread.id));
+        if (targetDraftId !== undefined) navigateToDraft(targetDraftId);
+        else if (targetThread)
+          navigateToThread(scopeThreadRef(targetThread.environmentId, targetThread.id));
         return true;
       };
       const traversalDirection = threadTraversalDirectionFromCommand(command);
       if (traversalDirection !== null) {
-        navigateToThreadKey(
+        navigateToRowKey(
           resolveAdjacentThreadId({
-            threadIds: orderedThreadKeys,
-            currentThreadId: routeRowThreadKey,
+            threadIds: orderedRowKeys,
+            currentThreadId: routeRowKey,
             direction: traversalDirection,
           }),
         );
@@ -3931,22 +3979,58 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       }
       const jumpIndex = threadJumpIndexFromCommand(command ?? "");
       if (jumpIndex === null) return;
-      navigateToThreadKey(orderedThreadKeys[jumpIndex] ?? null);
+      navigateToRowKey(orderedRowKeys[jumpIndex] ?? null);
     };
     window.addEventListener("keydown", onWindowKeyDown);
     return () => window.removeEventListener("keydown", onWindowKeyDown);
   }, [
+    draftIdByRowKey,
     keybindings,
+    navigateToDraft,
     navigateToThread,
-    orderedThreadKeys,
-    routeRowThreadKey,
+    orderedRowKeys,
+    routeRowKey,
     routeThreadRef,
     threadByKey,
   ]);
 
   const showJumpHints = useThreadJumpHintsVisible(keybindings, routeThreadRef);
+  const draftJumpLabelById = showJumpHints
+    ? new Map(
+        listedDraftIds.flatMap((id) => {
+          const label = jumpLabelByKey.get(`draft:${id}`);
+          return label ? [[id, label] as const] : [];
+        }),
+      )
+    : null;
 
   const handleNewThreadClick = (event?: ReactMouseEvent) => {
+    // Fork: never create outside the active project, hidden-project, or environment filters.
+    const isProjectRefVisible = (projectRef: ScopedProjectRef) => {
+      const projectKey = scopedProjectKey(projectRef);
+      return (
+        (environmentFilter.resolvedScope === null ||
+          environmentFilter.resolvedScope.has(projectRef.environmentId)) &&
+        (scopedProjectKeys === null || scopedProjectKeys.has(projectKey)) &&
+        !hiddenPhysicalProjectKeys.has(projectKey)
+      );
+    };
+    const scopedProjectRef = resolveScopedNewThreadProjectRef({
+      shiftKey: event?.shiftKey ?? false,
+      // The folder sidebar's header button always opens the picker.
+      scopedProjectGroups: boringSidebarEnabled
+        ? []
+        : scopedProjectGroups.map((group) => ({
+            ...group,
+            memberProjectRefs: group.memberProjectRefs.filter(isProjectRefVisible),
+          })),
+      viewed: newThreadContext.activeThread ?? newThreadContext.activeDraftThread,
+    });
+    if (scopedProjectRef) {
+      if (isMobile) setOpenMobile(false);
+      void handleNewThread(scopedProjectRef);
+      return;
+    }
     const context = {
       activeDraftThread: newThreadContext.activeDraftThread,
       activeThread: newThreadContext.activeThread ?? undefined,
@@ -3954,19 +4038,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       handleNewThread,
     };
     const targetProjectRef = resolveThreadActionProjectRef(context);
-    const targetProjectKey = targetProjectRef ? scopedProjectKey(targetProjectRef) : null;
-    const targetIsVisible =
-      targetProjectRef !== null &&
-      (environmentFilter.resolvedScope === null ||
-        environmentFilter.resolvedScope.has(targetProjectRef.environmentId)) &&
-      (scopedProjectKeys === null ||
-        (targetProjectKey !== null && scopedProjectKeys.has(targetProjectKey))) &&
-      (targetProjectKey === null || !hiddenPhysicalProjectKeys.has(targetProjectKey));
+    const targetIsVisible = targetProjectRef !== null && isProjectRefVisible(targetProjectRef);
 
     // One project: nothing to pick, create immediately. Shift+click creates
     // directly in the current project even with several projects, skipping
-    // the palette picker. Never create outside active fork filters: if the
-    // route resolves to a hidden project or environment, use the picker.
+    // the palette picker. If the route resolves to a filtered-out project, use the picker.
     if (
       targetIsVisible &&
       shouldCreateNewThreadInCurrentProject(
@@ -4422,6 +4498,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           searchMatchQuery={threadSearch.query}
                           onHighlight={() => setActiveSearchResultIndex(index)}
                           onSelect={() => selectThreadSearchResult(thread)}
+                          onContextMenu={handleSearchResultContextMenu}
                           onFileDropThreads={handleThreadFileDrop}
                         />
                       );
@@ -4643,11 +4720,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                       const items: ReactNode[] = [
                         <SidebarDraftBlock
                           key="draft-sessions"
+                          draftIds={draftIds}
+                          routeDraftComposer={routeDraftComposer}
+                          jumpLabelByDraftId={draftJumpLabelById}
                           projectByKey={projectByKey}
                           projectDisplayNameByKey={projectDisplayNameByKey}
-                          scopedProjectKeys={scopedProjectKeys}
-                          scopedEnvironmentIds={environmentFilter.resolvedScope}
-                          hiddenProjectKeys={hiddenPhysicalProjectKeys}
                           routeDraftId={routeDraftIdForRows}
                           compactCards={compactCards}
                           onNavigateToDraft={navigateToDraft}

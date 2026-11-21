@@ -13,6 +13,7 @@ import * as DocumentText from "../../../provider/DocumentText.ts";
 import * as ServerConfig from "../../../config.ts";
 import * as DeviceService from "../../../device/DeviceService.ts";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
+import * as GitManager from "../../../git/GitManager.ts";
 import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../../../orchestration-v2/ProjectionStore.ts";
@@ -57,7 +58,9 @@ import * as PreviewBrowser from "../../../preview/PreviewBrowser.ts";
 const StubServicesLive = Layer.mergeAll(
   McpProviderSessions.layer,
   Layer.mock(Orchestrator.OrchestratorV2)({}),
-  Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
+  Layer.mock(GitManager.GitManager)({}),
+  // The per-request forge lookup reads the thread shell.
+  Layer.mock(ProjectionStore.ProjectionStoreV2)({ getThreadShell: () => Effect.succeed(null) }),
   Layer.mock(DeviceService.DeviceService)({}),
   Layer.mock(AssetSigner.AssetSigner)({}),
   Layer.mock(ThreadManagementService.ThreadManagementService)({}),

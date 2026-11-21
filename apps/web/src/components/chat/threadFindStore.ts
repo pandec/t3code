@@ -11,9 +11,11 @@ import {
 } from "@t3tools/shared/paletteSearch";
 import { create } from "zustand";
 import { useThreadSplitStore } from "../thread-split/threadSplitStore";
+import type { ThemeAppearance } from "~/themePalette";
 import type { ThreadFindPositionReader, ThreadFindStart } from "./threadFind";
 
 export interface ThreadFindLocalSelection {
+  readonly theme: ThemeAppearance;
   readonly base: OrchestrationV2SearchThreadResult;
   readonly baseNavigationId: number;
   readonly activeIndex: number;

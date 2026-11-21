@@ -44,7 +44,6 @@ describe("ProviderSettingsForm helpers", () => {
       "shadowHomePath",
       "autoCompactWindow",
       "idleCompaction",
-      "steeringMode",
       "launchArgs",
     ]);
   });

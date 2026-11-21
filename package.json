@@ -46,6 +46,7 @@
     "ios:local:release": "vp run @t3tools/mobile#ios:local:release",
     "ios:testflight": "vp run @t3tools/mobile#ios:testflight",
     "mobile:install": "node scripts/mobile-native-client.ts ensure",
+    "mobile:audit": "node scripts/mobile-audit.ts",
     "mobile:behavior": "node scripts/mobile-behavior.ts",
     "mobile:e2e": "node scripts/mobile-e2e.ts",
     "scenarios": "vp run --filter @t3tools/scripts scenarios",

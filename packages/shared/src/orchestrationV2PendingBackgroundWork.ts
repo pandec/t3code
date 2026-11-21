@@ -87,6 +87,18 @@ export function deriveBlockedOnThreadWait(input: {
   return hasWait;
 }
 
+/** A provider instance's background subagent outlives its run and still calls tools. */
+export function hasPendingBackgroundSubagent(
+  tasks: ReadonlyArray<PendingBackgroundWorkTask> | undefined,
+  providerInstanceId: OrchestrationV2ProviderThread["providerInstanceId"] | undefined,
+): boolean {
+  return (
+    tasks?.some(
+      (task) => task.kind === "subagent" && task.providerInstanceId === providerInstanceId,
+    ) ?? false
+  );
+}
+
 export function backgroundWorkHoldsCompletion(
   tasks: ReadonlyArray<Pick<PendingBackgroundWorkTask, "kind" | "awaited">>,
 ): boolean {
@@ -303,7 +315,14 @@ export function derivePendingBackgroundWork(input: {
 
   for (const task of pullRequestWatchTasks(input.pullRequests)) byTaskId.set(task.taskId, task);
 
-  return Array.from(byTaskId.values());
+  // Follow-up tasks can share a child thread; the pending list counts agents, not messages.
+  const childThreadIds = new Set<ThreadId>();
+  return Array.from(byTaskId.values()).filter((task) => {
+    if (task.kind !== "subagent" || task.childThreadId == null) return true;
+    if (childThreadIds.has(task.childThreadId)) return false;
+    childThreadIds.add(task.childThreadId);
+    return true;
+  });
 }
 
 /**
@@ -434,7 +453,6 @@ function pullRequestWatchTasks(
   pullRequests: ReadonlyArray<PendingBackgroundWorkPullRequest> | undefined,
 ): Array<PendingBackgroundWorkTask> {
   return (pullRequests ?? []).flatMap((link) =>
-    // Fork: a merged PR's watch still holds; PullRequestWatchReactor clears it and wakes the agent.
     link.watch === undefined || link.source === "stack-dismissed"
       ? []
       : [
@@ -444,8 +462,8 @@ function pullRequestWatchTasks(
             taskId: `${PULL_REQUEST_WATCH_TASK_ID}${link.host.toLowerCase()}/${link.repository.toLowerCase()}#${link.number}`,
             description: `Watching pull request #${link.number}`,
             kind: "monitor" as const,
-            // Fork: every watch holds, after its checks finish too (upstream's checksPending
-            // release is not adopted).
+            // Fork: every watch holds, `until` and finished checks included (upstream's
+            // post-checks release is not adopted); a merged PR's watch holds until its wake.
             awaited: true as const,
           },
         ],

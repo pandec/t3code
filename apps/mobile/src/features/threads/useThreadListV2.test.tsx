@@ -29,10 +29,7 @@ vi.mock("../../state/use-mobile-preferences", () => ({
     hydrated: true,
   }),
 }));
-vi.mock("../../state/preferences", async () => {
-  const { Atom } = await import("effect/reactivity");
-  return { updateMobilePreferencesAtom: Atom.make<unknown>(null) };
-});
+vi.mock("../../state/preferences", () => ({ saveMobilePreferences: {} }));
 vi.mock("../../state/presentation", async () => {
   const { Atom } = await import("effect/reactivity");
   return { liveShellEnvironmentIdsAtom: Atom.make<ReadonlySet<string>>(new Set<string>()) };

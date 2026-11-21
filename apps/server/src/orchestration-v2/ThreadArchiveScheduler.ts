@@ -111,6 +111,8 @@ export function eventCanSettleDeferredArchive(event: OrchestrationV2DomainEvent)
     case "run.background-work-cancelled":
     case "provider-thread.updated":
     case "subagent.updated":
+    // A watch ended without a wake (a merge the agent made) releases its hold.
+    case "thread.pull-request-link-updated":
       return true;
     case "turn-item.updated":
       return turnItemUpdateCanEndBackgroundWork(event.payload);

@@ -1,4 +1,4 @@
-import { RegistryContext, useAtomSet, useAtomValue } from "@effect/atom-react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   clampArchivedSectionVisibleCount,
   clampAccentTintIntensityPercent,
@@ -16,7 +16,7 @@ import { useContext } from "react";
 import { resolveAccentTintAlphas, type AccentTintAlphas } from "../lib/accentTint";
 import type { Preferences } from "../persistence/mobile-preferences";
 import { appAtomRegistry } from "./atom-registry";
-import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "./preferences";
+import { mobilePreferencesAtom, saveMobilePreferences } from "./preferences";
 import {
   resolveThreadShelfExpanded,
   threadGroupFold,
@@ -25,6 +25,7 @@ import {
   toggleCollapsedThreadGroup,
   type ThreadShelfId,
 } from "./thread-shelf-expansion";
+import { useAtomCommand } from "./use-atom-command";
 
 const EMPTY_PREFERENCES: Preferences = {};
 const NO_FOLDS: ReadonlySet<string> = new Set();
@@ -88,7 +89,7 @@ export function useThreadShelfExpansion(shelf: ThreadShelfId): {
   readonly toggle: () => void;
 } {
   const { preferences, hydrated } = useMobilePreferences();
-  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const savePreferences = useAtomCommand(saveMobilePreferences);
   const registry = useContext(RegistryContext);
   const activeWorkFolds = useAtomValue(activeWorkFoldsAtom);
   const activeWork = preferences.activeWorkFilter === true;
@@ -103,7 +104,7 @@ export function useThreadShelfExpansion(shelf: ThreadShelfId): {
       registry.update(activeWorkFoldsAtom, (folds) => toggledFold(folds, shelf));
       return;
     }
-    savePreferences({
+    void savePreferences({
       transform: (current) =>
         threadShelfExpandedPatch(
           shelf,
@@ -156,7 +157,7 @@ export function useAccentTintSettings(): AccentTintSettings {
 
 export function useCollapsedThreadGroups() {
   const { preferences } = useMobilePreferences();
-  const save = useAtomSet(updateMobilePreferencesAtom);
+  const save = useAtomCommand(saveMobilePreferences);
   const registry = useContext(RegistryContext);
   const activeWorkFolds = useAtomValue(activeWorkFoldsAtom);
   const activeWork = preferences.activeWorkFilter === true;
@@ -174,7 +175,7 @@ export function useCollapsedThreadGroups() {
       registry.update(activeWorkFoldsAtom, (folds) => toggledFold(folds, fold));
       return;
     }
-    save({ transform: (current) => toggleCollapsedThreadGroup(current, id) });
+    void save({ transform: (current) => toggleCollapsedThreadGroup(current, id) });
   };
   return { ids, toggle };
 }
@@ -182,11 +183,13 @@ export function useCollapsedThreadGroups() {
 /** Fork: the thread list's Active work filter, remembered on this device. */
 export function useActiveWorkFilter() {
   const { preferences } = useMobilePreferences();
-  const save = useAtomSet(updateMobilePreferencesAtom);
+  const save = useAtomCommand(saveMobilePreferences);
   const registry = useContext(RegistryContext);
   const toggle = () => {
     registry.set(activeWorkFoldsAtom, NO_FOLDS);
-    save({ transform: (current) => ({ activeWorkFilter: current.activeWorkFilter !== true }) });
+    void save({
+      transform: (current) => ({ activeWorkFilter: current.activeWorkFilter !== true }),
+    });
   };
   return {
     enabled: preferences.activeWorkFilter === true,

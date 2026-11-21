@@ -81,7 +81,7 @@ function acquireListeningSession(player: AudioPlayer): AudioSessionToken | null 
 }
 
 function activateListeningSession(token: AudioSessionToken) {
-  return activateAudioSession(token, false, { background: true });
+  return activateAudioSession(token, { background: true });
 }
 
 function applySharedPlaybackRate(speed: number): void {

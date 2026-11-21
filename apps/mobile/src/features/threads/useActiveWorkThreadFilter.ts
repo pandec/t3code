@@ -1,4 +1,4 @@
-import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
   matchesActiveWorkFilter,
@@ -6,8 +6,9 @@ import {
 } from "@t3tools/client-runtime/state/thread-active-work";
 import { useEffect, useMemo } from "react";
 
-import { updateMobilePreferencesAtom } from "../../state/preferences";
+import { saveMobilePreferences } from "../../state/preferences";
 import { liveShellEnvironmentIdsAtom } from "../../state/presentation";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { useActiveWorkFilter, useMobilePreferences } from "../../state/use-mobile-preferences";
 import { resolveThreadListV2Status, threadHasUnseenCompletion } from "./threadListV2";
 
@@ -24,7 +25,7 @@ export function useActiveWorkThreadFilter(input: {
   const { threads, now, openThreadKey } = input;
   const { enabled, includeDone } = useActiveWorkFilter();
   const { preferences, hydrated } = useMobilePreferences();
-  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const savePreferences = useAtomCommand(saveMobilePreferences);
   const liveEnvironmentIds = useAtomValue(liveShellEnvironmentIdsAtom);
   const stored = preferences.activeWorkThreadKeys ?? NO_RETAINED_KEYS;
   const next = nextActiveWorkThreadKeys(
@@ -38,7 +39,7 @@ export function useActiveWorkThreadFilter(input: {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Persist filter membership across launches, like the web sidebar.
   useEffect(() => {
     if (!input.persists || !hydrated || next === stored) return;
-    savePreferences({
+    void savePreferences({
       transform: (current) => ({
         activeWorkThreadKeys: nextActiveWorkThreadKeys(
           current.activeWorkThreadKeys ?? NO_RETAINED_KEYS,

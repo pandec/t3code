@@ -289,6 +289,7 @@ export const make = Effect.gen(function* () {
       serverResolvedCommandContext: true,
       threadStop: true,
       ...(hostPlatform === "win32" ? {} : { localServerStop: true }),
+      previewTunnelSetting: true,
       environmentIcon: true,
       projectCloneTracking: true,
       // Fork: bounded recent-archive query, project-filtered.
@@ -317,6 +318,9 @@ export const make = Effect.gen(function* () {
       peerLinks: true,
       mcpModeLimitHeader: true,
       linkFence: true,
+      linkThreadStream: true,
+      linkClientPairing: true,
+      linkPairingForLink: true,
       mcpApprovalCodes: true,
       peerLinkPairingCodes: true,
       mcpHostedApproval: true,

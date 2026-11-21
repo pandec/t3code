@@ -552,6 +552,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           "T3 Code lets commands run by terminals and coding agents use the camera.",
         NSMicrophoneUsageDescription:
           "T3 Code records voice prompts for transcription and lets commands run by terminals and coding agents use the microphone.",
+        NSSpeechRecognitionUsageDescription:
+          "T3 Code transcribes your dictation on this Mac when you choose Apple Speech.",
         NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac: true,
         NSLocalNetworkUsageDescription:
           "T3 Code connects to devices on your local network for remote environments and commands run by terminals and coding agents.",

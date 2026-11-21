@@ -8,6 +8,7 @@ import type {
   OrchestrationV2ProviderThread,
   OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
+import { withMessageSenderNote } from "@t3tools/contracts";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 
 import * as Config from "effect/Config";
@@ -140,10 +141,13 @@ export function historicalMessage(
     case "user_message":
       // Portable copies carry no context records, so expand them the way the
       // live turn did; attachments are not replayed.
-      text = projectComposerContextForProvider({
-        text: item.text,
-        records: item.context?.records ?? [],
-      });
+      text = withMessageSenderNote(
+        item,
+        projectComposerContextForProvider({
+          text: item.text,
+          records: item.context?.records ?? [],
+        }),
+      );
       break;
     case "assistant_message":
       text = item.text;

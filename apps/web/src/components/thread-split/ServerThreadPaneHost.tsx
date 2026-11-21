@@ -2,6 +2,7 @@ import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 
 import ChatView from "../ChatView";
+import { useOpenThreadFamily } from "../ThreadRouteView";
 import { Button } from "~/components/ui/button";
 import { openCommandPalette } from "../../commandPaletteBus";
 import {
@@ -26,6 +27,7 @@ export function ServerThreadPaneHost({ threadRef }: { threadRef: ScopedThreadRef
   const bootstrapComplete = shell.data?.snapshot._tag === "Some";
   const serverThreadShell = useThreadShell(threadRef);
   const archivedLookupRef = bootstrapComplete && serverThreadShell === null ? threadRef : null;
+  useOpenThreadFamily(threadRef, archivedLookupRef !== null);
   const archivedLookupThread = useThreadProjection(archivedLookupRef)?.projection.thread ?? null;
   const archivedLookupStatus = useThreadStatus(archivedLookupRef);
   const hiddenByTags = useThreadHiddenByTags(

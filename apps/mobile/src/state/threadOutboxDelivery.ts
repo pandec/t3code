@@ -10,7 +10,7 @@ import {
 import {
   type AtomCommand,
   type AtomCommandResult,
-  runAtomCommand,
+  reportAtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import { presentThreadShellFromProjection } from "@t3tools/client-runtime/state/thread-execution";
 import { threadFamilyRead, type ThreadFamilyRead } from "@t3tools/client-runtime/state/threads";
@@ -540,6 +540,14 @@ export const restoreRejectedQueuedMessage = Effect.fn("ThreadOutbox.restoreRejec
         return "deferred" as const;
       }
       const revision = threadOutboxRevision(queuedMessage.messageId);
+      if (queuedMessage.restoreToDraft === false) {
+        const removed = yield* storage("remove-unsendable", queuedMessage.messageId, () =>
+          removeThreadOutboxMessage(queuedMessage, revision, () => !editing()),
+        );
+        if (!removed) return "deferred" as const;
+        setThreadComposerError(threadKey, message, queuedMessage.messageId);
+        return "restored" as const;
+      }
       yield* storage("load-drafts", queuedMessage.messageId, () => waitForComposerDraftsLoaded());
       if (editing()) return "deferred" as const;
       const originalDraft = getComposerDraftSnapshot(draftKey);
@@ -771,7 +779,14 @@ const deliveryCommand = <W, A, E>(
   command: AtomCommand<W, A, E>,
   input: W,
 ): Effect.Effect<AtomCommandResult<A, E>> =>
-  Effect.promise(() => runAtomCommand(appAtomRegistry, command, input, { reportFailure: false }));
+  command.run(appAtomRegistry, input).pipe(
+    Effect.exit,
+    Effect.map((exit) => {
+      const result = AsyncResult.fromExit(exit);
+      reportAtomCommandResult(result, { label: command.label, reportFailure: false });
+      return result;
+    }),
+  );
 
 function reportCommandFailure(
   queuedMessage: QueuedThreadMessage,

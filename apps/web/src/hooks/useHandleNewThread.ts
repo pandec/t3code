@@ -32,6 +32,7 @@ import { buildSidebarProjectSnapshots } from "../sidebarProjectGrouping";
 import {
   deriveLogicalProjectKeyFromSettings,
   getProjectOrderKey,
+  resolveGroupDefaultProject,
   selectProjectGroupingSettings,
   type ProjectGroupingSettings,
 } from "@t3tools/client-runtime/state/project-grouping";
@@ -658,6 +659,7 @@ export function resolveDefaultProjectRef(
   fallbackReady = true,
   // Fork: a remembered project outside the active sidebar filters yields to sidebar order.
   isRememberedProjectVisible: (projectRef: ScopedProjectRef) => boolean = () => true,
+  groupingSettings?: ProjectGroupingSettings,
 ): ScopedProjectRef | null {
   const lastUsed = projects.find(
     (project) =>
@@ -669,8 +671,9 @@ export function resolveDefaultProjectRef(
     if (isRememberedProjectVisible(lastUsedRef)) return lastUsedRef;
   }
   if (!fallbackReady) return null;
-  const [defaultProject] = orderItemsByPreferredIds({
-    items: projects.filter((project) => project.archivedAt == null),
+  const liveProjects = projects.filter((project) => project.archivedAt == null);
+  const [firstProject] = orderItemsByPreferredIds({
+    items: liveProjects,
     preferredIds: projectOrder,
     getId: getProjectOrderKey,
     getPreferenceIds: (project) => [
@@ -678,7 +681,11 @@ export function resolveDefaultProjectRef(
       legacyProjectCwdPreferenceKey(project.workspaceRoot),
     ],
   });
-  return defaultProject ? scopeProjectRef(defaultProject.environmentId, defaultProject.id) : null;
+  if (!firstProject) return null;
+  const defaultProject = groupingSettings
+    ? resolveGroupDefaultProject(firstProject, liveProjects, groupingSettings)
+    : firstProject;
+  return scopeProjectRef(defaultProject.environmentId, defaultProject.id);
 }
 
 export function useHandleNewThread() {
@@ -723,6 +730,7 @@ export function useHandleNewThread() {
       hiddenProjectKeys: sidebarHiddenProjectKeys,
       environmentScopeIds: sidebarEnvironmentScopeIds,
     }),
+    projectGroupingSettings,
   );
 
   return {

@@ -482,6 +482,13 @@ export const BrowserLinkTarget = Schema.Literals(["system", "app"]);
 export type BrowserLinkTarget = typeof BrowserLinkTarget.Type;
 export const DEFAULT_BROWSER_LINK_TARGET: BrowserLinkTarget = "system";
 /**
+ * Where a plain click opens a subagent, a side chat or a linked environment's thread: beside the
+ * thread you are in, or in its place. A modified click opens it in the other one.
+ */
+export const SideThreadOpenTarget = Schema.Literals(["panel", "main"]);
+export type SideThreadOpenTarget = typeof SideThreadOpenTarget.Type;
+const DEFAULT_SIDE_THREAD_OPEN_TARGET: SideThreadOpenTarget = "panel";
+/**
  * What the address bar searches with when the input is not an address.
  * "custom" uses `browserCustomSearchUrl`, a template with `%s` for the query.
  */
@@ -745,6 +752,9 @@ export const ClientSettingsSchema = Schema.Struct({
   // sends once with the other state.
   staleSessionSend: Schema.Literals(["compact", "full-history"]).pipe(
     Schema.withDecodingDefault(Effect.succeed("compact")),
+  ),
+  sideThreadOpenTarget: SideThreadOpenTarget.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDE_THREAD_OPEN_TARGET)),
   ),
   proactivePanelsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   showSkillsInSlashMenu: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
@@ -1026,18 +1036,6 @@ export type CodexSettings = typeof CodexSettings.Type;
 
 const CLAUDE_AUTO_COMPACT_WINDOW_PATTERN = /^(?:|[1-9]\d{5}|1000000)$/;
 
-/**
- * Fork: how a steer enters a running Claude turn. "between-tools" lets the
- * running tool finish and hands the message to the next model call;
- * "interrupt" cancels the running tool first.
- */
-const CLAUDE_STEERING_MODES = [
-  { value: "between-tools", label: "Between tool calls" },
-  { value: "interrupt", label: "Interrupt running tool" },
-] as const satisfies ReadonlyArray<ProviderSettingsFormOption>;
-export const ClaudeSteeringMode = Schema.Literals(CLAUDE_STEERING_MODES.map((mode) => mode.value));
-export type ClaudeSteeringMode = typeof ClaudeSteeringMode.Type;
-
 export const IDLE_COMPACTION_MODES = [
   { value: "onReturn", label: "When you return" },
   { value: "beforeCacheExpires", label: "Before the cache expires (beta)" },
@@ -1121,19 +1119,6 @@ export const ClaudeSettings = makeProviderSettingsSchema(
         },
       }),
     ),
-    steeringMode: ClaudeSteeringMode.pipe(
-      Schema.withDecodingDefault(Effect.succeed("between-tools" as const)),
-      Schema.annotateKey({
-        title: "Steering",
-        description:
-          "Where a steered message enters a running turn. Interrupt cancels the running tool.",
-        providerSettingsForm: {
-          control: "select",
-          options: CLAUDE_STEERING_MODES,
-          clearWhenEmpty: "omit",
-        },
-      }),
-    ),
     idleCompaction: InstanceIdleCompaction.pipe(
       Schema.withDecodingDefault(Effect.succeed("default" as const)),
       Schema.annotateKey({
@@ -1155,7 +1140,6 @@ export const ClaudeSettings = makeProviderSettingsSchema(
       "shadowHomePath",
       "autoCompactWindow",
       "idleCompaction",
-      "steeringMode",
       "launchArgs",
     ],
   },
@@ -1797,6 +1781,8 @@ export const ServerSettings = Schema.Struct({
   ),
 
   enableAgentBrowserAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /** Lets clients reach this machine's loopback ports over `/api/preview/tunnel`. */
+  enablePreviewTunnel: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   cloudSpeechCredentials: CloudSpeechCredentials.pipe(
     Schema.withDecodingDefault(Effect.succeed({ openai: "", xai: "", openrouter: "" })),
   ),
@@ -2284,6 +2270,7 @@ export const ServerSettingsPatch = Schema.Struct({
   keepAwakeWhileAgentsWork: Schema.optionalKey(Schema.Boolean),
   requireConnectDeviceApproval: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
+  enablePreviewTunnel: Schema.optionalKey(Schema.Boolean),
   cloudSpeechCredentials: Schema.optionalKey(
     Schema.Struct({
       openai: Schema.optionalKey(SettingsSecretValue),
@@ -2471,7 +2458,7 @@ export function requiredScopesForServerSettingsPatch(
   let changesAccess = false;
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;
-    if (key === "requireConnectDeviceApproval") {
+    if (key === "requireConnectDeviceApproval" || key === "enablePreviewTunnel") {
       changesAccess = true;
     } else if (
       key === "providers" ||
@@ -2577,6 +2564,7 @@ export const ClientSettingsPatch = Schema.Struct({
   sendShortcut: Schema.optionalKey(Schema.Literals(["enter", "mod-enter-multiline", "mod-enter"])),
   followUpBehavior: Schema.optionalKey(Schema.Literals(["queue", "steer"])),
   staleSessionSend: Schema.optionalKey(Schema.Literals(["compact", "full-history"])),
+  sideThreadOpenTarget: Schema.optionalKey(SideThreadOpenTarget),
   proactivePanelsEnabled: Schema.optionalKey(Schema.Boolean),
   showSkillsInSlashMenu: Schema.optionalKey(Schema.Boolean),
   boringSidebarEnabled: Schema.optionalKey(Schema.Boolean),

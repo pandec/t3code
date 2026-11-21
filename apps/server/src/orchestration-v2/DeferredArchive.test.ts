@@ -42,6 +42,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import * as ModelManifest from "../provider/ModelManifest.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
@@ -711,6 +712,7 @@ const makeTestLayer = (settings: Parameters<typeof ServerSettings.layerTest>[0] 
         createWorktree: () => Effect.succeed({} as never),
       }),
     ),
+    Layer.provide(ModelManifest.layerTest),
     Layer.provide(Layer.mock(ProjectService.ProjectService)({ getById: () => Effect.succeedNone })),
     Layer.provide(PlatformTestLayer),
   );
