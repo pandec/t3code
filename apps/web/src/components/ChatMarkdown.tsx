@@ -205,6 +205,7 @@ import { isPreviewAvailableFor } from "../browser/previewRuntime";
 import {
   isBrowserPreviewFile,
   openFileInPreview,
+  openFileInSystemBrowser,
   openUrlInPreview,
   BrowserPreviewUnavailableError,
   isBrowserSettingsReadError,
@@ -612,6 +613,7 @@ function useChatMarkdownState({
   const environmentId = threadRef?.environmentId ?? explicitEnvironmentId ?? null;
   const canOperateHost = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const canOperatePreview = useEnvironmentScope(environmentId, AuthPreviewOperateScope);
+  const canReadFiles = useEnvironmentScope(environmentId, AuthFilesystemReadScope);
   const isClientHost = useAtomValue(clientHostEnvironmentAtom(environmentId));
   const remoteOpen = useRemoteOpenResolution(environmentId);
   const canUseShellActions =
@@ -829,18 +831,20 @@ function useChatMarkdownState({
       return result;
     });
   };
+  const environmentNotConnected = () =>
+    Promise.resolve(
+      AsyncResult.failure<void, BrowserPreviewUnavailableError>(
+        Cause.fail(
+          new BrowserPreviewUnavailableError({
+            message: gt("Environment is not connected."),
+          }),
+        ),
+      ),
+    );
   const openMarkdownFileInPreview = (path: string) => {
     const preparedConnection = threadRef ? readPreparedConnection(threadRef.environmentId) : null;
     if (!threadRef || !canOperatePreview || preparedConnection === null) {
-      return Promise.resolve(
-        AsyncResult.failure<void, BrowserPreviewUnavailableError>(
-          Cause.fail(
-            new BrowserPreviewUnavailableError({
-              message: gt("Environment is not connected."),
-            }),
-          ),
-        ),
-      );
+      return environmentNotConnected();
     }
     return openFileInPreview({
       threadRef,
@@ -849,6 +853,24 @@ function useChatMarkdownState({
       httpBaseUrl: preparedConnection.httpBaseUrl,
       createAssetUrl,
       openPreview,
+    });
+  };
+  const openMarkdownFileInSystemBrowser = (resolveFilePath: () => Promise<string>) => {
+    const preparedConnection = threadRef ? readPreparedConnection(threadRef.environmentId) : null;
+    if (
+      !threadRef ||
+      preparedConnection === null ||
+      !readEnvironmentScope(threadRef.environmentId, AuthFilesystemReadScope)
+    ) {
+      return environmentNotConnected();
+    }
+    return openFileInSystemBrowser({
+      threadRef,
+      resolveFilePath,
+      workspaceRoot: cwd,
+      httpBaseUrl: preparedConnection.httpBaseUrl,
+      hostIsLocal: remoteOpen.isResolved && remoteOpen.state.mode === "local-exec",
+      createAssetUrl,
     });
   };
   const findWorkspaceFileMatch = async (fileLinkMeta: MarkdownFileLinkMeta) => {
@@ -1042,6 +1064,12 @@ function useChatMarkdownState({
           isPreviewAvailableFor(threadRef.environmentId) &&
           isBrowserPreviewFile(fileLinkMeta.filePath)
             ? () => openMarkdownFileInPreview(fileLinkMeta.filePath)
+            : undefined
+        }
+        onOpenInSystemBrowser={
+          threadRef && canReadFiles && isBrowserPreviewFile(fileLinkMeta.filePath)
+            ? () =>
+                openMarkdownFileInSystemBrowser(async () => (await resolveHostPath()).absolutePath)
             : undefined
         }
       />

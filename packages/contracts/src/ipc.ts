@@ -1209,6 +1209,8 @@ export interface DesktopBridge {
   cancelProviderAuthCallback: (authorizationUrl: string) => Promise<void>;
   startFileDrag: (input: { environmentId: EnvironmentId; path: string }) => Promise<boolean>;
   openExternal: (url: string) => Promise<boolean>;
+  /** Opens a local HTML or PDF file in the default browser; false when it is not on this machine. */
+  openFileInBrowser: (filePath: string) => Promise<boolean>;
   /** Reads http(s) media in the main process, outside renderer CORS and CSP; null on network failure. */
   readMedia: (url: string) => Promise<DesktopMediaRead | null>;
   openSystemSettings: (pane: SystemSettingsPane) => Promise<boolean>;

@@ -10,15 +10,21 @@ import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { vi } from "vite-plus/test";
 import type * as Electron from "electron";
 
-const { focusedWebContents, ownerWindow } = vi.hoisted(() => ({
+const { focusedWebContents, ownerWindow, protocolHandler, openPath } = vi.hoisted(() => ({
   focusedWebContents: vi.fn(),
   ownerWindow: vi.fn(),
+  protocolHandler: vi.fn(),
+  openPath: vi.fn(),
 }));
 vi.mock("electron", () => ({
+  app: { getApplicationInfoForProtocol: protocolHandler },
+  shell: { openPath },
   webContents: { getFocusedWebContents: focusedWebContents },
   BrowserWindow: { fromWebContents: ownerWindow },
 }));
@@ -37,6 +43,7 @@ import * as DesktopIpc from "../DesktopIpc.ts";
 import {
   getLocalEnvironmentBootstraps,
   installRelayTelemetryEnabled,
+  openFileInBrowser,
   pickProjectFavicon,
   probeRemoteEditors,
   readMedia,
@@ -356,6 +363,67 @@ describe("readMedia", () => {
         data: new Uint8Array(),
       });
     }),
+  );
+});
+
+describe("openFileInBrowser", () => {
+  it.effect("opens a local HTML file in the default browser, else in its default app", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dir = yield* fileSystem.realPath(yield* fileSystem.makeTempDirectoryScoped());
+      const page = path.join(dir, "page.html");
+      yield* fileSystem.writeFileString(page, "<p>hi</p>");
+      yield* fileSystem.writeFileString(path.join(dir, "notes.txt"), "hi");
+      yield* fileSystem.symlink(path.join(dir, "notes.txt"), path.join(dir, "disguised.html"));
+      protocolHandler.mockResolvedValue({ path: "/Applications/Browser.app" });
+      openPath.mockResolvedValue("");
+      const spawned: Array<ReadonlyArray<string>> = [];
+      let exitCode = 0;
+      const spawner = ChildProcessSpawner.make((command) => {
+        const { args } = command as unknown as { readonly args: ReadonlyArray<string> };
+        spawned.push(args);
+        return Effect.succeed(
+          ChildProcessSpawner.makeHandle({
+            pid: ChildProcessSpawner.ProcessId(1),
+            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(exitCode)),
+            isRunning: Effect.succeed(false),
+            kill: () => Effect.void,
+            unref: Effect.succeed(Effect.void),
+            stdin: Sink.drain,
+            stdout: Stream.empty,
+            stderr: Stream.empty,
+            all: Stream.empty,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.empty,
+          }),
+        );
+      });
+      const open = (filePath: string, platform: NodeJS.Platform = "darwin") =>
+        openFileInBrowser
+          .handler(filePath)
+          .pipe(
+            Effect.provideService(HostProcess.Platform, platform),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          );
+
+      assert.isFalse(yield* open("page.html"));
+      assert.isFalse(yield* open(path.join(dir, "notes.txt")));
+      assert.isFalse(yield* open(path.join(dir, "disguised.html")));
+      assert.isFalse(yield* open(path.join(dir, "missing.html")));
+      // A WSL backend path, which Windows would resolve against its current drive.
+      assert.isFalse(yield* open("/home/user/page.html", "win32"));
+      assert.deepEqual(spawned, []);
+      assert.deepEqual(openPath.mock.calls, []);
+
+      assert.isTrue(yield* open(page));
+      assert.deepEqual(spawned, [["-a", "/Applications/Browser.app", page]]);
+      assert.deepEqual(openPath.mock.calls, []);
+
+      exitCode = 1;
+      assert.isTrue(yield* open(page));
+      assert.deepEqual(openPath.mock.calls, [[page]]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });
 

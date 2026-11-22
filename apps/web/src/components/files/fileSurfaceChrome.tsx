@@ -1,8 +1,11 @@
 import type { ReactNode } from "react";
 
 import { T, useGT } from "gt-react";
+import { ChevronDownIcon, Globe2 } from "lucide-react";
 import { Spinner } from "~/components/ui/spinner";
 import { Button } from "~/components/ui/button";
+import { Group, GroupSeparator } from "~/components/ui/group";
+import { Menu, MenuItem, MenuItemLabel, MenuPopup, MenuTrigger } from "~/components/ui/menu";
 import { Toggle } from "~/components/ui/toggle";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { DIFF_SURFACE_THEME_UNSAFE_CSS } from "~/lib/diffRendering";
@@ -100,6 +103,71 @@ export function FileSurfaceAction(props: {
       />
       <TooltipPopup>{props.label}</TooltipPopup>
     </Tooltip>
+  );
+}
+
+/** The integrated browser stays one click away; the chevron adds the system browser. */
+export function FileSurfaceBrowserAction(props: {
+  readonly onOpenIntegrated: () => void;
+  readonly onOpenSystem: () => void;
+}) {
+  const gt = useGT();
+  const primaryLabel = gt("Open file in preview browser");
+  return (
+    <Group aria-label={gt("Open file in browser")} role="group" className="shrink-0">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              aria-label={primaryLabel}
+              size="xs"
+              variant="outline"
+              onClick={props.onOpenIntegrated}
+            />
+          }
+        >
+          <Globe2 aria-hidden="true" className="size-3.5" />
+        </TooltipTrigger>
+        <TooltipPopup>{primaryLabel}</TooltipPopup>
+      </Tooltip>
+      <GroupSeparator />
+      <Menu>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <MenuTrigger
+                render={
+                  <Button
+                    type="button"
+                    aria-label={gt("Choose browser")}
+                    size="icon-xs"
+                    variant="outline"
+                  />
+                }
+              />
+            }
+          >
+            <ChevronDownIcon aria-hidden="true" className="size-4" />
+          </TooltipTrigger>
+          <TooltipPopup>
+            <T>Choose browser</T>
+          </TooltipPopup>
+        </Tooltip>
+        <MenuPopup align="end">
+          <MenuItem onClick={props.onOpenIntegrated}>
+            <MenuItemLabel>
+              <T>Integrated browser</T>
+            </MenuItemLabel>
+          </MenuItem>
+          <MenuItem onClick={props.onOpenSystem}>
+            <MenuItemLabel>
+              <T>System browser</T>
+            </MenuItemLabel>
+          </MenuItem>
+        </MenuPopup>
+      </Menu>
+    </Group>
   );
 }
 

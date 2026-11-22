@@ -45,6 +45,7 @@ import { EditProvider, File, Virtualizer, useWorkerPool } from "@pierre/diffs/re
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
 import { useFilesystemReadAccess } from "~/state/filesystem";
 import {
+  type AtomCommandResult,
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
@@ -61,13 +62,17 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 
-import { isBrowserPreviewFile, openFileInPreview } from "~/browser/openFileInPreview";
+import {
+  isBrowserPreviewFile,
+  openFileInPreview,
+  openFileInSystemBrowser,
+} from "~/browser/openFileInPreview";
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
 import { OpenInPicker } from "~/components/chat/OpenInPicker";
 import { MediaVideoPlayer } from "~/components/media/MediaVideoPlayer";
 import { MediaActions, type MediaActionSource } from "~/components/media/MediaActions";
 import { useFileContextMenuHandler } from "~/fileContextMenu";
-import { useRemoteOpenState } from "~/remoteOpen";
+import { useRemoteOpenResolution } from "~/remoteOpen";
 import { useClientSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -88,7 +93,6 @@ import { usePreviewAvailable } from "~/browser/previewRuntime";
 import { useEnvironmentHttpBaseUrl, usePrimaryEnvironmentId } from "~/state/environments";
 import { hostEnvironmentIdAtom } from "~/state/primaryEnvironment";
 import { previewEnvironment } from "~/state/preview";
-import { serverEnvironment } from "~/state/server";
 import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
@@ -119,6 +123,7 @@ import {
   FILE_LINK_REVEAL_UNSAFE_CSS,
   FILE_SURFACE_SUBHEADER_CLASS,
   FileSurfaceAction,
+  FileSurfaceBrowserAction,
   FileSurfaceFailure,
   FileSurfaceLoading,
 } from "./fileSurfaceChrome";
@@ -1303,9 +1308,9 @@ export default function FilePreviewPanel({
   const canOperatePreview = useEnvironmentScope(environmentId, AuthPreviewOperateScope);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const hostEnvironmentId = useAtomValue(hostEnvironmentIdAtom);
-  const remoteOpenState = useRemoteOpenState(environmentId);
+  const remoteOpen = useRemoteOpenResolution(environmentId);
+  const remoteOpenState = remoteOpen.state;
   const onFileContextMenu = useFileContextMenuHandler(environmentId);
-  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const environmentHttpBaseUrl = useEnvironmentHttpBaseUrl(environmentId);
   const previewAvailable = usePreviewAvailable(environmentId);
   const createAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
@@ -1352,12 +1357,6 @@ export default function FilePreviewPanel({
     attachment === undefined &&
     (file.isNotFile || (folderTrail !== undefined && file.data === null && file.error === null));
   const hostFolderPath = isFolder && isHostFile ? relativePath : null;
-  // A chat-linked folder reads as a file until its read settles, and revealing a
-  // folder selects it in its parent instead of opening it, so reveal waits.
-  const revealsInFileManager =
-    !isFolder &&
-    (file.data !== null || file.error !== null) &&
-    serverConfig?.shellRevealInFileManager === true;
   // Everything preview-related keys off previewPath; a folder has no preview.
   const previewPath = isFolder ? null : relativePath;
   const [explorerOpen, setExplorerOpen] = useState(initialExplorerOpen);
@@ -1503,13 +1502,13 @@ export default function FilePreviewPanel({
       : tableDelimiter
         ? setRenderTablePreferred
         : setRenderBrowserFilePreferred;
-  const canOpenInBrowser =
-    canOperatePreview &&
+  const canOpenInSystemBrowser =
+    canReadFiles &&
     previewPath !== null &&
     attachment === undefined &&
     !isVideo &&
-    previewAvailable &&
     isBrowserPreviewFile(previewPath);
+  const canOpenInBrowser = canOpenInSystemBrowser && canOperatePreview && previewAvailable;
   // Navigating up preserves the file tab; retain the trail's path spelling to find its folder tab.
   const navigateToFolder = (crumbPath: string) => {
     const path =
@@ -1563,29 +1562,42 @@ export default function FilePreviewPanel({
     });
   };
 
+  const reportOpenInBrowserFailure = (result: AtomCommandResult<void, unknown>) => {
+    if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
+      return;
+    }
+    const error = squashAtomCommandFailure(result);
+    toastManager.add(
+      stackedThreadToast({
+        type: "error",
+        title: gt("Unable to open file in browser"),
+        description: thrownErrorMessage(error, m) ?? gt("An error occurred."),
+      }),
+    );
+  };
+
   const handleOpenInBrowser = () => {
     if (!canReadFiles || !canOperatePreview || !absolutePath || !environmentHttpBaseUrl) return;
-    void (async () => {
-      const result = await openFileInPreview({
-        threadRef,
-        filePath: absolutePath,
-        workspaceRoot: cwd,
-        httpBaseUrl: environmentHttpBaseUrl,
-        createAssetUrl,
-        openPreview,
-      });
-      if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
-        return;
-      }
-      const error = squashAtomCommandFailure(result);
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: gt("Unable to open file in browser"),
-          description: thrownErrorMessage(error, m) ?? gt("An error occurred."),
-        }),
-      );
-    })();
+    void openFileInPreview({
+      threadRef,
+      filePath: absolutePath,
+      workspaceRoot: cwd,
+      httpBaseUrl: environmentHttpBaseUrl,
+      createAssetUrl,
+      openPreview,
+    }).then(reportOpenInBrowserFailure);
+  };
+
+  const handleOpenInSystemBrowser = () => {
+    if (!canReadFiles || !absolutePath || !environmentHttpBaseUrl) return;
+    void openFileInSystemBrowser({
+      threadRef,
+      resolveFilePath: async () => absolutePath,
+      workspaceRoot: cwd,
+      httpBaseUrl: environmentHttpBaseUrl,
+      hostIsLocal: remoteOpen.isResolved && remoteOpen.state.mode === "local-exec",
+      createAssetUrl,
+    }).then(reportOpenInBrowserFailure);
   };
 
   if (attachment === undefined && !canReadFiles) {
@@ -1658,7 +1670,8 @@ export default function FilePreviewPanel({
               fileRelativePath={previewPath ?? undefined}
               openInCwdIsFile={file.isFile}
               compact
-              revealFileManager={revealsInFileManager}
+              // Fork: no revealFileManager. "Default app" opens the file; the picker's own
+              // Reveal item reveals it.
             />
           ) : null}
           {canToggleRendered && renderedMode ? (
@@ -1702,9 +1715,14 @@ export default function FilePreviewPanel({
             </FileSurfaceAction>
           ) : null}
           {canOpenInBrowser ? (
+            <FileSurfaceBrowserAction
+              onOpenIntegrated={handleOpenInBrowser}
+              onOpenSystem={handleOpenInSystemBrowser}
+            />
+          ) : canOpenInSystemBrowser ? (
             <FileSurfaceAction
-              label={gt("Open file in preview browser")}
-              onPress={handleOpenInBrowser}
+              label={gt("Open in system browser")}
+              onPress={handleOpenInSystemBrowser}
             >
               <Globe2 className="size-3.5" />
             </FileSurfaceAction>

@@ -21,6 +21,8 @@ import { withPathDirectoryListings } from "@t3tools/shared/shell";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { isRelayTracingEnabled } from "@t3tools/shared/otelEnvironment";
 import * as FileSystem from "effect/FileSystem";
+import * as ChildProcess from "effect/process/ChildProcess";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -366,6 +368,51 @@ export const openExternal = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.window.openExternal")(function* (url) {
     const shell = yield* ElectronShell.ElectronShell;
     return yield* shell.openExternal(url);
+  }),
+});
+
+const SYSTEM_BROWSER_FILE = /\.(?:html?|pdf)$/i;
+
+// Targets the default browser on macOS, where Finder may hand these types to another app.
+export const openFileInBrowser = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.OPEN_FILE_IN_BROWSER_CHANNEL,
+  payload: Schema.String,
+  result: Schema.Boolean,
+  handler: Effect.fn("desktop.ipc.window.openFileInBrowser")(function* (filePath) {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const platform = yield* HostProcess.Platform;
+    // A WSL backend's POSIX path is only rooted on Windows and could name another file there.
+    const absolute =
+      platform === "win32" ? /^(?:[a-z]:[\\/]|\\\\)/i.test(filePath) : path.isAbsolute(filePath);
+    if (!absolute) return false;
+    // Check the link target, not its name: the OS opener goes by the target's type.
+    const target = yield* fileSystem.realPath(filePath).pipe(Effect.option);
+    if (Option.isNone(target) || !SYSTEM_BROWSER_FILE.test(target.value)) return false;
+    const resolved = target.value;
+    const info = yield* fileSystem.stat(resolved).pipe(Effect.option);
+    if (Option.isNone(info) || info.value.type !== "File") return false;
+    if (platform === "darwin") {
+      const browser = yield* Effect.promise(() =>
+        Electron.app.getApplicationInfoForProtocol("https://").then(
+          (app) => app.path,
+          () => "",
+        ),
+      );
+      if (browser !== "") {
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const exitCode = yield* spawner
+          .exitCode(ChildProcess.make("open", ["-a", browser, resolved], { stdin: "ignore" }))
+          .pipe(Effect.orElseSucceed(() => -1));
+        if (exitCode === 0) return true;
+      }
+    }
+    return yield* Effect.promise(() =>
+      Electron.shell.openPath(resolved).then(
+        (error) => error === "",
+        () => false,
+      ),
+    );
   }),
 });
 

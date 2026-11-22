@@ -111,32 +111,18 @@ export async function openUrlInPreview<E>(input: {
   });
 }
 
-export async function openFileInPreview<AssetError, PreviewError>(input: {
+type CreateFileAssetUrl<AssetError> = (input: {
+  readonly environmentId: EnvironmentId;
+  readonly input: { readonly resource: AssetResource };
+}) => Promise<AtomCommandResult<AssetCreateUrlResult, AssetError>>;
+
+async function createFileAssetUrl<AssetError>(input: {
   readonly threadRef: ScopedThreadRef;
   readonly filePath: string;
   readonly workspaceRoot: string | undefined;
   readonly httpBaseUrl: string;
-  readonly createAssetUrl: (input: {
-    readonly environmentId: EnvironmentId;
-    readonly input: { readonly resource: AssetResource };
-  }) => Promise<AtomCommandResult<AssetCreateUrlResult, AssetError>>;
-  readonly openPreview: OpenPreviewMutation<PreviewError>;
-}): Promise<
-  AtomCommandResult<
-    void,
-    AssetError | PreviewError | BrowserPreviewUnavailableError | BrowserSettingsReadError
-  >
-> {
-  if (!isPreviewAvailableFor(input.threadRef.environmentId)) {
-    return AsyncResult.failure(
-      Cause.fail(
-        new BrowserPreviewUnavailableError({
-          message: m(msg("The integrated browser is unavailable in this runtime.")),
-        }),
-      ),
-    );
-  }
-  const hostRef = rightPanelHostRef(input.threadRef);
+  readonly createAssetUrl: CreateFileAssetUrl<AssetError>;
+}): Promise<AtomCommandResult<string, AssetError>> {
   const insideWorkspace =
     mediaFileReference(input.filePath, input.workspaceRoot).relativePath !== undefined;
   const assetResult = await input.createAssetUrl({
@@ -158,9 +144,82 @@ export async function openFileInPreview<AssetError, PreviewError>(input: {
       Cause.die(new Error("The environment returned an invalid asset URL.")),
     );
   }
+  return AsyncResult.success(assetUrl);
+}
+
+/**
+ * Opens a file in the OS browser. A desktop that hosts the file opens it as itself, so the page
+ * outlives T3; anywhere else the browser gets the file's signed asset URL.
+ */
+export async function openFileInSystemBrowser<AssetError>(input: {
+  readonly threadRef: ScopedThreadRef;
+  readonly resolveFilePath: () => Promise<string>;
+  readonly workspaceRoot: string | undefined;
+  readonly httpBaseUrl: string;
+  readonly hostIsLocal: boolean;
+  readonly createAssetUrl: CreateFileAssetUrl<AssetError>;
+}): Promise<AtomCommandResult<void, AssetError | BrowserPreviewUnavailableError>> {
+  const bridge = window.desktopBridge;
+  // Browsers block popups opened after an await, so the web tab opens within the click.
+  const pendingTab = bridge ? null : window.open("", "_blank");
+  try {
+    const filePath = await input.resolveFilePath();
+    if (bridge && input.hostIsLocal && (await bridge.openFileInBrowser(filePath))) {
+      return AsyncResult.success(undefined);
+    }
+    const assetUrl = await createFileAssetUrl({ ...input, filePath });
+    if (assetUrl._tag === "Failure") {
+      pendingTab?.close();
+      return AsyncResult.failure(assetUrl.cause);
+    }
+    if (pendingTab) {
+      pendingTab.opener = null;
+      pendingTab.location.replace(assetUrl.value);
+      return AsyncResult.success(undefined);
+    }
+    // A web tab that the popup blocker refused leaves nothing to open.
+    if (bridge && (await bridge.openExternal(assetUrl.value))) {
+      return AsyncResult.success(undefined);
+    }
+    return AsyncResult.failure(
+      Cause.fail(new BrowserPreviewUnavailableError({ message: m(msg("Unable to open link.")) })),
+    );
+  } catch (cause) {
+    pendingTab?.close();
+    return AsyncResult.failure(Cause.die(cause));
+  }
+}
+
+export async function openFileInPreview<AssetError, PreviewError>(input: {
+  readonly threadRef: ScopedThreadRef;
+  readonly filePath: string;
+  readonly workspaceRoot: string | undefined;
+  readonly httpBaseUrl: string;
+  readonly createAssetUrl: CreateFileAssetUrl<AssetError>;
+  readonly openPreview: OpenPreviewMutation<PreviewError>;
+}): Promise<
+  AtomCommandResult<
+    void,
+    AssetError | PreviewError | BrowserPreviewUnavailableError | BrowserSettingsReadError
+  >
+> {
+  if (!isPreviewAvailableFor(input.threadRef.environmentId)) {
+    return AsyncResult.failure(
+      Cause.fail(
+        new BrowserPreviewUnavailableError({
+          message: m(msg("The integrated browser is unavailable in this runtime.")),
+        }),
+      ),
+    );
+  }
+  const hostRef = rightPanelHostRef(input.threadRef);
+  const assetUrl = await createFileAssetUrl(input);
+  if (assetUrl._tag === "Failure") {
+    return AsyncResult.failure(assetUrl.cause);
+  }
   return openUrlInPreview({
     threadRef: hostRef,
-    url: assetUrl,
+    url: assetUrl.value,
     openPreview: input.openPreview,
   });
 }
