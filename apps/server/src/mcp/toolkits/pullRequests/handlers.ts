@@ -66,6 +66,7 @@ import {
   PullRequestsToolkit,
   type ThreadPullRequestEntry,
   alreadyEndedWatchNext,
+  checksAtStartWatchNext,
   CHILD_PULL_REQUEST_REPORT_NEXT,
 } from "./tools.ts";
 
@@ -332,10 +333,12 @@ const make = Effect.gen(function* () {
     return yield* watches
       .setWatching({ threadId, target: input, watching, until: input.until })
       .pipe(
-        Effect.map((result) =>
-          result.state === undefined
-            ? result
-            : { ...result, next: alreadyEndedWatchNext(result.state) },
+        Effect.map(({ checksAtStart, ...result }) =>
+          result.state !== undefined
+            ? { ...result, next: alreadyEndedWatchNext(result.state) }
+            : checksAtStart !== undefined
+              ? { ...result, next: checksAtStartWatchNext(checksAtStart) }
+              : result,
         ),
         Effect.catchTags({
           PullRequestWatchThreadNotFoundError: (error) =>

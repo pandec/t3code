@@ -168,9 +168,12 @@ const makeHarness = Effect.fn("makePullRequestWatchHarness")(function* (
 describe("PullRequestWatchService", () => {
   it.effect("links an unlinked watch even while the host has a transient read failure", () =>
     Effect.gen(function* () {
-      const cases: ReadonlyArray<readonly [HarnessOptions, boolean | undefined]> = [
+      const cases: ReadonlyArray<
+        readonly [HarnessOptions, boolean | undefined, ("passing" | "failing")?]
+      > = [
         [{ readChecksState: "pending" }, true],
-        [{ readChecksState: "failing" }, false],
+        [{ readChecksState: "failing" }, false, "failing"],
+        [{ readChecksState: "passing" }, false, "passing"],
         [{}, false],
         [
           {
@@ -182,12 +185,13 @@ describe("PullRequestWatchService", () => {
           undefined,
         ],
       ];
-      for (const [options, checksPending] of cases) {
+      for (const [options, checksPending, checksAtStart] of cases) {
         const harness = yield* makeHarness(options);
         const result = yield* harness.setWatching(true, {
           url: "https://github.com/t3tools/t3code/pull/9",
         });
         expect(result).toMatchObject({ number: 9, wasWatching: false });
+        expect(result.checksAtStart).toBe(checksAtStart);
         const commands = yield* Ref.get(harness.commands);
         expect(commands).toMatchObject([
           {
@@ -202,6 +206,30 @@ describe("PullRequestWatchService", () => {
           checksPending,
         );
       }
+
+      const rewatched = yield* makeHarness({
+        readChecksState: "passing",
+        thread: makeThread([
+          makeLink(9, {
+            endedWatch: {
+              startedAt: "2026-08-20T00:00:00.000Z",
+              headSha: "aaaaaaaaaa",
+              failedChecks: [],
+              passed: false,
+              passedChecks: [],
+              conflicting: false,
+              checksPending: true,
+              remarksThrough: "2026-08-20T00:00:00.000Z",
+              remarkIds: [],
+              wakes: 0,
+            },
+          }),
+        ]),
+      });
+      const again = yield* rewatched.setWatching(true, {
+        url: "https://github.com/t3tools/t3code/pull/9",
+      });
+      expect(again.checksAtStart).toBeUndefined();
     }),
   );
 

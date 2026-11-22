@@ -195,7 +195,7 @@ describe("evaluatePullRequestWatch", () => {
     ]);
   });
 
-  it("reports failures on the first read only when CI was pending at the start", () => {
+  it("reports failures and passes on the first read only when CI was pending at the start", () => {
     const red = detail({ checks: [check("lint", "failure"), check("test", "pending")] });
     const pending = evaluatePullRequestWatch(
       watch({ awaitingBaseline: "all", checksPending: true }),
@@ -217,6 +217,23 @@ describe("evaluatePullRequestWatch", () => {
       evaluatePullRequestWatch(
         watch({ awaitingBaseline: "all", checksPending: false }),
         red,
+        noRemarks,
+      ).changes,
+      [],
+    );
+    const green = detail({ checks: [check("lint", "success"), check("test", "success")] });
+    assert.deepEqual(
+      evaluatePullRequestWatch(
+        watch({ awaitingBaseline: "all", checksPending: true }),
+        green,
+        noRemarks,
+      ).changes,
+      [{ kind: "checks-passed", count: 2, required: false }],
+    );
+    assert.deepEqual(
+      evaluatePullRequestWatch(
+        watch({ awaitingBaseline: "all", checksPending: false }),
+        green,
         noRemarks,
       ).changes,
       [],
