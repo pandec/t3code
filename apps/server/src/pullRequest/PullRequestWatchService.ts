@@ -68,6 +68,8 @@ export class PullRequestWatchService extends Context.Service<
         readonly wasWatching: boolean;
         /** Set when the PR already ended, so no watch was registered. */
         readonly state?: "merged" | "closed";
+        /** Checks a new watch found finished; its baseline never reports them. */
+        readonly checksAtStart?: "passing" | "failing";
       },
       | PullRequestWatchFailedError
       | PullRequestWatchFromSubagentError
@@ -130,6 +132,7 @@ const make = Effect.gen(function* () {
     if (watching && before?.snapshot?.state === "merged") return alreadyEnded("merged");
     // A pending rollup has no failure yet, so any failure the first read finds is news.
     let checksPendingAtStart: boolean | undefined;
+    let checksAtStart: "passing" | "failing" | undefined;
     if (watching && !wasWatching) {
       const read = yield* pullRequests
         .summary(
@@ -151,6 +154,9 @@ const make = Effect.gen(function* () {
         );
       if (read?.state === "merged" || read?.state === "closed") return alreadyEnded(read.state);
       checksPendingAtStart = read === undefined ? undefined : read.checksState === "pending";
+      if (read?.checksState === "passing" || read?.checksState === "failing") {
+        checksAtStart = read.checksState;
+      }
     }
     const uuid = yield* random.uuidV4().pipe(Effect.orDie);
     yield* engine
@@ -180,6 +186,7 @@ const make = Effect.gen(function* () {
       ...target,
       watching: watchedLink(after)?.watch !== undefined,
       wasWatching,
+      ...(checksAtStart !== undefined && { checksAtStart }),
     };
   });
 

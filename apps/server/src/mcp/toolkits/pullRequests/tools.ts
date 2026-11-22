@@ -269,6 +269,9 @@ export type WatchPullRequestResult = typeof WatchPullRequestResult.Type;
 export const alreadyEndedWatchNext = (state: "merged" | "closed") =>
   `This PR is already ${state}, so there is nothing to watch. Report that and end your turn.`;
 
+export const checksAtStartWatchNext = (checks: "passing" | "failing") =>
+  `Checks already ${checks === "passing" ? "passed" : "failed"}, and the watch reports only later changes. Act on them now instead of ending your turn.`;
+
 export const ThreadPullRequestEntry = Schema.Struct({
   ...PullRequestIdentity,
   source: ThreadPullRequestLinkSource,

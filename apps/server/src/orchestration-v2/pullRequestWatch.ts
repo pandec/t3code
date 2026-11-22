@@ -154,7 +154,8 @@ export function evaluatePullRequestWatch(
       checks.every((check) => check.status !== "pending");
     owedChecks = owed;
     if (passedNow && (!passed || gateGrew)) {
-      if (!checksBaseline) {
+      // Like a failure, a pass the first read finds is news when CI was pending at the start.
+      if (!checksBaseline || watch.checksPending === true) {
         changes.push({ kind: "checks-passed", count: gate.length, required: required.length > 0 });
       }
       owedChecks =
