@@ -269,8 +269,9 @@ export type WatchPullRequestResult = typeof WatchPullRequestResult.Type;
 export const alreadyEndedWatchNext = (state: "merged" | "closed") =>
   `This PR is already ${state}, so there is nothing to watch. Report that and end your turn.`;
 
+// The rollup can miss checks GitHub holds for approval, so the agent checks before it acts.
 export const checksAtStartWatchNext = (checks: "passing" | "failing") =>
-  `Checks already ${checks === "passing" ? "passed" : "failed"}, and the watch reports only later changes. Act on them now instead of ending your turn.`;
+  `The checks rollup already showed ${checks} when this watch started, and no wake will report that. Check the PR's readiness now and act on it. The watch still wakes you on later changes.`;
 
 export const ThreadPullRequestEntry = Schema.Struct({
   ...PullRequestIdentity,

@@ -68,7 +68,7 @@ export class PullRequestWatchService extends Context.Service<
         readonly wasWatching: boolean;
         /** Set when the PR already ended, so no watch was registered. */
         readonly state?: "merged" | "closed";
-        /** Checks a new watch found finished; its baseline never reports them. */
+        /** A first watch's finished rollup, which its baseline never reports. */
         readonly checksAtStart?: "passing" | "failing";
       },
       | PullRequestWatchFailedError
@@ -154,7 +154,11 @@ const make = Effect.gen(function* () {
         );
       if (read?.state === "merged" || read?.state === "closed") return alreadyEnded(read.state);
       checksPendingAtStart = read === undefined ? undefined : read.checksState === "pending";
-      if (read?.checksState === "passing" || read?.checksState === "failing") {
+      // A watch again keeps its last watch's news, so it reports an untold result itself.
+      const watchedBefore = threadPullRequestsOf(thread).some(
+        (link) => threadPullRequestKeysEqual(link, target) && link.endedWatch !== undefined,
+      );
+      if (!watchedBefore && (read?.checksState === "passing" || read?.checksState === "failing")) {
         checksAtStart = read.checksState;
       }
     }

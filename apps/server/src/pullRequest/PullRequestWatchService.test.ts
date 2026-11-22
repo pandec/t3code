@@ -206,6 +206,30 @@ describe("PullRequestWatchService", () => {
           checksPending,
         );
       }
+
+      const rewatched = yield* makeHarness({
+        readChecksState: "passing",
+        thread: makeThread([
+          makeLink(9, {
+            endedWatch: {
+              startedAt: "2026-08-20T00:00:00.000Z",
+              headSha: "aaaaaaaaaa",
+              failedChecks: [],
+              passed: false,
+              passedChecks: [],
+              conflicting: false,
+              checksPending: true,
+              remarksThrough: "2026-08-20T00:00:00.000Z",
+              remarkIds: [],
+              wakes: 0,
+            },
+          }),
+        ]),
+      });
+      const again = yield* rewatched.setWatching(true, {
+        url: "https://github.com/t3tools/t3code/pull/9",
+      });
+      expect(again.checksAtStart).toBeUndefined();
     }),
   );
 
