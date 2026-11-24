@@ -11,6 +11,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
+  archiveDiscardedQueuedMessageCount,
   type ArchiveToggleAction,
   canSnooze,
   effectiveSnoozed,
@@ -949,7 +950,7 @@ export function useThreadActions() {
   /**
    * Fork: the one user-facing archive path: archive now, when done, or cancel
    * (`resolveArchiveToggleAction`). A changed `expectedAction` does nothing; archiving
-   * now confirms when set and toasts failures. Concurrent attempts collapse into one;
+   * now confirms when set or when it discards queued messages, and toasts failures. Concurrent attempts collapse into one;
    * `onApplied` runs once the request lands, before an archive's navigation.
    */
   const attemptArchiveThread = async (
@@ -1005,11 +1006,19 @@ export function useThreadActions() {
         );
         return;
       }
-      if (confirmThreadArchive) {
+      // Archiving now discards queued messages, so that always confirms.
+      const discardedCount = archiveDiscardedQueuedMessageCount(resolved.thread);
+      if (confirmThreadArchive || discardedCount > 0) {
         const localApi = readLocalApi();
         if (!localApi) return;
         const confirmed = await settlePromise(() =>
-          localApi.dialogs.confirm(`Archive thread "${resolved.thread.title}"?`),
+          localApi.dialogs.confirm(
+            discardedCount > 0
+              ? `Archive "${resolved.thread.title}" and discard ${discardedCount} queued ${
+                  discardedCount === 1 ? "message" : "messages"
+                }?`
+              : `Archive thread "${resolved.thread.title}"?`,
+          ),
         );
         if (confirmed._tag === "Failure" || !confirmed.value) return;
       }

@@ -28,6 +28,12 @@ export interface ThreadLifecycleDeliveryDeps {
   ) => Promise<AtomCommandResult<OrchestrationV2DispatchCommandResult, unknown>>;
   /** `sequence` is the dispatched command's event sequence; null when it was rejected. */
   readonly onSettled: (intent: ThreadLifecycleIntent, sequence: number | null) => void;
+  /** The server refused the command for good, so the intent is dropped. */
+  readonly onRejected: (
+    intent: ThreadLifecycleIntent,
+    action: ThreadLifecycleDispatchAction,
+    error: unknown,
+  ) => void;
   /** Whether the thread's live shell shows queued or running work. */
   readonly threadActive: (intent: ThreadLifecycleIntent) => boolean;
   readonly newCommandId: () => CommandId;
@@ -109,8 +115,9 @@ export async function deliverThreadLifecycleIntent(
     deps.onSettled(attempted, result.value.sequence);
     return removeCurrent(attempted);
   }
+  const error = Cause.squash(result.cause);
   const failureAction = resolveThreadLifecycleOutboxFailureAction({
-    error: Cause.squash(result.cause),
+    error,
     interrupted: Cause.hasInterruptsOnly(result.cause),
     action: finalAction,
     threadActive: deps.threadActive(attempted),
@@ -125,6 +132,7 @@ export async function deliverThreadLifecycleIntent(
   });
   if (failureAction === "retry") return false;
   if (failureAction === "rotate") return rotate(attempted);
+  deps.onRejected(attempted, finalAction, error);
   deps.onSettled(attempted, null);
   return removeCurrent(attempted);
 }

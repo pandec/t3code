@@ -7,7 +7,7 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import type { ThreadRuntimeSummary } from "./models.ts";
-import { resolveArchiveToggleAction } from "./threadSettled.ts";
+import { archiveDiscardedQueuedMessageCount, resolveArchiveToggleAction } from "./threadSettled.ts";
 
 function runtime(status: ThreadRuntimeSummary["status"]): ThreadRuntimeSummary {
   return {
@@ -70,5 +70,17 @@ describe("resolveArchiveToggleAction", () => {
         },
       }),
     ).toBe("cancel");
+  });
+});
+
+describe("archiveDiscardedQueuedMessageCount", () => {
+  it("counts queued messages, held ones included, only when archiving now", () => {
+    // A Stop-held queue presents the interrupted run, so the runtime alone would hide it.
+    const held = { ...idle, runtime: runtime("interrupted"), queuedMessageCount: 2 };
+    expect(archiveDiscardedQueuedMessageCount(held)).toBe(2);
+    expect(archiveDiscardedQueuedMessageCount({ ...idle, queuedMessageCount: 0 })).toBe(0);
+    expect(archiveDiscardedQueuedMessageCount(idle)).toBe(0);
+    // Archive-when-done on a working thread discards nothing.
+    expect(archiveDiscardedQueuedMessageCount({ ...held, runtime: runtime("running") })).toBe(0);
   });
 });

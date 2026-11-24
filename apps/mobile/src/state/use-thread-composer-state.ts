@@ -51,7 +51,10 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { hasPendingArchive } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  archiveDiscardedQueuedMessageCount,
+  hasPendingArchive,
+} from "@t3tools/client-runtime/state/thread-settled";
 import { parseComposerArchiveCommand } from "@t3tools/shared/composerTrigger";
 import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
 import { upgradeLegacyContextMessage } from "@t3tools/shared/composerContextLegacy";
@@ -90,6 +93,7 @@ import { threadAllowsProviderSwitch } from "./thread-provider-switching";
 import { appAtomRegistry } from "./atom-registry";
 import { pendingThreadCreationMessage } from "./pending-thread-creation";
 import type { SideChatMessage } from "../features/threads/useStartSideChat";
+import { confirmQueuedMessageDiscard } from "../features/home/threadArchive";
 import {
   composerAttachmentUploadBlockReason,
   composerAttachmentUploadsAtom,
@@ -273,6 +277,7 @@ export function useThreadComposerState(input: {
   const uploadThreadFeedback = useAtomCommand(threadEnvironment.uploadFeedback, {
     reportFailure: false,
   });
+  const archiveThread = useAtomCommand(threadEnvironment.archive, { reportFailure: false });
   const scheduleThreadArchive = useAtomCommand(threadEnvironment.scheduleArchive, {
     reportFailure: false,
   });
@@ -857,9 +862,26 @@ export function useThreadComposerState(input: {
       const environmentId = thread.environmentId;
       const input = { threadId: thread.id };
       const cancelArchive = archiveCommand.action === "cancel" || hasPendingArchive(thread);
+      // Archive-when-done is refused while messages are queued; archiving now discards them.
+      const discardedCount = cancelArchive ? 0 : archiveDiscardedQueuedMessageCount(thread);
+      if (
+        discardedCount > 0 &&
+        !(await new Promise<boolean>((resolve) =>
+          confirmQueuedMessageDiscard({
+            title: thread.title,
+            count: discardedCount,
+            onConfirm: () => resolve(true),
+            onCancel: () => resolve(false),
+          }),
+        ))
+      ) {
+        return null;
+      }
       const result = await (cancelArchive
         ? cancelThreadArchive({ environmentId, input })
-        : scheduleThreadArchive({ environmentId, input: { ...input, afterTurn: true } }));
+        : discardedCount > 0
+          ? archiveThread({ environmentId, input })
+          : scheduleThreadArchive({ environmentId, input: { ...input, afterTurn: true } }));
       if (result._tag === "Failure") {
         if (!isAtomCommandInterrupted(result)) {
           const error = squashAtomCommandFailure(result);
@@ -871,10 +893,16 @@ export function useThreadComposerState(input: {
         return null;
       }
       Dialog.alert(
-        cancelArchive ? "Archive cancelled" : "Archive requested",
+        cancelArchive
+          ? "Archive cancelled"
+          : discardedCount > 0
+            ? "Thread archived"
+            : "Archive requested",
         cancelArchive
           ? "This thread will stay open."
-          : "Archives when the current turn and background work finish. Send /t3-archive again to cancel.",
+          : discardedCount > 0
+            ? "Its queued messages were discarded."
+            : "Archives when the current turn and background work finish. Send /t3-archive again to cancel.",
       );
       // Clear only an unchanged draft: the user may have typed on meanwhile.
       if (sameComposerDraftState(getComposerDraftSnapshot(threadKey), draft)) {

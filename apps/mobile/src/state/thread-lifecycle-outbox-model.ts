@@ -1,3 +1,4 @@
+import { archiveDiscardedQueuedMessageCount } from "@t3tools/client-runtime/state/thread-settled";
 import {
   scopeThreadShell,
   type EnvironmentShellStatus,
@@ -31,9 +32,10 @@ const ThreadLifecycleIntentSchema = Schema.Struct({
   desiredArchived: Schema.Boolean,
   requiresDispatch: Schema.Boolean,
   dispatchAttempted: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  dispatchedAction: Schema.NullOr(Schema.Literals(["archive", "unarchive", "cancel-archive"])).pipe(
-    Schema.withDecodingDefault(Effect.succeed(null)),
-  ),
+  dispatchedAction: Schema.NullOr(
+    Schema.Literals(["archive", "archive-now", "unarchive", "cancel-archive"]),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  discardQueuedMessages: Schema.optional(Schema.Boolean),
   commandId: CommandId,
   createdAt: IsoDateTime,
   /** v2 shell source captured at enqueue, so the row renders while it is out of the shell. */
@@ -56,6 +58,8 @@ export interface ThreadLifecycleIntent {
   readonly dispatchAttempted: boolean;
   /** The action the attempt was persisted for; this command id is bound to it. */
   readonly dispatchedAction: ThreadLifecycleDispatchAction | null;
+  /** The user confirmed that archiving discards the thread's queued messages. */
+  readonly discardQueuedMessages?: boolean;
   readonly commandId: CommandId;
   readonly createdAt: string;
   readonly thread: OrchestrationV2ThreadShell | null;
@@ -156,14 +160,15 @@ export function groupThreadLifecycleIntents(
 }
 
 /**
- * `archive` is sent as an archive-when-done request, so a thread that became
- * busy while the phone was offline archives after its turn instead of being
- * interrupted. `cancel-archive` withdraws such a pending request.
+ * `archive` is sent as archive-when-done, so a thread that became busy offline is not
+ * interrupted. That is refused while messages are queued, so `archive-now` archives at once
+ * when the user confirmed discarding them. `cancel-archive` withdraws a pending request.
  */
 export type ThreadLifecycleOutboxAction =
   | "wait"
   | "remove"
   | "archive"
+  | "archive-now"
   | "unarchive"
   | "cancel-archive";
 
@@ -186,9 +191,19 @@ export function resolveThreadLifecycleOutboxAction(input: {
    * unverified grant dispatches and leaves the decision to the server.
    */
   readonly operateGrant: ScopeGrant;
-  readonly thread: Pick<EnvironmentThreadShell, "archivedAt" | "archiveRequest"> | undefined;
+  readonly thread:
+    | Pick<
+        EnvironmentThreadShell,
+        | "archivedAt"
+        | "archiveRequest"
+        | "runtime"
+        | "pendingBackgroundTasks"
+        | "queuedMessageCount"
+      >
+    | undefined;
   readonly desiredArchived: boolean;
   readonly requiresDispatch: boolean;
+  readonly discardQueuedMessages: boolean;
 }): ThreadLifecycleOutboxAction {
   if (
     !input.environmentConnected ||
@@ -209,7 +224,10 @@ export function resolveThreadLifecycleOutboxAction(input: {
   const archived = thread.archivedAt !== null;
   const archivePending = !archived && thread.archiveRequest?.status === "pending";
   if (input.desiredArchived) {
-    return (archived || archivePending) && !input.requiresDispatch ? "remove" : "archive";
+    if ((archived || archivePending) && !input.requiresDispatch) return "remove";
+    return input.discardQueuedMessages && archiveDiscardedQueuedMessageCount(thread) > 0
+      ? "archive-now"
+      : "archive";
   }
   // Only cancel a pending archive one of our earlier revisions may have created.
   if (archivePending) return input.requiresDispatch ? "cancel-archive" : "remove";

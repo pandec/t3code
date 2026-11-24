@@ -737,6 +737,16 @@ it.effect("a message the user sends after Stop releases the held queue; an agent
       threadId,
     });
     assert.deepEqual((yield* threadState(threadId)).runs, ["interrupted", "queued:held"]);
+    // Fork: shells present the interrupted run but still count the held message.
+    const heldShells = [
+      yield* projections.getThreadShell(threadId),
+      (yield* projections.getShellSnapshot()).threads.find((thread) => thread.id === threadId),
+      ProjectionStore.threadShellFromProjection(yield* orchestrator.getThreadProjection(threadId)),
+    ];
+    for (const shell of heldShells) {
+      assert.equal(shell?.status, "interrupted");
+      assert.equal(shell?.queuedMessageCount, 1);
+    }
 
     // An agent's message starts on the idle thread, but the hold is the user's.
     yield* agentSend("agent nudge");

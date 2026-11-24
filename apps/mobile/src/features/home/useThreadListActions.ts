@@ -4,6 +4,7 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import * as ThreadUndo from "@t3tools/client-runtime/state/thread-undo";
 import { showThreadUndoNotice } from "./thread-undo-notice";
 import {
+  archiveDiscardedQueuedMessageCount,
   canSnooze,
   resolveArchiveToggleAction,
 } from "@t3tools/client-runtime/state/thread-settled";
@@ -58,7 +59,7 @@ import {
   threadDropLifecycle,
 } from "../threads/threadOrder";
 import { getThreadListV2OrderedSection } from "../threads/threadListV2";
-import { threadCanArchive } from "./threadArchive";
+import { confirmQueuedMessageDiscard, threadCanArchive } from "./threadArchive";
 import { resolveThreadTitleRename } from "../threads/thread-title-rename";
 import { useForkConversation } from "../threads/useForkConversation";
 
@@ -173,6 +174,8 @@ function useThreadActionExecutor(
     thread: EnvironmentThreadShell,
     onStarted?: () => void,
     restoreUnsettledAt?: string | null,
+    /** Fork: the user confirmed that archiving discards the thread's queued messages. */
+    discardQueuedMessages = false,
   ) => {
     const key = scopedThreadKey(thread.environmentId, thread.id);
     // Drop only a repeat of the latest pending action; Settle → Un-settle → Settle must all send.
@@ -199,9 +202,9 @@ function useThreadActionExecutor(
         return false;
       }
       // Fork: archive controls while disconnected queue a durable intent
-      // applied on reconnect, where archives are sent as archive-when-done.
-      // They revise any existing intent (Undo), whatever the connection
-      // state, so a direct command never races it.
+      // applied on reconnect (see resolveThreadLifecycleOutboxAction). They
+      // revise any existing intent (Undo), whatever the connection state, so
+      // a direct command never races it.
       const existingIntent = appAtomRegistry.get(
         threadLifecycleOutboxManager.intentsByThreadKeyAtom,
       )[key];
@@ -229,6 +232,9 @@ function useThreadActionExecutor(
             environmentId: thread.environmentId,
             threadId: thread.id,
             ...revision,
+            ...(action === "archive" && discardQueuedMessages
+              ? { discardQueuedMessages: true }
+              : {}),
             dispatchAttempted: false,
             dispatchedAction: null,
             commandId: CommandId.make(uuidv4()),
@@ -447,8 +453,20 @@ export function useThreadListActions(
   const snoozeInFlightThreadKeys = useRef(new Set<string>());
   const titleRegenerationInFlightThreadKeys = useRef(new Set<string>());
 
-  /** The archive toggle: archives, archives when done, or cancels a pending archive. */
+  /**
+   * The archive toggle: archives, archives when done, or cancels a pending archive. Archiving
+   * now discards queued messages, so that always confirms first, offline from the cached shell.
+   */
   const archiveThread = (thread: EnvironmentThreadShell) => {
+    const discardedCount = archiveDiscardedQueuedMessageCount(thread);
+    if (discardedCount > 0) {
+      confirmQueuedMessageDiscard({
+        title: thread.title,
+        count: discardedCount,
+        onConfirm: () => void executeAction("archive", thread, undefined, undefined, true),
+      });
+      return Promise.resolve(false);
+    }
     const toggle = resolveArchiveToggleAction(thread);
     return executeAction(
       toggle === "cancel"

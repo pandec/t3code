@@ -1323,6 +1323,7 @@ type ShellThreadRow = {
   readonly latest_user_message_at: string | null;
   readonly latest_user_authored_message_at: string | null;
   readonly has_actionable_proposed_plan: number;
+  readonly queued_message_count: number;
 };
 
 type ShellRunRow = {
@@ -1915,6 +1916,26 @@ const linkCardStillAsks = (
   latestUserAuthoredMessageAt === null ||
   !DateTime.isGreaterThan(latestUserAuthoredMessageAt, item.startedAt ?? item.updatedAt);
 
+/**
+ * Fork: queued runs a user sees in the queue, held ones included, so clients warn before an
+ * archive discards them. Delegated completions and notifications are agent wakes, not messages.
+ */
+function queuedUserMessageCount(
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages">,
+): number {
+  const queued = projection.runs.filter((run) => run.status === "queued");
+  if (queued.length === 0) return 0;
+  const automatic = new Set(
+    projection.messages
+      .filter(
+        (message) =>
+          message.delegatedCompletion !== undefined || message.notification !== undefined,
+      )
+      .map((message) => message.id),
+  );
+  return queued.filter((run) => !automatic.has(run.userMessageId)).length;
+}
+
 export function threadShellFromProjection(
   projection: OrchestrationV2ThreadProjection,
 ): OrchestrationV2ThreadShell {
@@ -2048,6 +2069,7 @@ export function threadShellFromProjection(
     ),
     pendingRuntimeRequest,
     pendingGuestMessageCount: pendingGuestMessageCount(projection.thread.guestShare),
+    queuedMessageCount: queuedUserMessageCount(projection),
     // Thread detail owns message bodies. Keeping them out of shell rows makes
     // initial hydration and streaming updates independent of transcript size.
     latestVisibleMessage: null,
@@ -2196,6 +2218,7 @@ type ShellThreadState = {
   readonly latestUserMessageAt: DateTime.Utc | null;
   readonly latestUserAuthoredMessageAt: DateTime.Utc | null;
   readonly hasActionableProposedPlan: boolean;
+  readonly queuedMessageCount: number;
   readonly pendingBackgroundTasks: OrchestrationV2ThreadShell["pendingBackgroundTasks"];
   readonly providerInstanceHistory: OrchestrationV2ThreadShell["providerInstanceHistory"];
   readonly goal: OrchestrationV2ThreadShell["goal"];
@@ -2366,6 +2389,7 @@ function shellFromState(input: {
     usageLimitResetAt: input.state.usageLimitResetAt,
     pendingRuntimeRequest: input.state.pendingRuntimeRequest,
     pendingGuestMessageCount: pendingGuestMessageCount(input.state.thread.guestShare),
+    queuedMessageCount: input.state.queuedMessageCount,
     latestVisibleMessage: null,
     latestUserMessageAt: input.state.latestUserMessageAt,
     latestUserAuthoredMessageAt: input.state.latestUserAuthoredMessageAt,
@@ -8512,10 +8536,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         threadIds,
         listedOnly = false,
         includeDeleted = false,
+        countQueuedMessages = true,
       }: ShellSnapshotOptions & {
         readonly listedOnly?: boolean;
         // A retained fork still shows the history of a deleted source run.
         readonly includeDeleted?: boolean;
+        // Fork: agent awareness never reads the count and keeps its reads count-free.
+        readonly countQueuedMessages?: boolean;
       } = {},
     ) =>
       sql<ShellThreadRow>`
@@ -8667,7 +8694,26 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 WHERE plan.thread_id = t.thread_id
                   AND plan.kind = 'proposed_plan'
                   AND plan.status = 'active'
-              ) AS has_actionable_proposed_plan
+              ) AS has_actionable_proposed_plan,
+              ${
+                countQueuedMessages
+                  ? sql`(
+                -- Fork: mirrors queuedUserMessageCount.
+                SELECT COUNT(*)
+                FROM orchestration_v2_projection_runs queued
+                  INDEXED BY orchestration_v2_projection_runs_thread_status_idx
+                WHERE queued.thread_id = t.thread_id AND queued.status = 'queued'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM orchestration_v2_projection_messages automatic
+                    WHERE automatic.message_id = json_extract(queued.payload_json, '$.userMessageId')
+                      AND (
+                        json_extract(automatic.payload_json, '$.delegatedCompletion') IS NOT NULL
+                        OR json_extract(automatic.payload_json, '$.notification') IS NOT NULL
+                      )
+                  )
+              )`
+                  : sql`0`
+              } AS queued_message_count
             FROM orchestration_v2_projection_threads t
             LEFT JOIN orchestration_v2_projection_runs active ON active.run_id = (
               SELECT r.run_id
@@ -9339,6 +9385,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               : DateTime.makeUnsafe(row.latest_user_message_at),
           latestUserAuthoredMessageAt,
           hasActionableProposedPlan: row.has_actionable_proposed_plan === 1,
+          queuedMessageCount: row.queued_message_count,
           pendingBackgroundTasks,
           providerInstanceHistory: providerInstanceHistoryForShell({
             threadId: thread.id,
@@ -9534,7 +9581,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             Effect.gen(function* () {
               const threadRows = yield* selectShellThreadRows(
                 threadId,
-                threadId === undefined ? { location: "active", listedOnly: true } : {},
+                threadId === undefined
+                  ? { location: "active", listedOnly: true, countQueuedMessages: false }
+                  : { countQueuedMessages: false },
               );
               const ids = threadRows.map((row) => ThreadId.make(row.thread_id));
               const providerThreadRows =

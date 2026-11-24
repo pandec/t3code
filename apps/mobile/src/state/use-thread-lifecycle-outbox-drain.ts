@@ -10,6 +10,7 @@ import * as Option from "effect/Option";
 import { Atom } from "effect/reactivity";
 import { useEffect, useRef, useState } from "react";
 
+import * as Dialog from "../components/ui/Dialog";
 import { refreshArchivedThreadsForEnvironment } from "../features/archive/useArchivedThreadSnapshots";
 import { uuidv4 } from "../lib/uuid";
 import { appAtomRegistry } from "./atom-registry";
@@ -125,6 +126,7 @@ function resolveIntentAction(
     thread: liveThread(inputs, intent),
     desiredArchived: intent.desiredArchived,
     requiresDispatch: intent.requiresDispatch,
+    discardQueuedMessages: intent.discardQueuedMessages === true,
   });
 }
 
@@ -138,6 +140,7 @@ export function useThreadLifecycleOutboxDrain(): void {
   const scheduleArchive = useAtomCommand(threadEnvironment.scheduleArchive, {
     reportFailure: false,
   });
+  const archive = useAtomCommand(threadEnvironment.archive, { reportFailure: false });
   const cancelArchive = useAtomCommand(threadEnvironment.cancelArchive, { reportFailure: false });
   const unarchive = useAtomCommand(threadEnvironment.unarchive, { reportFailure: false });
   const inputs = useAtomValue(threadLifecycleOutboxInputsAtom);
@@ -202,11 +205,30 @@ export function useThreadLifecycleOutboxDrain(): void {
           if (action === "archive") {
             return scheduleArchive({ environmentId, input: { ...input, afterTurn: true } });
           }
+          if (action === "archive-now") return archive({ environmentId, input });
           return (action === "unarchive" ? unarchive : cancelArchive)({ environmentId, input });
         },
         onSettled: (candidate, sequence) => {
           if (sequence !== null) dispatchFence.record(candidate.environmentId, sequence);
           refreshArchivedThreadsForEnvironment(candidate.environmentId);
+        },
+        // An archive the server refused (e.g. queued messages the user never confirmed
+        // discarding) leaves the thread open; say why instead of dropping it silently.
+        onRejected: (candidate, action, error) => {
+          if (action !== "archive" && action !== "archive-now") return;
+          const thread = liveThread(
+            appAtomRegistry.get(threadLifecycleOutboxInputsAtom),
+            candidate,
+          );
+          if (thread === undefined || thread.archivedAt !== null) return;
+          Dialog.alert(
+            "Could not archive thread",
+            `“${thread.title}” stays open. ${
+              error instanceof Error && error.message.trim().length > 0
+                ? error.message
+                : "The server refused the archive."
+            }`,
+          );
         },
         threadActive: (candidate) =>
           threadRuntimeIsActive(
@@ -245,5 +267,5 @@ export function useThreadLifecycleOutboxDrain(): void {
       return;
     }
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- retryTick rechecks delivery after the backoff timer expires
-  }, [cancelArchive, dispatchingCommandId, inputs, retryTick, scheduleArchive, unarchive]);
+  }, [archive, cancelArchive, dispatchingCommandId, inputs, retryTick, scheduleArchive, unarchive]);
 }

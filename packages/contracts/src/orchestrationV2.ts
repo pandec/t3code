@@ -2456,6 +2456,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   pendingRuntimeRequest: Schema.NullOr(OrchestrationV2PendingRuntimeRequestSummary),
   /** Guest messages waiting for the owner to send or dismiss. Absent from older servers. */
   pendingGuestMessageCount: Schema.optional(NonNegativeInt),
+  /** Fork: queued user messages, held ones included, that an archive now discards. Absent from older servers. */
+  queuedMessageCount: Schema.optional(NonNegativeInt),
   latestVisibleMessage: Schema.NullOr(OrchestrationV2LatestVisibleMessageSummary),
   latestUserMessageAt: Schema.NullOr(Schema.DateTimeUtc),
   /** Excludes wakes and agent messages that advance latestUserMessageAt through the user role. */

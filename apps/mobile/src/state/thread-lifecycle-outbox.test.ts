@@ -78,9 +78,12 @@ const live = {
   hasQueuedMessages: false,
   operateGrant: "granted",
   requiresDispatch: false,
+  discardQueuedMessages: false,
 } as const;
-const idle = { archivedAt: null, archiveRequest: null };
+const idle = { archivedAt: null, archiveRequest: null, runtime: null, pendingBackgroundTasks: [] };
 const pendingArchive = {
+  runtime: null,
+  pendingBackgroundTasks: [],
   archivedAt: null,
   archiveRequest: {
     requestId: CommandId.make("request-1"),
@@ -161,6 +164,20 @@ describe("thread lifecycle outbox model", () => {
     } as const;
     expect(resolveThreadLifecycleOutboxAction(base)).toBe("archive");
     expect(resolveThreadLifecycleOutboxAction({ ...base, hasQueuedMessages: true })).toBe("wait");
+  });
+
+  it("archives now only when the user confirmed discarding queued messages", () => {
+    const held = { ...idle, queuedMessageCount: 2 };
+    const base = { ...live, desiredArchived: true, thread: held };
+    expect(resolveThreadLifecycleOutboxAction({ ...base, discardQueuedMessages: true })).toBe(
+      "archive-now",
+    );
+    // Unconfirmed, the server refuses archive-when-done and the drain reports it.
+    expect(resolveThreadLifecycleOutboxAction(base)).toBe("archive");
+    // A confirmed discard with nothing queued anymore, or a busy thread, still waits on the turn.
+    expect(
+      resolveThreadLifecycleOutboxAction({ ...base, thread: idle, discardQueuedMessages: true }),
+    ).toBe("archive");
   });
 
   it("drops archives the server already holds", () => {
@@ -403,6 +420,7 @@ describe("thread lifecycle delivery", () => {
       readonly intent: ThreadLifecycleIntent;
     }> = [];
     const settled: ThreadLifecycleIntent[] = [];
+    const rejectedActions: ThreadLifecycleDispatchAction[] = [];
     let actions = initialActions;
     let readCount = 0;
     let threadActive = false;
@@ -417,6 +435,7 @@ describe("thread lifecycle delivery", () => {
       manager,
       dispatched,
       settled,
+      rejectedActions,
       setResult: (next: typeof result) => {
         result = next;
       },
@@ -441,6 +460,9 @@ describe("thread lifecycle delivery", () => {
         },
         onSettled: (candidate: ThreadLifecycleIntent) => {
           settled.push(candidate);
+        },
+        onRejected: (_candidate: ThreadLifecycleIntent, action: ThreadLifecycleDispatchAction) => {
+          rejectedActions.push(action);
         },
         threadActive: () => threadActive,
         newCommandId: () => CommandId.make(`command-rotated-${++nextCommandId}`),
@@ -533,11 +555,12 @@ describe("thread lifecycle delivery", () => {
     expect(retained?.commandId).not.toBe(queued.commandId);
     expect(test.settled).toEqual([]);
 
-    // Once the thread is no longer active, a rejection makes the intent moot.
+    // Once the thread is no longer active, a rejection drops the intent and is reported.
     test.setThreadActive(false);
     test.setActions(["archive"]);
     expect(await deliverThreadLifecycleIntent(retained!, test.deps)).toBe(true);
     expect(test.current()).toBeUndefined();
+    expect(test.rejectedActions).toEqual(["archive"]);
   });
 
   it("unarchives under a fresh id when a cancel is rejected because the archive landed", async () => {
@@ -638,6 +661,7 @@ describe("thread lifecycle delivery", () => {
       onSettled: (_candidate: ThreadLifecycleIntent, sequence: number | null) => {
         if (sequence !== null) fence.record(environmentId, sequence);
       },
+      onRejected: () => {},
       threadActive: () => true,
       newCommandId: () => CommandId.make("command-rotated"),
     };

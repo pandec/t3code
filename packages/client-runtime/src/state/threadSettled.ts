@@ -74,6 +74,20 @@ export function resolveArchiveToggleAction(
     : "schedule";
 }
 
+/**
+ * Fork: queued messages the archive control would discard. Archiving now cancels every queued
+ * run, held ones included (Stop holds the queue), so every surface confirms while this is
+ * positive. Archive-when-done and cancel discard nothing.
+ */
+export function archiveDiscardedQueuedMessageCount(
+  shell: Pick<
+    EnvironmentThreadShell,
+    "archivedAt" | "archiveRequest" | "runtime" | "pendingBackgroundTasks" | "queuedMessageCount"
+  >,
+): number {
+  return resolveArchiveToggleAction(shell) === "archive" ? (shell.queuedMessageCount ?? 0) : 0;
+}
+
 export interface ThreadSnoozeShell extends QueuedThreadShell {
   readonly source?: Pick<EnvironmentThreadShell["source"], "pendingRuntimeRequest">;
   readonly snoozedUntil?: string | null;

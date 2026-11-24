@@ -90,6 +90,7 @@ const threadShell = vi.hoisted(() => ({
   snoozedUntilRunId: null as string | null,
   latestRun: null as { runId: string; status: string; completedAt: string | null } | null,
   pendingBackgroundTasks: [] as Array<{ taskId: string; kind: "subagent" }>,
+  queuedMessageCount: 0,
   projectId: "project",
   environmentId: "undo-env",
   session: null,
@@ -164,6 +165,7 @@ beforeEach(() => {
   threadShell.snoozedUntilRunId = null;
   threadShell.latestRun = null;
   threadShell.pendingBackgroundTasks = [];
+  threadShell.queuedMessageCount = 0;
   clientSettings.confirmThreadArchive = false;
   clientSettings.returnToPreviousThread = true;
   dialogs.confirm.mockReset();
@@ -311,6 +313,14 @@ describe("attemptArchiveThread", () => {
     const onApplied = vi.fn();
     await useThreadActions().attemptArchiveThread(target, { onApplied });
     expect(onApplied).not.toHaveBeenCalled();
+  });
+
+  it("asks before discarding queued messages even with confirmation off", async () => {
+    threadShell.queuedMessageCount = 2;
+    dialogs.confirm.mockResolvedValue(false);
+    await useThreadActions().attemptArchiveThread(target);
+    expect(dialogs.confirm).toHaveBeenCalledOnce();
+    expect(commands.archive).not.toHaveBeenCalled();
   });
 
   it("keeps the thread when the confirmation is declined", async () => {
