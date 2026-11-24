@@ -486,7 +486,7 @@ const make = Effect.gen(function* () {
 
   /**
    * `forkSource` forks that thread's native session regardless of which
-   * thread the ownership lookup would find.
+   * thread the ownership lookup would find, and becomes the copy's parent.
    */
   const importSessionUnlocked = Effect.fn("SessionImportService.importSession")(function* (
     input: SessionImportInput,
@@ -585,6 +585,7 @@ const make = Effect.gen(function* () {
     let defaultTitle = titleForImport(history.name, importedMessages);
     let runtimeMode: RuntimeMode = DEFAULT_RUNTIME_MODE;
     let interactionMode: ProviderInteractionMode = DEFAULT_PROVIDER_INTERACTION_MODE;
+    let sourceCustomGroupId: string | null = null;
     if (owner !== null) {
       if (sessionImport.forkSession === undefined) {
         return yield* new SessionImportError({
@@ -602,10 +603,12 @@ const make = Effect.gen(function* () {
           `Cannot import this session as a fork while thread '${current?.title ?? owner.title}' is running. Retry when it finishes.`,
         );
       }
-      // Forking a thread keeps its permission and interaction modes, like `thread.fork`.
+      // Forking a thread keeps its permission and interaction modes and joins
+      // its custom group, like `thread.fork`.
       if (forkSource !== undefined) {
         runtimeMode = current.runtimeMode;
         interactionMode = current.interactionMode;
+        sourceCustomGroupId = current.customGroupId ?? null;
       }
       nativeId = yield* sessionImport
         .forkSession({ nativeSessionId: input.nativeSessionId, cwd })
@@ -648,7 +651,14 @@ const make = Effect.gen(function* () {
       branchPullRequest: null,
       activeProviderThreadId: providerThreadId,
       historyOrigin: "v1_import",
-      lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+      lineage:
+        forkSource === undefined
+          ? { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId }
+          : {
+              parentThreadId: forkSource.id,
+              relationshipToParent: "fork",
+              rootThreadId: forkSource.lineage.rootThreadId,
+            },
       forkedFrom: null,
       createdAt: now,
       updatedAt: now,
@@ -705,6 +715,17 @@ const make = Effect.gen(function* () {
             occurredAt: now,
             payload: thread,
           },
+          ...(sourceCustomGroupId === null
+            ? []
+            : [
+                {
+                  id: EventId.make(`${IMPORT_EVENT_PREFIX}:thread:${threadId}:custom-group`),
+                  type: "thread.custom-group-set" as const,
+                  threadId,
+                  occurredAt: now,
+                  payload: { customGroupId: sourceCustomGroupId },
+                },
+              ]),
           ...importedMessages.flatMap((message, index) =>
             messageEvents({
               threadId,

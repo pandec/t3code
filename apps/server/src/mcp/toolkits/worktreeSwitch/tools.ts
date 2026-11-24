@@ -65,7 +65,8 @@ const WorktreeSwitchStatus = Tool.make("worktree_switch_status", {
   .annotate(Tool.Title, "Get worktree switch status")
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 export const WorktreeSwitchToolkit = Toolkit.make(
   SwitchWorktree,

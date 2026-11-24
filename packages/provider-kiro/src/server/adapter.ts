@@ -40,6 +40,7 @@ import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/
 import type * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import type * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import { providerThreadEnvironment } from "@t3tools/provider-core/server/threadEnvironment";
 import {
   KIRO_AGENT_CONFIG_ID,
   KIRO_AUTOPILOT_CONFIG_ID,
@@ -543,7 +544,17 @@ function makeKiroAcpAdapterFlavor(options: KiroAdapterV2Options): AcpAdapterV2Fl
       return makeKiroAcpRuntime({
         ...runtimeInput,
         settings: options.settings,
-        environment: { ...options.environment, ...processEnvironment },
+        // Fork (DECISIONS 5.9): commands Kiro runs know their thread and T3 install.
+        environment: {
+          ...(input.threadId === undefined
+            ? options.environment
+            : providerThreadEnvironment(
+                { threadId: input.threadId, cwd: input.cwd },
+                options.environment,
+                input.t3Paths,
+              )),
+          ...processEnvironment,
+        },
       });
     });
   const stripSteeringNote = makeKiroSteeringNoteFilter();

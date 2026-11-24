@@ -7919,10 +7919,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           request.pipe(
             Effect.catchIf(isCodexThreadNotFoundError, () =>
               Effect.all([
+                ensureInitialized.pipe(
+                  Effect.andThen(readCodexThreadHistoryMetadata(client.raw, threadId)),
+                ),
                 readMcpSession(providerThread.appThreadId),
                 readStdioMcpServers(undefined),
               ]).pipe(
-                Effect.flatMap(([mcpSession, stdioMcpServers]) =>
+                Effect.flatMap(([{ cwd }, mcpSession, stdioMcpServers]) =>
                   resumeNativeThread(threadId, {
                     excludeTurns: true,
                     ...codexThreadRuntimeParams({
@@ -7930,6 +7933,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       mcpSession,
                       stdioMcpServers,
                       t3Paths: adapterOptions.t3Paths,
+                      // Fork: the saved cwd still sets the worktree variable.
+                      environmentCwd: cwd,
                     }),
                   }),
                 ),

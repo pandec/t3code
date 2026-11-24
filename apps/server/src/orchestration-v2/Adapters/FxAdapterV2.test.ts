@@ -17,6 +17,7 @@ import { FxSettings } from "@t3tools/provider-fx/settings";
 import { FX_DRIVER_KIND, makeFxAdapterV2 } from "@t3tools/provider-fx/testing";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { ProviderAdapterV2RuntimePolicy } from "@t3tools/provider-core/server/ProviderAdapter";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
@@ -27,6 +28,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -532,3 +534,44 @@ describe("FxAdapterV2", () => {
     }).pipe(Effect.provide(testLayer)),
   );
 });
+
+// Fork (DECISIONS 5.9): commands the agent runs know their thread and T3 install.
+it.effect("launches fx with the thread's self-addressing environment", () =>
+  Effect.gen(function* () {
+    const launches: Array<Record<string, unknown> | undefined> = [];
+    const childProcessSpawner = ChildProcessSpawner.make((command) => {
+      if (command._tag === "StandardCommand") launches.push(command.options.env);
+      return Effect.fail(
+        PlatformError.systemError({ _tag: "NotFound", module: "fx-env-test", method: "spawn" }),
+      );
+    });
+    const instanceId = ProviderInstanceId.make("fx-env-test");
+    const adapter = yield* makeFxAdapterV2({
+      instanceId,
+      settings: ENABLED_FX_SETTINGS,
+      environment: { T3_INSTANCE: "kept", T3CODE_TURN_ID: "stale" },
+      selfInvocation: yield* resolveSelfInvocation(),
+    }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner));
+    yield* adapter
+      .openSession({
+        threadId: ThreadId.make("thread-fx-env"),
+        providerSessionId: ProviderSessionId.make("provider-session-fx-env"),
+        modelSelection: { instanceId, model: "default" },
+        runtimePolicy: ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        }),
+      })
+      .pipe(Effect.scoped, Effect.ignore);
+    const host = yield* ProviderHost.ProviderHost;
+    const agent = launches.find((environment) => environment?.T3_INSTANCE === "kept");
+    assert.deepInclude(agent, {
+      T3CODE_THREAD_ID: "thread-fx-env",
+      T3CODE_HOME: host.paths.baseDir,
+      T3CODE_STATE_DIR: host.paths.stateDir,
+      T3CODE_WORKTREE_PATH: process.cwd(),
+    });
+    assert.notProperty(agent, "T3CODE_TURN_ID");
+  }).pipe(Effect.provide(testLayer)),
+);

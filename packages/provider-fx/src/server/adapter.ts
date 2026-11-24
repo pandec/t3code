@@ -14,6 +14,7 @@ import type * as EffectAcpErrors from "effect-acp/errors";
 
 import type * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import type * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import { providerThreadEnvironment } from "@t3tools/provider-core/server/threadEnvironment";
 import { makeAcpNativeLoggerFactory } from "@t3tools/provider-acp/server/nativeLogging";
 import {
   applyFxEffortDefault,
@@ -201,7 +202,17 @@ function makeFxAcpAdapterFlavor(options: FxAdapterV2Options): AcpAdapterV2Flavor
       makeFxAcpRuntime({
         ...input,
         fxSettings: options.settings,
-        environment: { ...options.environment, ...processEnvironment },
+        // Fork (DECISIONS 5.9): commands fx runs know their thread and T3 install.
+        environment: {
+          ...(input.threadId === undefined
+            ? options.environment
+            : providerThreadEnvironment(
+                { threadId: input.threadId, cwd: input.cwd },
+                options.environment,
+                input.t3Paths,
+              )),
+          ...processEnvironment,
+        },
       }));
   // A runtime serves one folder; "Default" resolves there.
   const runtimeCwds = new WeakMap<AcpSessionRuntime.AcpSessionRuntime["Service"], string>();

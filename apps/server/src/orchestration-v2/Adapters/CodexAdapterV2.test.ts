@@ -1653,6 +1653,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     promptSuggestions: Effect.Effect<boolean> = Effect.succeed(false),
     onNotification: (method: string) => Effect.Effect<void> = () => Effect.void,
     models?: CodexAdapterV2.CodexAdapterV2Options["models"],
+    t3Paths?: CodexAdapterV2.CodexAdapterV2Options["t3Paths"],
   ) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1717,6 +1718,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         clientFactory,
         ...(onUsageLimits ? { onUsageLimits } : {}),
         ...(models ? { models } : {}),
+        ...(t3Paths ? { t3Paths } : {}),
         digest: yield* Digest.Digest,
         fileSystem,
         idAllocator,
@@ -9029,6 +9031,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           ],
         };
 
+        // The T3 path variables are asserted on the captured resume below.
+        const t3PathKeys = ["T3CODE_HOME", "T3CODE_STATE_DIR", "T3CODE_WORKTREE_PATH"].map(
+          (name) => `shell_environment_policy.set.${name}`,
+        );
         const transcript = makeCodexReplayTranscript({
           scenario,
           entries: [
@@ -9059,9 +9065,32 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             },
             {
               type: "expect_outbound",
-              label: "resume unloaded native thread",
+              label: "read the unloaded thread's saved cwd",
               frame: {
                 id: 4,
+                method: "thread/read",
+                params: { threadId: nativeThreadId, includeTurns: false },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "saved cwd",
+              frame: {
+                id: 4,
+                result: {
+                  thread: {
+                    id: nativeThreadId,
+                    status: { type: "notLoaded" },
+                    cwd: "/workspace/saved-thread",
+                  },
+                },
+              },
+            },
+            {
+              type: "expect_outbound",
+              label: "resume unloaded native thread",
+              frame: {
+                id: 5,
                 method: "thread/resume",
                 params: {
                   threadId: nativeThreadId,
@@ -9074,7 +9103,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               type: "emit_inbound",
               label: "native thread resumed",
               frame: {
-                id: 4,
+                id: 5,
                 result: {
                   thread: { id: nativeThreadId, updatedAt: 1782622450 },
                 },
@@ -9084,7 +9113,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               type: "expect_outbound",
               label: "retry MCP resource read",
               frame: {
-                id: 5,
+                id: 6,
                 method: "mcpServer/resource/read",
                 params: {
                   threadId: nativeThreadId,
@@ -9096,16 +9125,26 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             {
               type: "emit_inbound",
               label: "MCP resource read succeeds",
-              frame: { id: 5, result: resourceResult },
+              frame: { id: 6, result: resourceResult },
             },
           ],
         });
 
         const resumeParams: Array<unknown> = [];
-        const harness = yield* makeCodexReplayHarness(transcript, undefined, (method, params) =>
-          Effect.sync(() => {
-            if (method === "thread/resume") resumeParams.push(params);
-          }),
+        const harness = yield* makeCodexReplayHarness(
+          { ...transcript, metadata: { recorderThreadConfigKeys: t3PathKeys } },
+          undefined,
+          (method, params) =>
+            Effect.sync(() => {
+              if (method === "thread/resume") resumeParams.push(params);
+            }),
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          { baseDir: "/t3", stateDir: "/t3/userdata" },
         );
         const mcpApps = harness.runtime.mcpApps;
         assert.ok(mcpApps, "Codex runtime should expose MCP apps");
@@ -9123,6 +9162,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.equal(resumeParams.length, 1);
         assert.ok(!Predicate.hasProperty(resumeParams[0], "cwd"), "resume must not send a cwd");
         assert.ok(!Predicate.hasProperty(resumeParams[0], "model"), "resume must not send a model");
+        // Fork: the saved cwd still names the thread's worktree for its commands.
+        assert.deepInclude(Reflect.get(resumeParams[0] as object, "config"), {
+          "shell_environment_policy.set.T3CODE_WORKTREE_PATH": "/workspace/saved-thread",
+        });
       }).pipe(
         Effect.provide(
           Layer.mergeAll(

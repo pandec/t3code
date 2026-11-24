@@ -28,8 +28,7 @@ export const WorktreeSwitchToolkitHandlersLive = McpToolAccess.toLayer(WorktreeS
       return yield* scheduler.cancel({ threadId: thread.id }).pipe(Effect.mapError(failure));
     }),
   ),
-  // A read: the handler still requires owning the thread.
-  worktree_switch_status: McpToolAccess.reads(() =>
+  worktree_switch_status: McpToolAccess.readsAsCaller(() =>
     Effect.gen(function* () {
       const thread = yield* readOwnedCaller();
       const scheduler = yield* ThreadWorktreeSwitchScheduler.ThreadWorktreeSwitchScheduler;

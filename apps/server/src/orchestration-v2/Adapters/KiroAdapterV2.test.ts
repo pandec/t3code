@@ -28,6 +28,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -38,6 +39,7 @@ import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import {
   ProviderAdapterTurnStartError,
   type ProviderAdapterV2Error,
@@ -1468,3 +1470,44 @@ describe("Kiro permission policy", () => {
     );
   });
 });
+
+// Fork (DECISIONS 5.9): commands the agent runs know their thread and T3 install.
+it.effect("launches kiro with the thread's self-addressing environment", () =>
+  Effect.gen(function* () {
+    const launches: Array<Record<string, unknown> | undefined> = [];
+    const childProcessSpawner = ChildProcessSpawner.make((command) => {
+      if (command._tag === "StandardCommand") launches.push(command.options.env);
+      return Effect.fail(
+        PlatformError.systemError({ _tag: "NotFound", module: "kiro-env-test", method: "spawn" }),
+      );
+    });
+    const instanceId = ProviderInstanceId.make("kiro-env-test");
+    const adapter = yield* makeKiroAdapterV2({
+      instanceId,
+      settings: ENABLED_KIRO_SETTINGS,
+      environment: { T3_INSTANCE: "kept", T3CODE_TURN_ID: "stale" },
+      selfInvocation: yield* resolveSelfInvocation(),
+    }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner));
+    yield* adapter
+      .openSession({
+        threadId: ThreadId.make("thread-kiro-env"),
+        providerSessionId: ProviderSessionId.make("provider-session-kiro-env"),
+        modelSelection: { instanceId, model: "default" },
+        runtimePolicy: ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        }),
+      })
+      .pipe(Effect.scoped, Effect.ignore);
+    const host = yield* ProviderHost.ProviderHost;
+    const agent = launches.find((environment) => environment?.T3_INSTANCE === "kept");
+    assert.deepInclude(agent, {
+      T3CODE_THREAD_ID: "thread-kiro-env",
+      T3CODE_HOME: host.paths.baseDir,
+      T3CODE_STATE_DIR: host.paths.stateDir,
+      T3CODE_WORKTREE_PATH: process.cwd(),
+    });
+    assert.notProperty(agent, "T3CODE_TURN_ID");
+  }).pipe(Effect.provide(testLayer)),
+);

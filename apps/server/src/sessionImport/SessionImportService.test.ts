@@ -431,7 +431,7 @@ it.layer(runlessFork.layer)("SessionImportService runless fork", (it) => {
 });
 
 it.layer(makeHarness().layer)("SessionImportService runless fork modes", (it) => {
-  it.effect("keeps the source thread's runtime and interaction modes", () =>
+  it.effect("keeps the source thread's modes and custom group, and records it as the parent", () =>
     Effect.gen(function* () {
       yield* createProject;
       const service = yield* SessionImportService.SessionImportService;
@@ -461,6 +461,13 @@ it.layer(makeHarness().layer)("SessionImportService runless fork modes", (it) =>
             occurredAt: source.updatedAt,
             payload: { ...source, runtimeMode: "approval-required", interactionMode: "plan" },
           },
+          {
+            id: EventId.make("test:custom-group"),
+            type: "thread.custom-group-set",
+            threadId: imported.threadId,
+            occurredAt: source.updatedAt,
+            payload: { customGroupId: "group-parser" },
+          },
         ],
       });
 
@@ -468,6 +475,14 @@ it.layer(makeHarness().layer)("SessionImportService runless fork modes", (it) =>
       const fork = (yield* activeNativeId(forked.threadId)).records.thread;
       assert.equal(fork.runtimeMode, "approval-required");
       assert.equal(fork.interactionMode, "plan");
+      // Like `thread.fork`: merge-back needs the parent link.
+      assert.deepEqual(fork.lineage, {
+        parentThreadId: imported.threadId,
+        relationshipToParent: "fork",
+        rootThreadId: imported.threadId,
+      });
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      assert.equal(yield* projections.getThreadCustomGroupId(forked.threadId), "group-parser");
     }),
   );
 });

@@ -203,18 +203,10 @@ it.effect("acts for an owning thread between runs but never for a client outside
       thread: undefined,
       client: { sessionId: "session", label: "Claude Code", access: "full-access" },
     };
-    // Outside clients are not offered the thread-bound tools; the status read refuses them.
+    // Outside clients are not offered the thread-bound tools.
     for (const [name, args] of switchTools) {
-      if (name === "worktree_switch_status") {
-        const refused = yield* callAs(outside, name, args);
-        expect(declaredFailure(refused)).toMatchObject({
-          _tag: "OrchestratorMcpFailure",
-          code: "thread_credential_required",
-        });
-      } else {
-        const hidden = yield* callAs(outside, name, args).pipe(Effect.flip);
-        expect(hidden.message).toContain(`Tool '${name}' not found`);
-      }
+      const hidden = yield* callAs(outside, name, args).pipe(Effect.flip);
+      expect(hidden.message).toContain(`Tool '${name}' not found`);
     }
     expect(requested).toHaveLength(1);
   }).pipe(Effect.scoped, Effect.provide(makeLayer("codex", requested, { activeRunId: null })));
