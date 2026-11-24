@@ -214,6 +214,18 @@ const make = Effect.gen(function* () {
           OR status IN ('pending', 'running')
         )
     `;
+  /** The same check without waiting, under the reservation: a sharer may have reopened since. */
+  const stopBlockerNow = (threadId: ThreadId, worktreePath: string) =>
+    sharingArchivedThreadIds(threadId, worktreePath).pipe(
+      Effect.flatMap(({ sideChats, others }) => unsettledStops([threadId, ...sideChats], others)),
+      Effect.map((rows) =>
+        rows.length === 0
+          ? null
+          : rows.every((row) => row.status === "failed")
+            ? WORKTREE_KEPT_DETAIL.sessionStopFailed
+            : WORKTREE_KEPT_DETAIL.sessionStillStopping,
+      ),
+    );
   /** Why the worktree must be kept while those stops are unsettled, or null once they all ran. */
   const lifecycleStopBlocker = (threadId: ThreadId, worktreePath: string) =>
     sharingArchivedThreadIds(threadId, worktreePath).pipe(
@@ -256,7 +268,9 @@ const make = Effect.gen(function* () {
             return WORKTREE_KEPT_DETAIL.reopened;
           }
           if (!(yield* fs.exists(input.worktreePath))) return null;
-          const reason = yield* structuralBlocker(input.threadId, input.worktreePath);
+          const reason =
+            (yield* structuralBlocker(input.threadId, input.worktreePath)) ??
+            (yield* stopBlockerNow(input.threadId, input.worktreePath));
           if (reason !== null) return reason;
           return yield* git
             .removeWorktree({ cwd: projectRoot, path: input.worktreePath, force: false })

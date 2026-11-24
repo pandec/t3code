@@ -17506,6 +17506,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const withArchiveRemovalClaim = Effect.fn("Orchestrator.withArchiveRemovalClaim")(function* (
     command: OrchestrationV2ServerCommand,
     effect: Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error>,
+    sideChatIds: ReadonlyArray<ThreadId> = [],
   ): Effect.fn.Return<OrchestratorV2DispatchResult, OrchestratorV2Error> {
     const schedulesSwitch = command.type === "thread.worktree-switch.schedule";
     const reopens =
@@ -17524,10 +17525,27 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             Effect.orElseSucceed(() => null),
           )
         : yield* adoptedCheckout(command);
-    if (claimPath === null || claimPath === undefined) return yield* effect;
+    // A reopen also reopens the archived side chats it cascades to, in their own checkouts.
+    const sideChatPaths = reopens
+      ? yield* Effect.forEach(sideChatIds, (threadId) =>
+          findThread(threadId).pipe(
+            Effect.map((thread) =>
+              thread?.archivedAt == null ? null : (thread.worktreePath ?? null),
+            ),
+            Effect.orElseSucceed(() => null),
+          ),
+        )
+      : [];
+    const claimPaths = [
+      ...new Set([claimPath, ...sideChatPaths].filter((candidate) => candidate != null)),
+    ];
+    if (claimPaths.length === 0) return yield* effect;
     return yield* Effect.scoped(
       Effect.gen(function* () {
-        const claimed = yield* reserveWorkspace(claimPath, "claim").pipe(
+        const claimed = yield* Effect.forEach(claimPaths, (claimPath) =>
+          reserveWorkspace(claimPath, "claim"),
+        ).pipe(
+          Effect.map((results) => results.every(Boolean)),
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           Effect.provideService(Path.Path, path),
         );
@@ -17573,7 +17591,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   // dispatchWithReceiptEffect owns the dispatch span; this wrapper selects the thread locks.
   const dispatchWithReceipt = Effect.fnUntraced(function* (command: OrchestrationV2ServerCommand) {
     const dispatchWith = (sideChatIds?: ReadonlyArray<ThreadId>) =>
-      withArchiveRemovalClaim(command, dispatchWithReceiptEffect(command, sideChatIds));
+      withArchiveRemovalClaim(
+        command,
+        dispatchWithReceiptEffect(command, sideChatIds),
+        sideChatIds,
+      );
     const dispatch = threadDispatch.withLock(commandThreadId(command), dispatchWith());
     // A fork holds its source's lock, so a source deletion and its fork never interleave. A
     // parent's lock comes before its side chats' locks. A side chat fork from a side chat or a
