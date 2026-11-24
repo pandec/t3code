@@ -45,7 +45,10 @@ import {
   focusOtherThreadPane,
   useThreadSplitStore,
 } from "~/components/thread-split/threadSplitStore";
-import { openThreadInActivePane } from "~/components/thread-split/threadOpenTarget";
+import {
+  openDraftInActivePane,
+  openThreadInActivePane,
+} from "~/components/thread-split/threadOpenTarget";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { hasOpenArchiveUndoBlockingLayer } from "../archiveUndo";
 import {
@@ -185,9 +188,9 @@ function ChatRouteGlobalShortcuts() {
       openThread: (target) => {
         useThreadSelectionStore.getState().clearSelection();
         if (target.kind === "draft") {
-          const split = useThreadSplitStore.getState();
-          if (split.splitMounted && split.activePaneId === "secondary") split.closeSplit();
-          void router.navigate({ to: "/draft/$draftId", params: { draftId: target.draftId } });
+          void openDraftInActivePane(() =>
+            router.navigate({ to: "/draft/$draftId", params: { draftId: target.draftId } }),
+          );
           return;
         }
         const route = readRouteTarget();

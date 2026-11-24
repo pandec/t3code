@@ -87,7 +87,12 @@ import * as ThreadUndo from "@t3tools/client-runtime/state/thread-undo";
 import { showThreadUndoNotice } from "./showThreadUndoNotice";
 import { useAtomCommand } from "../state/use-atom-command";
 import { readEmptyNewThreadDraftId } from "../archiveUndo";
-import { foldSplitForParkedThread } from "../components/thread-split/threadSplitStore";
+import { openThreadInActivePane } from "../components/thread-split/threadOpenTarget";
+import {
+  foldSplitForParkedThread,
+  type ThreadPaneId,
+  useThreadSplitStore,
+} from "../components/thread-split/threadSplitStore";
 import { newThreadId } from "../lib/utils";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
@@ -1438,8 +1443,11 @@ export function useThreadActions() {
     return deleteThread(target);
   };
 
-  /** Forks the whole conversation into a new thread and opens it. */
-  const forkThread = async (target: ScopedThreadRef) => {
+  /**
+   * Forks the whole conversation into a new thread and opens it in `pane` (default: the
+   * active one), unless the reader navigated while the copy was on its way.
+   */
+  const forkThread = async (target: ScopedThreadRef, opts: { pane?: ThreadPaneId } = {}) => {
     const threadKey = scopedThreadKey(target);
     // Interrupted, not a plain failure: callers treat interrupts as silent
     // no-ops, which is right for a duplicate click.
@@ -1457,6 +1465,10 @@ export function useThreadActions() {
         ),
       );
     }
+    const startedSplit = useThreadSplitStore.getState();
+    const pane = opts.pane ?? startedSplit.activePaneId;
+    const startedHref = router.state.location.href;
+    const startedSecondaryRef = startedSplit.secondaryRef;
     const run = async () => {
       let targetThreadId = newThreadId();
       if (forkTarget.type === "run") {
@@ -1485,11 +1497,24 @@ export function useThreadActions() {
           ),
         );
       }
-      const navigation = await settlePromise(() =>
-        router.navigate({
-          to: "/$environmentId/$threadId",
-          params: buildThreadRouteParams(targetThreadRef),
-        }),
+      if (
+        router.state.location.href !== startedHref ||
+        useThreadSplitStore.getState().secondaryRef !== startedSecondaryRef
+      ) {
+        return AsyncResult.success(targetThreadId);
+      }
+      const navigation = await settlePromise(
+        async () =>
+          openThreadInActivePane({
+            targetRef: targetThreadRef,
+            routeThreadRef: getCurrentRouteThreadRef(),
+            paneOverride: pane,
+            navigateToPrimary: () =>
+              router.navigate({
+                to: "/$environmentId/$threadId",
+                params: buildThreadRouteParams(targetThreadRef),
+              }),
+          }).completion,
       );
       return navigation._tag === "Failure" ? navigation : AsyncResult.success(targetThreadId);
     };

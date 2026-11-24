@@ -358,12 +358,10 @@ import {
   capturePaletteOwnerPane,
   focusActiveThreadPane,
   focusOtherThreadPane,
-  paletteOwnerPane,
-  requestThreadPaneFocus,
   THREAD_SPLIT_MEDIA_QUERY,
   useThreadSplitStore,
 } from "./thread-split/threadSplitStore";
-import { openThreadInActivePane } from "./thread-split/threadOpenTarget";
+import { openThreadFromPalette } from "./thread-split/threadOpenTarget";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import {
   isPickableProjectMember,
@@ -698,6 +696,10 @@ function OpenCommandPaletteDialog(props: {
   const nowMinute = useNowMinute();
   const renderNow = new Date(`${nowMinute}:00.000Z`);
   const snoozeShortcutUntilDone = useClientSettings((s) => s.snoozeShortcutUntilDone);
+  // The sidebar's Working shelf and folder mode sort Active by activity, not order keys.
+  const activeKeyOrdered = useClientSettings(
+    (s) => !s.sidebarWorkingShelfEnabled && !s.boringSidebarEnabled,
+  );
   const paletteRouteTarget = useThreadRouteTarget();
   const projects = useProjects();
   const accentTint = useAccentTintSettings();
@@ -1060,6 +1062,14 @@ function OpenCommandPaletteDialog(props: {
     [browseNavigation],
   );
 
+  const openThreadFromPaletteRow = (targetRef: ScopedThreadRef) =>
+    openThreadFromPalette({
+      targetRef,
+      routeThreadRef,
+      navigateToPrimary: () =>
+        navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(targetRef) }),
+    });
+
   const openProjectFromSearch = async (project: (typeof projects)[number]) => {
     const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
     const groupedProjectKeys = group
@@ -1089,13 +1099,11 @@ function OpenCommandPaletteDialog(props: {
           clientSettings.sidebarThreadSortOrder,
         );
     if (latestThread) {
-      await navigate({
-        to: "/$environmentId/$threadId",
-        params: buildThreadRouteParams(scopeThreadRef(latestThread.environmentId, latestThread.id)),
-      });
+      await openThreadFromPaletteRow(scopeThreadRef(latestThread.environmentId, latestThread.id));
       return;
     }
 
+    // No conversation: an explicit draft on the primary route.
     await handleNewThread(scopeProjectRef(project.environmentId, project.id));
   };
 
@@ -1656,8 +1664,8 @@ function OpenCommandPaletteDialog(props: {
         shortcutCommand: "chat.newLocal",
         run: async () => {
           await startNewThreadFromContext({
-            activeDraftThread,
-            activeThread: activeThread ?? undefined,
+            activeDraftThread: paneActiveDraftThread,
+            activeThread: paneActiveThread ?? undefined,
             defaultProjectRef,
             handleNewThread,
           });
@@ -1835,7 +1843,7 @@ function OpenCommandPaletteDialog(props: {
             return;
           case "fork":
             await reportThreadActionFailure("Failed to fork conversation", () =>
-              forkThread(threadRef),
+              forkThread(threadRef, { pane: threadActionPane }),
             );
             return;
         }
@@ -1972,6 +1980,7 @@ function OpenCommandPaletteDialog(props: {
     threadRef: currentThreadRef,
     groups: customGroupCatalog.groups,
     now: renderNow.toISOString(),
+    activeKeyOrdered,
     canReorder: canReorderSection,
   });
   if (moveToTopPlan !== null && currentThreadRef !== null) {
@@ -1995,6 +2004,7 @@ function OpenCommandPaletteDialog(props: {
           groups: customGroupCatalog.groups,
           // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
           now: new Date().toISOString(),
+          activeKeyOrdered,
           canReorder: readEnvironmentServerConfigLoaded,
         });
         if (plan === null || plan.disabledReason) return;
@@ -2802,21 +2812,8 @@ function OpenCommandPaletteDialog(props: {
                 ),
                 query: linkedThreadSearch.query,
                 icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
-                runThread: async (thread) => {
-                  const targetRef = scopeThreadRef(thread.environmentId, thread.id);
-                  const { plan, completion } = openThreadInActivePane({
-                    targetRef,
-                    routeThreadRef,
-                    paneOverride: paletteOwnerPane(),
-                    navigateToPrimary: () =>
-                      navigate({
-                        to: "/$environmentId/$threadId",
-                        params: buildThreadRouteParams(targetRef),
-                      }),
-                  });
-                  if (plan.kind === "open-secondary") requestThreadPaneFocus("secondary");
-                  if (completion) await completion;
-                },
+                runThread: (thread) =>
+                  openThreadFromPaletteRow(scopeThreadRef(thread.environmentId, thread.id)),
               },
               messages,
             )
@@ -2908,12 +2905,7 @@ function OpenCommandPaletteDialog(props: {
         clientSettings.sidebarThreadSortOrder,
       );
       if (latestThread && latestThread.settledOverride !== "settled") {
-        await navigate({
-          to: "/$environmentId/$threadId",
-          params: buildThreadRouteParams(
-            scopeThreadRef(latestThread.environmentId, latestThread.id),
-          ),
-        });
+        await openThreadFromPaletteRow(scopeThreadRef(latestThread.environmentId, latestThread.id));
       } else {
         const navigationResult = await settlePromise(() =>
           handleNewThread(scopeProjectRef(existing.environmentId, existing.id)),

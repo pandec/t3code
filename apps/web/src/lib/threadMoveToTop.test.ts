@@ -29,6 +29,7 @@ function row(id: string, overrides: Partial<Row> = {}): Row {
     activeOrderKey: null,
     hasPendingApprovals: false,
     hasPendingUserInput: false,
+    lineage: { rootThreadId: ThreadId.make(id), parentThreadId: null, relationshipToParent: null },
     ...overrides,
   };
 }
@@ -43,6 +44,7 @@ function plan(threads: readonly Row[], moved: Row, overrides: Partial<Input> = {
     threadRef: scopeThreadRef(moved.environmentId, moved.id),
     groups,
     now,
+    activeKeyOrdered: true,
     canReorder: () => true,
     ...overrides,
   });
@@ -157,6 +159,42 @@ describe("planThreadMoveToTop", () => {
     expect(plan(rows, moved)?.assignments).toHaveLength(1);
     expect(plan(rows, moved, { threadRef: null })).toBeNull();
     expect(plan(rows, row("draft"))).toBeNull();
+  });
+
+  it("offers no Active or group move where the sidebar sorts them by activity", () => {
+    const pinned = row("pinned", { pinnedAt: now, pinOrderKey: "t" });
+    const active = row("active", { activeOrderKey: "t" });
+    const grouped = row("grouped", { customGroupId: "research", activeOrderKey: "t" });
+    const rows = [row("first", { pinnedAt: now, pinOrderKey: "f" }), pinned, active, grouped];
+    expect(plan(rows, active, { activeKeyOrdered: false })).toBeNull();
+    expect(plan(rows, grouped, { activeKeyOrdered: false })).toBeNull();
+    expect(plan(rows, pinned, { activeKeyOrdered: false })?.assignments).toHaveLength(1);
+  });
+
+  it("ignores subagents and side chats for rank and rewrites, but reserves their keys", () => {
+    const parent = ThreadId.make("parent");
+    const subagent = row("subagent", {
+      activeOrderKey: "a",
+      lineage: { rootThreadId: parent, parentThreadId: parent, relationshipToParent: "subagent" },
+    });
+    const sideChat = row("side", {
+      lineage: {
+        rootThreadId: parent,
+        parentThreadId: parent,
+        relationshipToParent: null,
+        sideChat: true,
+      },
+    });
+    const moved = row("moved", { activeOrderKey: "f" });
+    const rows = [subagent, sideChat, moved, row("last", { activeOrderKey: "t" })];
+    expect(plan(rows, moved)).toMatchObject({ disabledReason: "Already at top" });
+    expect(plan(rows, subagent)).toBeNull();
+    const first = row("first");
+    const result = plan([...rows, first], moved)!;
+    expect(result.assignments.map(({ threadRef }) => scopedThreadKey(threadRef))).not.toContain(
+      key(subagent),
+    );
+    expect(result.assignments.every(({ orderKey }) => orderKey !== "a")).toBe(true);
   });
 
   it("does not write for an already-first or only thread", () => {

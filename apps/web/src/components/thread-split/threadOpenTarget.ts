@@ -9,7 +9,12 @@ import type { ScopedThreadRef } from "@t3tools/contracts";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 
 import type { PendingPaneSwap, ThreadPaneId } from "./threadSplitStore";
-import { activateThreadPane, useThreadSplitStore } from "./threadSplitStore";
+import {
+  activateThreadPane,
+  paletteOwnerPane,
+  requestThreadPaneFocus,
+  useThreadSplitStore,
+} from "./threadSplitStore";
 
 export type ThreadOpenPlan =
   | { kind: "navigate-primary" }
@@ -94,6 +99,34 @@ export function openThreadInActivePane(input: {
       activateThreadPane(plan.paneId);
       return { plan, completion: null };
   }
+}
+
+/**
+ * A command palette pick: lands in the pane the palette opened from, and bounces the
+ * closing palette's focus restore into a newly opened secondary. Resolves with the
+ * primary navigation, so rejections reach the palette's run-command error handling.
+ */
+export async function openThreadFromPalette(input: {
+  targetRef: ScopedThreadRef;
+  routeThreadRef: ScopedThreadRef | null;
+  navigateToPrimary: () => Promise<unknown>;
+}): Promise<void> {
+  const { plan, completion } = openThreadInActivePane({
+    ...input,
+    paneOverride: paletteOwnerPane(),
+  });
+  if (plan.kind === "open-secondary") requestThreadPaneFocus("secondary");
+  if (completion) await completion;
+}
+
+/**
+ * A draft lives only on the primary route, so a pick from a focused secondary closes the
+ * split before navigating: the draft opens where the user is working.
+ */
+export function openDraftInActivePane(navigateToDraft: () => Promise<unknown>): Promise<unknown> {
+  const split = useThreadSplitStore.getState();
+  if (split.splitMounted && split.activePaneId === "secondary") split.closeSplit();
+  return navigateToDraft();
 }
 
 /**

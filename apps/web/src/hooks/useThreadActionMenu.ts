@@ -60,6 +60,7 @@ import { namedClipboardTarget, useCopyToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
 import { useClientSettings } from "./useSettings";
 import { canTurnThreadIntoProject, useThreadActions } from "./useThreadActions";
+import { useThreadPaneId } from "../components/thread-split/threadPaneContext";
 
 function failureToast(title: string, error: unknown) {
   toastManager.add(
@@ -80,6 +81,7 @@ export function useThreadActionMenu(input: {
 }) {
   const { threadRef, projectCwd, onStartRename, onFind, canShareWithGuest } = input;
   const router = useRouter();
+  const paneId = useThreadPaneId();
   const projects = useProjects();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
@@ -299,7 +301,9 @@ export function useThreadActionMenu(input: {
           markThreadUnread(threadRef);
           return;
         case "fork":
-          await reportFailure("Failed to fork conversation", () => forkThread(threadRef));
+          await reportFailure("Failed to fork conversation", () =>
+            forkThread(threadRef, { pane: paneId }),
+          );
           return;
         case "share-guest":
           openGuestShareDialog(threadRef);

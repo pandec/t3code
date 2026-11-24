@@ -3,13 +3,19 @@ import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 
 import {
+  openDraftInActivePane,
+  openThreadFromPalette,
   openThreadInActivePane,
   planThreadOpen,
   readActivePaneThreadTarget,
   shouldCloseSplitForRoute,
   threadOpenHashRouteRef,
 } from "./threadOpenTarget";
-import { useThreadSplitStore, type PendingPaneSwap } from "./threadSplitStore";
+import {
+  capturePaletteOwnerPane,
+  useThreadSplitStore,
+  type PendingPaneSwap,
+} from "./threadSplitStore";
 
 const threadRef = (environmentId: string, threadId: string) => ({
   environmentId: EnvironmentId.make(environmentId),
@@ -202,6 +208,46 @@ describe("openThreadInActivePane", () => {
     });
     expect(opened.plan).toEqual({ kind: "open-secondary" });
     expect(opened.completion).toBeNull();
+  });
+});
+
+describe("openThreadFromPalette", () => {
+  it("opens in the pane the palette opened from, not the live one", async () => {
+    useThreadSplitStore.getState().openSecondaryThread(SECONDARY_REF);
+    useThreadSplitStore.getState().setSplitMounted(true);
+    capturePaletteOwnerPane();
+    useThreadSplitStore.getState().setActivePane("primary");
+
+    let navigated = 0;
+    await openThreadFromPalette({
+      targetRef: OTHER_REF,
+      routeThreadRef: ROUTE_REF,
+      navigateToPrimary: async () => {
+        navigated += 1;
+      },
+    });
+    expect(navigated).toBe(0);
+    expect(useThreadSplitStore.getState().secondaryRef).toEqual(OTHER_REF);
+  });
+});
+
+describe("openDraftInActivePane", () => {
+  it("closes a focused secondary, and keeps the split when the primary is focused", async () => {
+    useThreadSplitStore.getState().openSecondaryThread(SECONDARY_REF);
+    useThreadSplitStore.getState().setSplitMounted(true);
+    useThreadSplitStore.getState().setActivePane("primary");
+    let navigated = 0;
+    const navigateToDraft = async () => {
+      navigated += 1;
+    };
+
+    await openDraftInActivePane(navigateToDraft);
+    expect(useThreadSplitStore.getState().secondaryRef).toEqual(SECONDARY_REF);
+
+    useThreadSplitStore.getState().setActivePane("secondary");
+    await openDraftInActivePane(navigateToDraft);
+    expect(useThreadSplitStore.getState().secondaryRef).toBeNull();
+    expect(navigated).toBe(2);
   });
 });
 

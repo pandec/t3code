@@ -37,8 +37,7 @@ import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { formatRelativeTimeLabel } from "../timestampFormat";
-import { openThreadInActivePane } from "./thread-split/threadOpenTarget";
-import { paletteOwnerPane, requestThreadPaneFocus } from "./thread-split/threadSplitStore";
+import { openThreadFromPalette } from "./thread-split/threadOpenTarget";
 import { buildThreadActionItems, ITEM_ICON_CLASS } from "./CommandPalette.logic";
 import { useEnvironmentLookups, useProjectLookups } from "./CommandPaletteLookups";
 import { ThreadCommandSubtitle } from "./ThreadCommandSubtitle";
@@ -199,24 +198,15 @@ export function useCommandPaletteThreadItems(input: {
           });
         }
         const targetRef = scopeThreadRef(thread.environmentId, thread.id);
-        const { plan, completion } = openThreadInActivePane({
+        await openThreadFromPalette({
           targetRef,
           routeThreadRef,
-          paneOverride: paletteOwnerPane(),
           navigateToPrimary: () =>
             navigate({
               to: "/$environmentId/$threadId",
               params: buildThreadRouteParams(targetRef),
             }),
         });
-        if (plan.kind === "open-secondary") {
-          // The closing palette restores focus to its trigger a beat later;
-          // the intent bounces that restore into the pane just opened.
-          requestThreadPaneFocus("secondary");
-        }
-        // Awaited so a navigation rejection still reaches the palette's
-        // run-command error handling, as it did before the split routing.
-        if (completion) await completion;
       },
     },
     messages,
