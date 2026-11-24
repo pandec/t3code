@@ -396,6 +396,30 @@ it.layer(TestLayer)("archive worktree removal", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("keeps the worktree when a side chat archived with it failed to stop", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const removal = yield* ArchiveWorktreeRemoval;
+      const { worktreePath } = yield* setup("feature/side-chat-stop-failed");
+      const sideChat = ThreadId.make("archived-side-chat");
+      fixture.otherThreads = [
+        {
+          id: sideChat,
+          projectId,
+          worktreePath,
+          archived: true,
+          lineage: { sideChat: true, parentThreadId: threadId },
+        },
+      ];
+      yield* seedSessionStop("failed", sideChat);
+      assert.equal(
+        yield* removal.remove({ threadId, worktreePath }),
+        WORKTREE_KEPT_DETAIL.sessionStopFailed,
+      );
+      assert.isTrue(yield* fs.exists(worktreePath));
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("needs a worktree to remove", () =>
     Effect.gen(function* () {
       const removal = yield* ArchiveWorktreeRemoval;

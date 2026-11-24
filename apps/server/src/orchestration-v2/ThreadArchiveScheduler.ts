@@ -312,7 +312,7 @@ export const make = Effect.gen(function* () {
       }
     }
     const snapshot = yield* threads
-      .getShellSnapshot({ threadIds: descendants, location: "active" })
+      .getShellSnapshot({ threadIds: [input.threadId, ...descendants], location: "active" })
       .pipe(
         Effect.mapError(
           (cause) =>
@@ -329,6 +329,9 @@ export const make = Effect.gen(function* () {
     for (const threadId of descendants.reverse()) {
       const thread = active.get(threadId);
       if (thread === undefined) continue;
+      // A side chat of an active thread follows its parent's archive (the orchestrator cascade).
+      const parentId = thread.lineage.parentThreadId;
+      if (thread.lineage.sideChat === true && parentId !== null && active.has(parentId)) continue;
       const result = yield* (input.authorizeDescendant?.(thread) ?? Effect.void).pipe(
         Effect.andThen(
           dispatch("schedule", thread.id, {

@@ -3620,6 +3620,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const requeueUnreadSteers = Effect.fn("Orchestrator.requeueUnreadSteers")(function* (
     threadId: ThreadId,
     runIds?: ReadonlyArray<RunId>,
+    options?: { readonly failOnDispatchError?: boolean },
   ) {
     const { turnItems } = yield* projectionStore.getThreadRecords(threadId, ["turnItems"], {
       turnItemTypes: ["user_message"],
@@ -3740,11 +3741,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(message.linkedSender === undefined ? {} : { linkedSender: message.linkedSender }),
       }).pipe(
         Effect.catchCause((cause) =>
-          Effect.logWarning("Failed to requeue an unread steer", {
-            threadId,
-            messageId: message.id,
-            cause,
-          }),
+          options?.failOnDispatchError === true
+            ? Effect.failCause(cause)
+            : Effect.logWarning("Failed to requeue an unread steer", {
+                threadId,
+                messageId: message.id,
+                cause,
+              }),
         ),
       );
     }
@@ -17245,7 +17248,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     // Fork: archive eligibility reads the thread after the ended run's unread steers are placed; a
     // user's requeued steer cancels a pending archive, and an archived thread would drop it.
     if (command.type === "thread.archive.schedule" || command.type === "thread.archive.execute") {
-      yield* mapDispatchError(command)(requeueUnreadSteers(command.threadId));
+      yield* mapDispatchError(command)(
+        requeueUnreadSteers(command.threadId, undefined, { failOnDispatchError: true }),
+      );
     }
 
     const plan = yield* dispatchOnce(command, sideChatIds).pipe(
@@ -17510,7 +17515,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ? command.targetPath
       : reopens
         ? yield* projectionStore.getThread(command.threadId).pipe(
-            Effect.map((thread) => worktreeRemovalRequest(thread)?.worktreePath),
+            // An archived thread without its own request may share another's pending removal.
+            Effect.map(
+              (thread) =>
+                worktreeRemovalRequest(thread)?.worktreePath ??
+                (thread.archivedAt === null ? null : thread.worktreePath),
+            ),
             Effect.orElseSucceed(() => null),
           )
         : yield* adoptedCheckout(command);

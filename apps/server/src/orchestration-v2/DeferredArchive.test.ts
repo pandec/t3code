@@ -923,6 +923,7 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
           name: string,
           parent: ThreadId,
           relationship: "fork" | "subagent",
+          sideChat = false,
         ) {
           const id = yield* createThread(name);
           const thread = yield* threadState(id);
@@ -944,6 +945,7 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
                     parentThreadId: parent,
                     rootThreadId: root,
                     relationshipToParent: relationship,
+                    ...(sideChat ? { sideChat: true } : {}),
                   },
                 },
               },
@@ -953,6 +955,8 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
           return id;
         });
         const finished = yield* child("tree-finished", root, "subagent");
+        // Follows the root's archive instead (the orchestrator cascade), so it is not listed.
+        yield* child("tree-side-chat", root, "fork", true);
         const bridge = yield* child("tree-bridge", root, "fork");
         const nested = yield* child("tree-nested", bridge, "subagent");
         const deletedBridge = yield* child("tree-deleted", root, "fork");
@@ -1306,7 +1310,8 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
         effects: [],
       });
       yield* scheduler.schedule({ threadId, afterTurn: true });
-      // The terminal-run listener skips reconcile commits, so the archive check goes first.
+      // handleRunUpdate's stream (Orchestrator.ts) skips `command:runtime-reconcile:` commits, so
+      // the archive check goes first.
       yield* eventSink.commitCommand({
         commandId: CommandId.make("command:runtime-reconcile:unread-steer"),
         threadId,
@@ -1597,14 +1602,29 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
         threadId,
       });
       const message = sendMessage(threadId, "remove-reserved", { type: "start_immediately" });
+      // An archived thread with no removal of its own may share the checkout being removed.
+      const sharer = yield* createThread("remove-reserved-sharer");
+      yield* orchestrator.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.make("remove-reserved-sharer-archive"),
+        threadId: sharer,
+      });
+      const sharerMessage = sendMessage(sharer, "remove-reserved-sharer", {
+        type: "start_immediately",
+      });
 
       yield* Effect.scoped(
         Effect.gen(function* () {
           assert.isTrue(
             yield* reserveWorkspace("/tmp/deferred-archive-remove-reserved", "removal"),
           );
+          assert.isTrue(
+            yield* reserveWorkspace("/tmp/deferred-archive-remove-reserved-sharer", "removal"),
+          );
           assert.equal((yield* Effect.flip(unarchive))._tag, "OrchestratorDispatchError");
           assert.equal((yield* Effect.flip(message))._tag, "OrchestratorDispatchError");
+          assert.equal((yield* Effect.flip(sharerMessage))._tag, "OrchestratorDispatchError");
+          assert.isNotNull((yield* threadState(sharer)).archivedAt);
           const thread = yield* threadState(threadId);
           assert.isNotNull(thread.archivedAt);
           assert.equal(thread.archiveRequest?.status, "pending");
@@ -1617,6 +1637,8 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
       assert.isNull(thread.archivedAt);
       assert.equal(thread.archiveRequest?.detail, ARCHIVE_CANCEL_DETAIL.unarchived);
       yield* message;
+      yield* sharerMessage;
+      assert.isNull((yield* threadState(sharer)).archivedAt);
     }),
   );
 

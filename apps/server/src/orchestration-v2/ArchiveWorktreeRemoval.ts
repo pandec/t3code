@@ -177,38 +177,48 @@ const make = Effect.gen(function* () {
     providePlatform,
   );
 
-  /** Other archived threads in the checkout; their archive stops may still be running there. */
+  /**
+   * Other archived threads in the checkout; their archive stops may still be running there. The
+   * thread's side chats, archived along with it, count as its own.
+   */
   const sharingArchivedThreadIds = Effect.fn("ArchiveWorktreeRemoval.sharingArchivedThreadIds")(
     function* (threadId: ThreadId, worktreePath: string) {
       const root = yield* canonicalWorkspacePath(worktreePath);
       const archived = yield* threads.getShellSnapshot({ location: "archive" });
-      const ids: Array<ThreadId> = [];
+      const sideChats: Array<ThreadId> = [];
+      const others: Array<ThreadId> = [];
       for (const thread of archived.archivedThreads) {
         if (thread.id === threadId || thread.worktreePath === null) continue;
-        if (contains(root, yield* canonicalWorkspacePath(thread.worktreePath))) ids.push(thread.id);
+        if (!contains(root, yield* canonicalWorkspacePath(thread.worktreePath))) continue;
+        const sideChat =
+          thread.lineage.sideChat === true && thread.lineage.parentThreadId === threadId;
+        (sideChat ? sideChats : others).push(thread.id);
       }
-      return ids;
+      return { sideChats, others };
     },
   );
 
   // No process may still run in the checkout when Git removes it; the archive's session and
-  // terminal stops run as outbox effects. Other archived threads' stops count only while in
-  // flight, so their failed stops do not block this archive.
-  const unsettledStops = (threadId: ThreadId, sharingThreadIds: ReadonlyArray<ThreadId>) =>
+  // terminal stops run as outbox effects, its side chats' included. Other archived threads' stops
+  // count only while in flight, so their failed stops do not block this archive.
+  const unsettledStops = (
+    ownThreadIds: ReadonlyArray<ThreadId>,
+    sharingThreadIds: ReadonlyArray<ThreadId>,
+  ) =>
     sql<{ readonly status: string }>`
       SELECT status FROM orchestration_v2_effect_outbox
-      WHERE thread_id IN ${sql.in([threadId, ...sharingThreadIds])}
+      WHERE thread_id IN ${sql.in([...ownThreadIds, ...sharingThreadIds])}
         AND effect_type IN ('provider-session.detach', 'terminal.cleanup')
         AND (
-          (thread_id = ${threadId} AND status NOT IN ('succeeded', 'cancelled'))
+          (thread_id IN ${sql.in(ownThreadIds)} AND status NOT IN ('succeeded', 'cancelled'))
           OR status IN ('pending', 'running')
         )
     `;
   /** Why the worktree must be kept while those stops are unsettled, or null once they all ran. */
   const lifecycleStopBlocker = (threadId: ThreadId, worktreePath: string) =>
     sharingArchivedThreadIds(threadId, worktreePath).pipe(
-      Effect.flatMap((sharingThreadIds) =>
-        unsettledStops(threadId, sharingThreadIds).pipe(
+      Effect.flatMap(({ sideChats, others }) =>
+        unsettledStops([threadId, ...sideChats], others).pipe(
           Effect.repeat({
             schedule: Schedule.spaced(STOP_POLL_INTERVAL),
             until: (rows) => rows.every((row) => row.status === "failed"),
