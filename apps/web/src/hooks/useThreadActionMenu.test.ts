@@ -39,6 +39,9 @@ vi.mock("react", () => ({
   useCallback: (callback: unknown) => callback,
   useMemo: (factory: () => unknown) => factory(),
 }));
+vi.mock("../components/thread-split/threadPaneContext", () => ({
+  useThreadPaneId: () => "primary",
+}));
 vi.mock("@tanstack/react-router", () => ({
   useRouter: () => ({ navigate: async () => recordEffect("project-settings") }),
 }));

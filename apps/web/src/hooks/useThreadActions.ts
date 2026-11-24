@@ -1469,6 +1469,7 @@ export function useThreadActions() {
     const pane = opts.pane ?? startedSplit.activePaneId;
     const startedHref = router.state.location.href;
     const startedSecondaryRef = startedSplit.secondaryRef;
+    const startedSplitMounted = startedSplit.splitMounted;
     const run = async () => {
       let targetThreadId = newThreadId();
       if (forkTarget.type === "run") {
@@ -1497,9 +1498,11 @@ export function useThreadActions() {
           ),
         );
       }
+      const split = useThreadSplitStore.getState();
       if (
         router.state.location.href !== startedHref ||
-        useThreadSplitStore.getState().secondaryRef !== startedSecondaryRef
+        split.secondaryRef !== startedSecondaryRef ||
+        split.splitMounted !== startedSplitMounted
       ) {
         return AsyncResult.success(targetThreadId);
       }

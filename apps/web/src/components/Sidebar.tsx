@@ -511,9 +511,11 @@ function routeThreadOnly(
 }
 
 // Fork: the split's secondary thread reveals like the route. Its state rides the
-// layout-owned route reveal, so drawer and Settings remounts keep it too.
+// layout-owned route reveal, so drawer and Settings remounts keep it; closing the
+// split forgets it, so reopening the same thread reveals again.
 type SidebarRevealState = SidebarRouteReveal & { secondary?: SidebarRouteReveal };
-function secondaryRouteReveal(reveal: SidebarRevealState): SidebarRouteReveal {
+function secondaryRouteReveal(reveal: SidebarRevealState, splitOpen: boolean): SidebarRouteReveal {
+  if (!splitOpen) reveal.secondary = { observedKey: null, pendingKey: null };
   return (reveal.secondary ??= { observedKey: null, pendingKey: null });
 }
 
@@ -1141,12 +1143,24 @@ function useSidebarThreads(input: {
     settledThreads.length + olderSettledShelf.unloadedCount(partition.visibleThreads);
   const visibleSettledThreads = (() => {
     const visible = listedSettledThreads.slice(0, settledVisibleCount);
-    for (const openKey of [routeRowThreadKey, secondaryRowThreadKey]) {
-      if (openKey === null || visible.some((thread) => threadShellKey(thread) === openKey)) {
-        continue;
-      }
-      const openThread = settledThreads.find((thread) => threadShellKey(thread) === openKey);
-      if (openThread !== undefined) visible.push(openThread);
+    if (
+      routeRowThreadKey !== null &&
+      !visible.some((thread) => threadShellKey(thread) === routeRowThreadKey)
+    ) {
+      const routeThread = settledThreads.find(
+        (thread) => threadShellKey(thread) === routeRowThreadKey,
+      );
+      if (routeThread !== undefined) visible.push(routeThread);
+    }
+    // Fork: the split's secondary thread keeps its row too.
+    if (
+      secondaryRowThreadKey !== null &&
+      !visible.some((thread) => threadShellKey(thread) === secondaryRowThreadKey)
+    ) {
+      const secondaryThread = settledThreads.find(
+        (thread) => threadShellKey(thread) === secondaryRowThreadKey,
+      );
+      if (secondaryThread !== undefined) visible.push(secondaryThread);
     }
     return visible.length === settledThreads.length ? settledThreads : visible;
   })();
@@ -1645,14 +1659,21 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRevealSta
   // navigation resolves through its redirect instead, and still reveals.
   const routeKeyInPlace = routeDraftThread?.promotedTo != null;
   const splitSecondaryKey = useSplitSecondaryThreadKey();
+  const splitOpen = useThreadSplitStore((state) => state.secondaryRef !== null);
   const splitSecondaryRef = useThreadSplitStore((state) =>
     state.splitMounted ? state.secondaryRef : null,
+  );
+  const focusedSecondaryRef = useThreadSplitStore((state) =>
+    state.splitMounted && state.activePaneId === "secondary" ? state.secondaryRef : null,
   );
   const secondaryRowThreadKey =
     splitSecondaryRef === null
       ? null
       : scopedThreadKey(resolveListedAncestorThreadRef(splitSecondaryRef, threads));
-  const secondaryReveal = secondaryRouteReveal(routeReveal);
+  // A secondary sharing the routed row (a side chat beside its parent) reveals through it.
+  const secondaryRevealKey =
+    secondaryRowThreadKey === routeRowThreadKey ? null : secondaryRowThreadKey;
+  const secondaryReveal = secondaryRouteReveal(routeReveal, splitOpen);
 
   const environmentMachineById = useEnvironmentMachines();
   const projectGroupsRef = useRef(projectGroups);
@@ -1706,7 +1727,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRevealSta
   // route's first frame already lists the row; its ref callback scrolls to it.
   const revealPendingKeys = [
     pendingSidebarRouteReveal(routeReveal, routeRowThreadKey, routeKeyInPlace),
-    pendingSidebarRouteReveal(secondaryReveal, secondaryRowThreadKey),
+    pendingSidebarRouteReveal(secondaryReveal, secondaryRevealKey),
   ];
   // Search results replace the thread list; the reveal waits for it to return.
   const revealThreads = isSearchingThreads
@@ -1769,7 +1790,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRevealSta
     updateSidebarProjectFilters,
   ]);
   const revealActiveRow = useActiveRowReveal(routeReveal, routeRowThreadKey, routeKeyInPlace);
-  const revealSecondaryRow = useActiveRowReveal(secondaryReveal, secondaryRowThreadKey);
+  const revealSecondaryRow = useActiveRowReveal(secondaryReveal, secondaryRevealKey);
   const projectIdsByEnvironment = filteredProjectIdsByEnvironment({
     environmentIds: environmentFilter.environmentIds,
     projects,
@@ -4037,7 +4058,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRevealSta
     threads,
   ]);
 
-  const showJumpHints = useThreadJumpHintsVisible(keybindings, routeThreadRef);
+  const showJumpHints = useThreadJumpHintsVisible(
+    keybindings,
+    focusedSecondaryRef ?? routeThreadRef,
+  );
   const draftJumpLabelById = showJumpHints
     ? new Map(
         listedDraftIds.flatMap((id) => {
