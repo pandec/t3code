@@ -780,7 +780,7 @@ export const make = Effect.gen(function* () {
         returnedSessions.set(request, sessions.add(record.sessionId));
       }
       const recordsByKey = new Map<string, UsageRecord>();
-      const expired = new Set<UsageRecord>();
+      const expired = new Set<string>();
       for (const record of cached?.provider === provider
         ? [...cached.records, ...cached.tailRecords]
         : []) {
@@ -790,14 +790,18 @@ export const make = Effect.gen(function* () {
             ? undefined
             : returnedSessions.get(requestOf(record));
         if (copiedSessions !== undefined && !copiedSessions.has(record.sessionId)) continue;
-        if (record.timestampMs < retentionCutoffMs) expired.add(record);
-        recordsByKey.set(keyOf(record), record);
+        const key = keyOf(record);
+        if (record.timestampMs < retentionCutoffMs) expired.add(key);
+        recordsByKey.set(key, record);
       }
       for (const record of file.records) {
-        recordsByKey.set(keyOf(record), record);
+        const key = keyOf(record);
+        expired.delete(key);
+        recordsByKey.set(key, record);
       }
       const saved = [...recordsByKey.values()];
-      const records = expired.size === 0 ? saved : saved.filter((record) => !expired.has(record));
+      const records =
+        expired.size === 0 ? saved : saved.filter((record) => !expired.has(keyOf(record)));
       if (records.length === saved.length) readerRetentionPrunes.delete(file.path);
       else readerRetentionPrunes.set(file.path, records);
       fileCache.set(file.path, {
@@ -1010,6 +1014,8 @@ export const make = Effect.gen(function* () {
   ) {
     // Shared by every source kind; identities are provider-scoped.
     const seenRootIdentities = new Set<string>();
+    // Prunes belong to the scan that computed them; a failed scan's must not apply under later settings.
+    readerRetentionPrunes.clear();
 
     const scans = Effect.forEach(
       scanReaders,
@@ -1417,7 +1423,9 @@ export const make = Effect.gen(function* () {
           if (settings.usageHistoryRetentionDays === currentSettings.usageHistoryRetentionDays) {
             for (const [filePath, records] of readerRetentionPrunes) {
               const entry = fileCache.get(filePath);
-              if (entry !== undefined) fileCache.set(filePath, { ...entry, records });
+              if (entry === undefined) continue;
+              fileCache.set(filePath, { ...entry, records });
+              cacheDirty = true;
             }
             const pruned = pruneScanCache(fileCache, retentionCutoffMs);
             if (pruned > 0) {
@@ -1434,7 +1442,6 @@ export const make = Effect.gen(function* () {
         Effect.catchCause((cause) =>
           Effect.logWarning("failed to read settings before pruning the usage cache", { cause }),
         ),
-        Effect.ensuring(Effect.sync(() => readerRetentionPrunes.clear())),
       );
 
     const aggregated = aggregator.finish();

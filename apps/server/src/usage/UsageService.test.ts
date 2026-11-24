@@ -2887,6 +2887,7 @@ describe("UsageService", () => {
           const insert = db.prepare("INSERT INTO message VALUES (?, 'session', ?)");
           for (const [id, created, output] of [
             ["old", "2026-07-31T10:00:00Z", 5],
+            ["kept", "2026-07-31T11:00:00Z", 11],
             ["new", "2026-08-02T10:00:00Z", 7],
           ] as const) {
             insert.run(
@@ -2906,7 +2907,7 @@ describe("UsageService", () => {
       yield* Effect.gen(function* () {
         const config = yield* ServerSettings.ServerSettingsService;
         const service = yield* UsageService.make;
-        assert.strictEqual(totalOutputTokens(yield* service.readSummary(WINDOW)), 12);
+        assert.strictEqual(totalOutputTokens(yield* service.readSummary(WINDOW)), 23);
         // The database stays; only the old row leaves it, so only the scan cache still holds it.
         yield* Effect.promise(async () => {
           const db = new NodeSqlite.DatabaseSync(database);
@@ -2916,13 +2917,15 @@ describe("UsageService", () => {
             db.close();
           }
         });
-        assert.strictEqual(totalOutputTokens(yield* service.readSummary(WINDOW)), 12);
+        assert.strictEqual(totalOutputTokens(yield* service.readSummary(WINDOW)), 23);
         yield* config.updateSettings({ usageHistoryRetentionDays: 1 });
-        assert.strictEqual(totalOutputTokens(yield* service.readSummary(WINDOW)), 7);
+        // A row the database still has counts in its window, however old; repeated scans agree.
+        assert.strictEqual(totalOutputTokens(yield* service.readSummary(WINDOW)), 18);
+        assert.strictEqual(totalOutputTokens(yield* service.readSummary(WINDOW)), 18);
         yield* service.awaitPersisted;
         yield* config.updateSettings({ usageHistoryRetentionDays: "unlimited" });
         const restarted = yield* UsageService.make;
-        assert.strictEqual(totalOutputTokens(yield* restarted.readSummary(WINDOW)), 7);
+        assert.strictEqual(totalOutputTokens(yield* restarted.readSummary(WINDOW)), 18);
       }).pipe(
         Effect.provide(
           layerService({ prefix: "usage-service-opencode-reader-retention", home, settings }),
