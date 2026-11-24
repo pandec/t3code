@@ -626,6 +626,8 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
 
   /** The settings every prepared session and the update schedule last matched. */
   let applied: string | undefined;
+  /** Saves whose work has not finished yet. */
+  let queuedRefreshes = 0;
 
   /** Matches every prepared session to the settings, then applies a download nothing has loaded. */
   const reconcile = Effect.fn("PreviewDashlane.reconcile")(function* (settings: BrowserSettings) {
@@ -643,19 +645,24 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
   ) => {
     const settings = resolveSettings(saved);
     // A load has no timeout, so saves never wait for one; most change neither setting and skip the queue.
-    // Queued work applies the latest saved settings: a later save may have been skipped meanwhile.
-    const work =
-      settingsKey(settings) === applied
-        ? Effect.void
-        : readSettings.pipe(
-            Effect.flatMap(reconcile),
-            Effect.uninterruptible,
-            mutex.withPermit,
-            Effect.catchCause((cause) =>
-              Effect.logWarning("Could not apply Dashlane settings", { cause }),
-            ),
-            Effect.withSpan("PreviewDashlane.refreshProfiles"),
-          );
+    // Queued work applies the latest saved settings, and while any is queued no save skips the queue.
+    if (queuedRefreshes === 0 && settingsKey(settings) === applied) {
+      return Effect.forkIn(Effect.void, scope);
+    }
+    queuedRefreshes += 1;
+    const work = clientSettings.get.pipe(
+      Effect.map(Option.match({ onNone: () => settings, onSome: resolveSettings })),
+      // This save was persisted; a failed read must not reset Dashlane to defaults.
+      Effect.orElseSucceed(() => settings),
+      Effect.flatMap(reconcile),
+      Effect.uninterruptible,
+      mutex.withPermit,
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Could not apply Dashlane settings", { cause }),
+      ),
+      Effect.ensuring(Effect.sync(() => void (queuedRefreshes -= 1))),
+      Effect.withSpan("PreviewDashlane.refreshProfiles"),
+    );
     return Effect.forkIn(work, scope);
   };
 
