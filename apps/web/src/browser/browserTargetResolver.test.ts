@@ -40,7 +40,7 @@ describe("browser target resolver", () => {
 
   it("keeps localhost for servers on the desktop's own WSL or primary backend", async () => {
     // WSL NAT advertises a distro IP, but loopback-bound servers only answer on localhost.
-    const { resolveDiscoveredServerUrl, resolveExternalServerUrl } =
+    const { resolveDiscoveredServerUrl, resolveExternalServerUrl, resolvePreviewSystemBrowserUrl } =
       await import("./browserTargetResolver");
     env.isElectron = true;
     try {
@@ -64,6 +64,21 @@ describe("browser target resolver", () => {
       expect(resolveExternalServerUrl(EnvironmentId.make("environment-1"), "localhost:3001/")).toBe(
         "http://192.168.1.25:3001/",
       );
+      // Docked and floating previews: a desktop tab reroutes, a server-rendered tab opens as is.
+      expect(
+        resolvePreviewSystemBrowserUrl(
+          EnvironmentId.make("environment-1"),
+          "localhost:3001/",
+          false,
+        ),
+      ).toBe("http://192.168.1.25:3001/");
+      expect(
+        resolvePreviewSystemBrowserUrl(
+          EnvironmentId.make("environment-1"),
+          "localhost:3001/",
+          true,
+        ),
+      ).toBe("localhost:3001/");
     } finally {
       env.isElectron = false;
     }

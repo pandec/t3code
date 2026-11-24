@@ -25,6 +25,7 @@ import {
   useActiveBrowserRecordingTabIds,
 } from "~/browser/browserRecording";
 import { useBrowserSurfaceStore } from "~/browser/browserSurfaceStore";
+import { resolvePreviewSystemBrowserUrl } from "~/browser/browserTargetResolver";
 import type { BrowserViewportResizeDirection } from "~/browser/browserViewportLayout";
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
 import { rendersServerTabNatively } from "~/browser/previewRuntime";
@@ -328,7 +329,13 @@ function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly 
                     size="icon-xs"
                     aria-label="Open in system browser"
                     onPointerDown={(event) => event.stopPropagation()}
-                    onClick={() => void localApi.shell.openExternal(url).catch(() => undefined)}
+                    onClick={() =>
+                      void localApi.shell
+                        .openExternal(
+                          resolvePreviewSystemBrowserUrl(threadRef.environmentId, url, serverTab),
+                        )
+                        .catch(() => undefined)
+                    }
                   />
                 }
               >

@@ -102,3 +102,13 @@ export const resolveDiscoveredServerUrl = (environmentId: EnvironmentId, rawUrl:
 /** The URL for the system browser, which has no tunnel and needs an address it can reach itself. */
 export const resolveExternalServerUrl = (environmentId: EnvironmentId, rawUrl: string): string =>
   resolveLoopbackUrl(environmentId, rawUrl, false);
+
+/**
+ * The URL a preview tab's "Open in system browser" opens, docked or floating. A desktop tab's
+ * localhost is the environment's, so it needs its own route there; a server-rendered tab opens as is.
+ */
+export const resolvePreviewSystemBrowserUrl = (
+  environmentId: EnvironmentId,
+  url: string,
+  serverRendered: boolean,
+): string => (serverRendered ? url : resolveExternalServerUrl(environmentId, url));
