@@ -1623,6 +1623,35 @@ it.effect("shells flag a latest run triggered by a provider background wake", ()
       );
       yield* assertShellIndexCoversShells();
     }
+    // Fork: a queued wake is not a queued message an archive would discard.
+    for (const [id, messageId] of [
+      ["queued-wake", "message:background-wake:monitor"],
+      ["queued-user", "message:background-wake:steered:follow-up"],
+    ] as const) {
+      ordinal += 1;
+      yield* store.apply({
+        id: EventId.make(`event:background-wake:${id}:run`),
+        type: "run.created",
+        threadId,
+        occurredAt: at,
+        payload: {
+          ...initial.runs[0]!,
+          id: RunId.make(`run:background-wake:${id}`),
+          ordinal,
+          userMessageId: MessageId.make(messageId),
+          status: "queued",
+          completedAt: null,
+        },
+      });
+    }
+    const queuedShells = [
+      yield* store.getThreadShell(threadId),
+      ProjectionStore.threadShellFromProjection(yield* store.getThreadProjection(threadId)),
+    ];
+    assert.deepEqual(
+      queuedShells.map((shell) => shell?.queuedMessageCount),
+      [1, 1],
+    );
   }).pipe(Effect.provide(layerTest)),
 );
 

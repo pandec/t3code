@@ -134,8 +134,9 @@ export function threadLifecycleRevisionRequiresDispatch(
 
 /**
  * The intent an archive control records. Archives (scheduled or not) are
- * delivered as archive-when-done. A cancel targets a deferred archive the
- * server already holds, so it always requires a dispatch.
+ * delivered as archive-when-done, or archive-now after a confirmed discard. A
+ * cancel targets a deferred archive the server already holds, so it always
+ * requires a dispatch.
  */
 export function threadLifecycleIntentRevision(
   action: ThreadLifecycleUserAction,

@@ -132,6 +132,11 @@ export async function deliverThreadLifecycleIntent(
   });
   if (failureAction === "retry") return false;
   if (failureAction === "rotate") return rotate(attempted);
+  // State moved on meanwhile (e.g. Stop held the queue a confirmed discard may now archive).
+  const nextAction = deps.readAction(attempted);
+  if (nextAction !== finalAction && nextAction !== "wait" && nextAction !== "remove") {
+    return rotate(attempted);
+  }
   deps.onRejected(attempted, finalAction, error);
   deps.onSettled(attempted, null);
   return removeCurrent(attempted);

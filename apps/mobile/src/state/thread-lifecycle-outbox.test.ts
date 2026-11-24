@@ -563,6 +563,18 @@ describe("thread lifecycle delivery", () => {
     expect(test.rejectedActions).toEqual(["archive"]);
   });
 
+  it("retries a rejected archive under a fresh id when a confirmed discard now archives now", async () => {
+    // Busy at dispatch, then Stop held the queue before the rejection arrived.
+    const test = harness(["archive", "archive", "archive-now"]);
+    const queued = intent({ discardQueuedMessages: true });
+    await test.manager.enqueue(queued);
+    test.setResult(rejected("Queued messages are waiting to run."));
+
+    expect(await deliverThreadLifecycleIntent(queued, test.deps)).toBe(false);
+    expect(test.current()?.commandId).not.toBe(queued.commandId);
+    expect(test.rejectedActions).toEqual([]);
+  });
+
   it("unarchives under a fresh id when a cancel is rejected because the archive landed", async () => {
     const test = harness(["cancel-archive"]);
     const undo = intent({ desiredArchived: false, requiresDispatch: true });

@@ -457,13 +457,14 @@ export function useThreadListActions(
    * The archive toggle: archives, archives when done, or cancels a pending archive. Archiving
    * now discards queued messages, so that always confirms first, offline from the cached shell.
    */
-  const archiveThread = (thread: EnvironmentThreadShell) => {
+  const archiveThread = (thread: EnvironmentThreadShell, discardConfirmed = false) => {
     const discardedCount = archiveDiscardedQueuedMessageCount(thread);
-    if (discardedCount > 0) {
+    if (discardedCount > 0 && !discardConfirmed) {
       confirmQueuedMessageDiscard({
         title: thread.title,
         count: discardedCount,
-        onConfirm: () => void executeAction("archive", thread, undefined, undefined, true),
+        // The thread can change while the dialog is open (a resumed turn must not be archived).
+        onConfirm: () => void archiveThread(liveThread(thread), true),
       });
       return Promise.resolve(false);
     }
@@ -475,6 +476,9 @@ export function useThreadListActions(
           ? "schedule-archive"
           : "archive",
       thread,
+      undefined,
+      undefined,
+      discardConfirmed && discardedCount > 0,
     );
   };
   const offerUndo = (
