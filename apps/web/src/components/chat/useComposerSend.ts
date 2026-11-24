@@ -1249,6 +1249,7 @@ export function useComposerSend(input: ComposerSendInput) {
         return;
       }
       setThreadError(threadIdForSend, null);
+      setKeepFullHistoryOverride(routeThreadKey, null);
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
