@@ -626,8 +626,10 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
 
   /** The settings every prepared session and the update schedule last matched. */
   let applied: string | undefined;
-  /** Saves whose work has not finished yet. */
-  let queuedRefreshes = 0;
+  /** Refreshes that have not finished yet. */
+  let refreshes = 0;
+  /** A refresh still waiting to read the saved settings; it covers every save made meanwhile. */
+  let queuedRefresh: Fiber.Fiber<void> | undefined;
 
   /** Matches every prepared session to the settings, then applies a download nothing has loaded. */
   const reconcile = Effect.fn("PreviewDashlane.reconcile")(function* (settings: BrowserSettings) {
@@ -645,25 +647,38 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
   ) => {
     const settings = resolveSettings(saved);
     // A load has no timeout, so saves never wait for one; most change neither setting and skip the queue.
-    // Queued work applies the latest saved settings, and while any is queued no save skips the queue.
-    if (queuedRefreshes === 0 && settingsKey(settings) === applied) {
+    // A refresh applies the settings saved when it runs, so no save skips one that already read.
+    if (queuedRefresh !== undefined) return Effect.succeed(queuedRefresh);
+    if (refreshes === 0 && settingsKey(settings) === applied) {
       return Effect.forkIn(Effect.void, scope);
     }
-    queuedRefreshes += 1;
-    const work = clientSettings.get.pipe(
+    // A failed read leaves the current state; the next save or new tab applies the settings.
+    const work = Effect.suspend(() => {
+      queuedRefresh = undefined;
+      return clientSettings.get;
+    }).pipe(
       Effect.map(Option.match({ onNone: () => settings, onSome: resolveSettings })),
-      // This save was persisted; a failed read must not reset Dashlane to defaults.
-      Effect.orElseSucceed(() => settings),
       Effect.flatMap(reconcile),
       Effect.uninterruptible,
       mutex.withPermit,
       Effect.catchCause((cause) =>
         Effect.logWarning("Could not apply Dashlane settings", { cause }),
       ),
-      Effect.ensuring(Effect.sync(() => void (queuedRefreshes -= 1))),
       Effect.withSpan("PreviewDashlane.refreshProfiles"),
     );
-    return Effect.forkIn(work, scope);
+    return Effect.forkIn(work, scope).pipe(
+      Effect.tap((fiber) =>
+        Effect.sync(() => {
+          refreshes += 1;
+          queuedRefresh = fiber;
+          // Observed rather than `ensuring`, so a fiber interrupted before it starts still counts down.
+          fiber.addObserver(() => {
+            refreshes -= 1;
+            if (queuedRefresh === fiber) queuedRefresh = undefined;
+          });
+        }),
+      ),
+    );
   };
 
   const readyVersion = Effect.gen(function* () {

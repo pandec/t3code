@@ -472,6 +472,7 @@ describe("Dashlane session lifecycle", () => {
       const loading = yield* test.service
         .prepareSession(work, "profile-1")
         .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Queue.clear(test.settingsReads);
       test.configure({ profileIds: ["default", "profile-1"] });
       const enabling = yield* test.save();
       test.configure({ profileIds: ["profile-1"] });
@@ -482,6 +483,8 @@ describe("Dashlane session lifecycle", () => {
       yield* Fiber.join(reverting);
       // Only the other profile loaded Dashlane; the reverted default profile never did.
       assert.strictEqual(test.loadExtension.mock.calls.length, 1);
+      // Both saves waited behind the load, so one read of the saved settings covered them.
+      assert.strictEqual(yield* Queue.size(test.settingsReads), 1);
     }).pipe(Effect.scoped, Effect.provide(testServices)),
   );
 
