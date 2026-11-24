@@ -21,6 +21,7 @@ import {
   ProviderInstanceId,
   RunId,
   ThreadId,
+  TurnItemId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -1237,6 +1238,100 @@ it.layer(TestLayer)("deferred archive on the orchestrator", (it) => {
       const status = yield* scheduler.status(threadId);
       assert.equal(status.request?.status, "cancelled");
       assert.equal(status.request?.detail, ARCHIVE_CANCEL_DETAIL.stopped);
+    }),
+  );
+
+  it.effect("an unread steer is requeued before an archive that runs first can drop it", () =>
+    Effect.gen(function* () {
+      const scheduler = yield* ThreadArchiveScheduler.ThreadArchiveScheduler;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const threadId = yield* createThread("unread-steer");
+      const active = yield* sendMessage(threadId, "unread-steer", { type: "start_immediately" });
+      const steerId = MessageId.make("unread-steer-steer");
+      const now = yield* DateTime.now;
+      const steer = { threadId, runId: active.id, nodeId: null, text: "Also fix the tests" };
+      const by = { createdBy: "user" as const, creationSource: "web" as const };
+      // The agent's turn ends before it reads this steer, so it stays pending.
+      yield* eventSink.commitCommand({
+        commandId: CommandId.make("unread-steer-steer"),
+        threadId,
+        commandType: "message.dispatch",
+        acceptedAt: now,
+        events: [
+          {
+            id: EventId.make("unread-steer-steer-message"),
+            type: "message.updated",
+            threadId,
+            runId: active.id,
+            occurredAt: now,
+            payload: {
+              ...steer,
+              ...by,
+              id: steerId,
+              role: "user",
+              attachments: [],
+              streaming: false,
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+          {
+            id: EventId.make("unread-steer-steer-item"),
+            type: "turn-item.updated",
+            threadId,
+            runId: active.id,
+            occurredAt: now,
+            payload: {
+              ...steer,
+              ...by,
+              id: TurnItemId.make("unread-steer-steer-item"),
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 100,
+              status: "pending",
+              title: null,
+              startedAt: now,
+              completedAt: null,
+              updatedAt: now,
+              type: "user_message",
+              messageId: steerId,
+              inputIntent: "steer",
+              attachments: [],
+            },
+          },
+        ],
+        effects: [],
+      });
+      yield* scheduler.schedule({ threadId, afterTurn: true });
+      // The terminal-run listener skips reconcile commits, so the archive check goes first.
+      yield* eventSink.commitCommand({
+        commandId: CommandId.make("command:runtime-reconcile:unread-steer"),
+        threadId,
+        commandType: "run.update",
+        acceptedAt: now,
+        events: [
+          {
+            id: EventId.make("unread-steer-run-completed"),
+            type: "run.updated",
+            threadId,
+            runId: active.id,
+            occurredAt: now,
+            payload: { ...active, status: "completed", startedAt: now, completedAt: now },
+          },
+        ],
+        effects: [],
+      });
+      yield* scheduler.reconcilePending;
+
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      assert.isNull(projection.thread.archivedAt);
+      assert.equal(projection.thread.archiveRequest?.detail, ARCHIVE_CANCEL_DETAIL.newWork);
+      const followUp = projection.runs.find((run) => run.userMessageId === steerId);
+      assert.isDefined(followUp);
+      assert.notEqual(followUp!.id, active.id);
     }),
   );
 

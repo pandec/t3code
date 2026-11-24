@@ -1,7 +1,8 @@
 /**
- * Fork: removes only a clean, attached, linked worktree that is not a project checkout and that
- * no other unarchived thread uses. Never forced (Git also keeps locked worktrees); the branch is
- * always kept. Callers get the reason a worktree was kept instead of an error.
+ * Fork: removes only a clean, attached, linked worktree that is not a project checkout or an SP
+ * Labs lab and that no other unarchived thread uses. Never forced (Git also keeps locked
+ * worktrees); the branch is always kept. Callers get the reason a worktree was kept instead of an
+ * error.
  */
 import type { ThreadId, OrchestrationV2ThreadShell } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -13,6 +14,7 @@ import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import { mayBeSpLabWorktree } from "../labs/labWorktree.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import {
   canonicalWorkspacePath,
@@ -28,6 +30,7 @@ export const WORKTREE_KEPT_DETAIL = {
   notWorktree:
     "Only linked Git worktrees can be removed; this path is a main checkout or not a repository.",
   projectCheckout: "Refusing to remove a project checkout.",
+  labWorktree: "SP Labs owns this worktree (.sp-lab.json); the worktree was kept.",
   noProject: "The thread's project no longer exists.",
   shared: "Another unarchived thread uses this worktree.",
   pendingMove: "Another thread is waiting to switch into this worktree.",
@@ -49,7 +52,8 @@ export class ArchiveWorktreeRemoval extends Context.Service<
   {
     /**
      * Why `threadId`'s worktree could not be removed, ignoring uncommitted
-     * changes (a running turn may still commit them); null when allowed.
+     * changes (a running turn may still commit them) and the live side chats
+     * its archive takes along; null when allowed.
      */
     readonly blocker: (threadId: ThreadId) => Effect.Effect<string | null>;
     /**
@@ -80,15 +84,20 @@ const make = Effect.gen(function* () {
     );
   };
 
-  /** Guards that hold regardless of the working tree's contents. */
+  /**
+   * Guards that hold regardless of the working tree's contents. Before the archive, the thread's
+   * live side chats do not count as sharing: its archive takes them along.
+   */
   const structuralBlocker = Effect.fn("ArchiveWorktreeRemoval.structuralBlocker")(function* (
     threadId: ThreadId,
     worktreePath: string,
+    beforeArchive = false,
   ) {
     const root = yield* canonicalWorkspacePath(worktreePath);
     // A linked worktree has a `.git` file; a main checkout has a directory.
     const gitEntry = yield* fs.stat(path.join(root, ".git")).pipe(Effect.orElseSucceed(() => null));
     if (gitEntry?.type !== "File") return WORKTREE_KEPT_DETAIL.notWorktree;
+    if (yield* mayBeSpLabWorktree(fs, path, root)) return WORKTREE_KEPT_DETAIL.labWorktree;
     const projectShells = yield* projects.listShells();
     for (const project of projectShells) {
       if (contains(root, yield* canonicalWorkspacePath(project.workspaceRoot))) {
@@ -100,10 +109,18 @@ const make = Effect.gen(function* () {
     const moving: Array<OrchestrationV2ThreadShell> = [];
     for (const thread of active.threads) {
       if (thread.id === threadId || thread.deletedAt !== null) continue;
+      const followsArchive =
+        beforeArchive &&
+        thread.lineage.sideChat === true &&
+        thread.lineage.parentThreadId === threadId;
       const cwd =
         thread.worktreePath ??
         projectShells.find((project) => project.id === thread.projectId)?.workspaceRoot;
-      if (cwd !== undefined && contains(root, yield* canonicalWorkspacePath(cwd))) {
+      if (
+        !followsArchive &&
+        cwd !== undefined &&
+        contains(root, yield* canonicalWorkspacePath(cwd))
+      ) {
         sharing.push(thread);
       }
       if (
@@ -153,7 +170,7 @@ const make = Effect.gen(function* () {
       const { thread } = yield* threads.getThreadRecords(threadId, []);
       if (thread.worktreePath === null) return WORKTREE_KEPT_DETAIL.noWorktree;
       if (!(yield* fs.exists(thread.worktreePath))) return null;
-      const reason = yield* structuralBlocker(threadId, thread.worktreePath);
+      const reason = yield* structuralBlocker(threadId, thread.worktreePath, true);
       return reason === WORKTREE_KEPT_DETAIL.dirty ? null : reason;
     },
     describeFailure("check"),

@@ -3,7 +3,7 @@ import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
 
 /** sp-labs writes this marker into every lab worktree it provisions. */
-export const SP_LAB_MARKER_FILE = ".sp-lab.json";
+const SP_LAB_MARKER_FILE = ".sp-lab.json";
 
 /**
  * Whether `directory` is an sp-labs lab worktree. sp-labs owns a lab's provisioning (its `up`
@@ -19,3 +19,13 @@ export const isSpLabWorktree = (
   fileSystem
     .exists(path.join(directory, SP_LAB_MARKER_FILE))
     .pipe(Effect.orElseSucceed(() => false));
+
+/** Whether removal must keep `directory` as a lab; unlike isSpLabWorktree, a failed check counts as one. */
+export const mayBeSpLabWorktree = (
+  fileSystem: FileSystem.FileSystem,
+  path: Path.Path,
+  directory: string,
+): Effect.Effect<boolean> =>
+  fileSystem
+    .exists(path.join(directory, SP_LAB_MARKER_FILE))
+    .pipe(Effect.orElseSucceed(() => true));

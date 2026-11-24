@@ -7816,9 +7816,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         0 &&
       !hasTitleSetBeforeFirstMessage(projection.thread, command.titleSeed);
     // Fork: a fork keeps the title it was created with; its first message
-    // continues the source conversation rather than naming a new one.
+    // continues the source conversation rather than naming a new one. A side chat starts a new one.
     if (
-      projection.thread.lineage.relationshipToParent !== "fork" &&
+      (projection.thread.lineage.relationshipToParent !== "fork" ||
+        projection.thread.lineage.sideChat === true) &&
       !isNativeMaintenanceCommand(command) &&
       (seedsUntitledThread || (command.createdBy === "user" && (yield* onlyMaintenanceHistory)))
     ) {
@@ -16103,6 +16104,71 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  /**
+   * Side chats follow their parent's archive or unarchive: unarchive restores only the side chats
+   * the parent's archive took. Each one's own pending archive ends, so it cannot archive again.
+   */
+  const cascadeSideChatLifecycle = Effect.fn("Orchestrator.cascadeSideChatLifecycle")(function* (
+    command: OrchestrationV2ServerCommand,
+    type: "thread.archive" | "thread.unarchive",
+    parentArchivedAt: DateTime.Utc | null,
+    sideChatIds: ReadonlyArray<ThreadId>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+  ) {
+    for (const threadId of sideChatIds) {
+      const sideChatArchivedAt = (yield* findThread(threadId))?.archivedAt ?? null;
+      const follows =
+        type === "thread.archive"
+          ? sideChatArchivedAt === null
+          : sideChatArchivedAt !== null &&
+            parentArchivedAt !== null &&
+            DateTime.toEpochMillis(sideChatArchivedAt) >= DateTime.toEpochMillis(parentArchivedAt);
+      if (!follows) continue;
+      // Archive refuses a side chat still waiting on delegated tasks, so it stays active.
+      if (type === "thread.archive") {
+        const { subagents } = yield* projectionStore
+          .getThreadRecords(threadId, ["subagents"])
+          .pipe(mapDispatchError(command));
+        if (hasRunningDelegatedTasks(subagents)) continue;
+      }
+      const sideChatCommand = {
+        type,
+        commandId: CommandId.make(`${command.commandId}:side-chat:${threadId}`),
+        threadId,
+      };
+      yield* dispatchThreadMutation(sideChatCommand, events, effects);
+      yield* cancelPendingThreadArchive(
+        threadId,
+        sideChatCommand,
+        events,
+        type === "thread.archive"
+          ? ARCHIVE_CANCEL_DETAIL.withParent
+          : ARCHIVE_CANCEL_DETAIL.unarchived,
+      );
+    }
+  });
+
+  /** A send that reopened an archived thread also reopens the side chats its archive took. */
+  const reopenSideChatsAfterSend = Effect.fnUntraced(function* (
+    command: OrchestrationV2ServerCommand,
+    before: OrchestrationV2AppThread,
+    sideChatIds: ReadonlyArray<ThreadId>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+  ) {
+    if (before.archivedAt === null || sideChatIds.length === 0) return;
+    if (latestThreadState(yield* Ref.get(events), before.id, before).archivedAt !== null) return;
+    yield* cascadeSideChatLifecycle(
+      command,
+      "thread.unarchive",
+      before.archivedAt,
+      sideChatIds,
+      events,
+      effects,
+    );
+  });
+
   /** A wake carries on the awaited work: its pending archive moves to the run the wake started. */
   const retargetPendingThreadArchive = Effect.fn("orchestrationV2.dispatch.retargetPendingArchive")(
     function* (
@@ -16178,6 +16244,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       >,
       events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
       effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+      sideChatIds: ReadonlyArray<ThreadId>,
     ) {
       const reject = (cause: string) =>
         new OrchestratorDispatchError({
@@ -16199,7 +16266,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           occurredAt: now,
           payload,
         });
-      // Archive through the ordinary path (queued runs, sessions, terminals),
+      // Archive through the ordinary path (queued runs, sessions, terminals) with its side chats,
       // then record the request's outcome on top of the archived thread.
       const archiveWith = Effect.fn("Orchestrator.archiveWith")(function* (
         request: OrchestrationV2ThreadArchiveRequest,
@@ -16211,6 +16278,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         );
         const archived = latestThreadState(yield* Ref.get(events), command.threadId, thread);
         yield* emitThread({ ...archived, archiveRequest: request });
+        yield* cascadeSideChatLifecycle(
+          command,
+          "thread.archive",
+          null,
+          sideChatIds,
+          events,
+          effects,
+        );
       });
 
       if (command.type === "thread.archive.cancel") {
@@ -16644,34 +16719,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ? ARCHIVE_CANCEL_DETAIL.manual
             : ARCHIVE_CANCEL_DETAIL.unarchived,
         );
-        // Unarchive restores the side chats this parent's archive took, not ones archived before it.
-        for (const threadId of sideChatIds) {
-          const sideChatArchivedAt = (yield* findThread(threadId))?.archivedAt ?? null;
-          const follows =
-            command.type === "thread.archive"
-              ? sideChatArchivedAt === null
-              : sideChatArchivedAt !== null &&
-                parentArchivedAt !== null &&
-                DateTime.toEpochMillis(sideChatArchivedAt) >=
-                  DateTime.toEpochMillis(parentArchivedAt);
-          if (!follows) continue;
-          // Archive refuses a side chat still waiting on delegated tasks, so it stays active.
-          if (command.type === "thread.archive") {
-            const { subagents } = yield* projectionStore
-              .getThreadRecords(threadId, ["subagents"])
-              .pipe(mapDispatchError(command));
-            if (hasRunningDelegatedTasks(subagents)) continue;
-          }
-          yield* dispatchThreadMutation(
-            {
-              ...command,
-              commandId: CommandId.make(`${command.commandId}:side-chat:${threadId}`),
-              threadId,
-            },
-            events,
-            effects,
-          );
-        }
+        yield* cascadeSideChatLifecycle(
+          command,
+          command.type,
+          parentArchivedAt,
+          sideChatIds,
+          events,
+          effects,
+        );
         break;
       }
       case "thread.settle":
@@ -16704,7 +16759,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.archive.cancel":
       case "thread.archive.execute":
       case "thread.archive.complete":
-        yield* dispatchThreadArchiveRequest(command, events, effects);
+        yield* dispatchThreadArchiveRequest(command, events, effects, sideChatIds);
         break;
       case "thread.worktree-switch.schedule":
       case "thread.worktree-switch.cancel":
@@ -16713,10 +16768,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "thread.metadata.update": {
         const continuation = metadataUpdateContinuation(command);
-        if (continuation !== undefined) yield* refuseNativeSubagentMessage(command);
+        const before =
+          continuation === undefined ? undefined : yield* refuseNativeSubagentMessage(command);
         yield* dispatchThreadMutation(command, events, effects);
-        if (continuation !== undefined) {
+        if (continuation !== undefined && before !== undefined) {
           cancelUnsettledEffects = yield* dispatchMessage(continuation, events, effects);
+          yield* reopenSideChatsAfterSend(command, before, sideChatIds, events, effects);
           yield* recordSubagentFollowup(continuation, events).pipe(mapDispatchError(command));
         }
         break;
@@ -16764,6 +16821,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 context: { version: 1 as const, records: [], guest: guestSend.guest },
               };
         cancelUnsettledEffects = yield* dispatchMessage(dispatched, events, effects);
+        yield* reopenSideChatsAfterSend(command, thread, sideChatIds, events, effects);
         // A message that left the thread archived keeps its pending worktree removal.
         // A wake (DeferredArchive.ts) moves a pending archive instead of cancelling it.
         if (thread.archivedAt === null && isWakeMessageDispatch(command)) {
@@ -17184,6 +17242,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
     }
 
+    // Fork: archive eligibility reads the thread after the ended run's unread steers are placed; a
+    // user's requeued steer cancels a pending archive, and an archived thread would drop it.
+    if (command.type === "thread.archive.schedule" || command.type === "thread.archive.execute") {
+      yield* mapDispatchError(command)(requeueUnreadSteers(command.threadId));
+    }
+
     const plan = yield* dispatchOnce(command, sideChatIds).pipe(
       Effect.tap((planned) => refuseAboveRuntimeModeCeiling(command, planned.events)),
       Effect.filterOrFail(
@@ -17480,12 +17544,27 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
     );
 
+  /** Runs `dispatch` under the locks of `threadId`'s live side chats; the caller holds the parent's. */
+  const withSideChatLocks = (
+    threadId: ThreadId,
+    dispatch: (
+      sideChatIds: ReadonlyArray<ThreadId>,
+    ) => Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error>,
+  ) =>
+    liveSideChatIds(threadId).pipe(
+      Effect.flatMap((sideChatIds) =>
+        sideChatIds.reduce(
+          (locked, sideChatId) => threadDispatch.withLock(sideChatId, locked),
+          dispatch(sideChatIds),
+        ),
+      ),
+    );
+
   // dispatchWithReceiptEffect owns the dispatch span; this wrapper selects the thread locks.
   const dispatchWithReceipt = Effect.fnUntraced(function* (command: OrchestrationV2ServerCommand) {
-    const dispatch = threadDispatch.withLock(
-      commandThreadId(command),
-      withArchiveRemovalClaim(command, dispatchWithReceiptEffect(command)),
-    );
+    const dispatchWith = (sideChatIds?: ReadonlyArray<ThreadId>) =>
+      withArchiveRemovalClaim(command, dispatchWithReceiptEffect(command, sideChatIds));
+    const dispatch = threadDispatch.withLock(commandThreadId(command), dispatchWith());
     // A fork holds its source's lock, so a source deletion and its fork never interleave. A
     // parent's lock comes before its side chats' locks. A side chat fork from a side chat or a
     // fork onto an existing thread would invert that order; dispatch rejects both, so they skip it.
@@ -17500,21 +17579,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ? dispatch
         : threadDispatch.withLock(command.sourceThreadId, dispatch);
     }
+    // Fork: an archive request can archive the thread, so it cascades like a direct archive.
     if (
       command.type === "thread.delete" ||
       command.type === "thread.archive" ||
-      command.type === "thread.unarchive"
+      command.type === "thread.unarchive" ||
+      command.type === "thread.archive.schedule" ||
+      command.type === "thread.archive.execute"
     ) {
       const cascade = threadDispatch.withLock(
         command.threadId,
-        liveSideChatIds(command.threadId).pipe(
-          Effect.flatMap((sideChatIds) =>
-            sideChatIds.reduce(
-              (locked, sideChatId) => threadDispatch.withLock(sideChatId, locked),
-              withArchiveRemovalClaim(command, dispatchWithReceiptEffect(command, sideChatIds)),
-            ),
-          ),
-        ),
+        withSideChatLocks(command.threadId, dispatchWith),
       );
       return yield* command.type === "thread.delete"
         ? threadDispatch.withDeletionLock(cascade)
@@ -17524,13 +17599,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     // place ahead of later messages to the same thread.
     const message =
       command.type === "thread.metadata.update" ? metadataUpdateContinuation(command) : command;
-    if (message?.type === "message.dispatch")
+    if (message?.type === "message.dispatch") {
+      // Fork: a user's send reopens an archived thread with its side chats (read under its lock).
+      const messageDispatch =
+        message.createdBy === "user"
+          ? threadDispatch.withLock(
+              message.threadId,
+              findThread(message.threadId).pipe(
+                Effect.flatMap((thread) =>
+                  thread?.archivedAt != null
+                    ? withSideChatLocks(message.threadId, dispatchWith)
+                    : dispatchWith(),
+                ),
+              ),
+            )
+          : dispatch;
       return yield* messageIntake.withLock(
         message.threadId,
         mayStartSubagentFollowup(message)
-          ? withSubagentParentLock(message.threadId, dispatch)
-          : dispatch,
+          ? withSubagentParentLock(message.threadId, messageDispatch)
+          : messageDispatch,
       );
+    }
     // Answering a message-mode question can also start a follow-up.
     return yield* command.type === "runtime-request.respond"
       ? withSubagentParentLock(command.threadId, dispatch)

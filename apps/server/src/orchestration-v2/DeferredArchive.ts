@@ -155,6 +155,7 @@ export const ARCHIVE_CANCEL_DETAIL = {
   checkpointFailed: "The final checkpoint failed. The thread was left unarchived.",
   workspace: "The thread changed workspace.",
   manual: "The thread was archived manually.",
+  withParent: "The side chat was archived with its main thread.",
   unarchived: "The thread was unarchived before its worktree was removed.",
 } as const;
 

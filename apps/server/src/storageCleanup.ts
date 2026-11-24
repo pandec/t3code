@@ -66,7 +66,7 @@ import {
   reserveWorkspace,
   withWorkspaceLease,
 } from "./workspace/workspaceLease.ts";
-import { SP_LAB_MARKER_FILE } from "./labs/labWorktree.ts";
+import { mayBeSpLabWorktree } from "./labs/labWorktree.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { isNetworkPath } from "@t3tools/shared/path";
@@ -108,7 +108,7 @@ const DAY_MS = 86_400_000;
 const SETTLE_SCRIPT_GRACE_MS = 60_000;
 // Worktree creation can precede its thread row, including review-guide checkouts.
 const ORPHAN_WORKTREE_GRACE_MS = 60 * 60 * 1_000;
-// Fork (SP Labs): sp-labs owns lab worktrees; see SP_LAB_MARKER_FILE.
+// Fork (SP Labs): sp-labs owns lab worktrees; see labs/labWorktree.ts.
 const LAB_WORKTREE_REASON = "worktree is an SP Labs lab (.sp-lab.json)";
 
 const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
@@ -476,10 +476,8 @@ const make = Effect.gen(function* () {
     }
     return false;
   });
-  // Fork (SP Labs): sp-labs owns its lab worktrees, so cleanup never removes one. Unlike
-  // isSpLabWorktree, a failed check counts as a lab: removal must fail closed.
-  const isLabWorktree = (worktreePath: string) =>
-    fs.exists(path.join(worktreePath, SP_LAB_MARKER_FILE)).pipe(Effect.orElseSucceed(() => true));
+  // Fork (SP Labs): sp-labs owns its lab worktrees, so cleanup never removes one.
+  const isLabWorktree = (worktreePath: string) => mayBeSpLabWorktree(fs, path, worktreePath);
 
   // pnpm imports packages by clone or reflink when its store shares a device
   // with the worktree. Those files have one link but share blocks with the

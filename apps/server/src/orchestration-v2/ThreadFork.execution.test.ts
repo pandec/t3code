@@ -28,6 +28,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import { ClaudeProviderCapabilitiesV2 } from "./Adapters/ClaudeAdapterV2.ts";
+import { ARCHIVE_CANCEL_DETAIL } from "./DeferredArchive.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -879,6 +880,7 @@ const askSideChat = (
       threadId,
       messageId: MessageId.make(commandId),
       text: "What is the main thread doing?",
+      titleSeed: "What is the main thread doing?",
       attachments: [],
       ...(modelSelection === undefined ? {} : { modelSelection }),
       dispatchMode: { type: "start_immediately" },
@@ -1188,6 +1190,11 @@ it.effect("a side chat of an idle parent still starts with the framing note", ()
 
     const started = yield* orchestrator.getThreadProjection(sideChatId);
     assert.equal(started.thread.runtimeMode, "auto");
+    // Unlike a fork, a side chat's first message names it.
+    assert.equal(
+      started.thread.titleRegeneration?.requestId,
+      CommandId.make("side-chat-idle-first-message"),
+    );
     assert.equal(
       (yield* orchestrator.getThreadProjection(parentId)).thread.runtimeMode,
       "approval-required",
@@ -1472,6 +1479,87 @@ it.effect(
       assert.isNull(yield* archivedAt(parentId));
       assert.isNull(yield* archivedAt(busy));
       assert.deepEqual(yield* archivedAt(archivedFirst), childArchivedAt);
+    }).pipe(Effect.provide(forkCases[0]!.layer)),
+);
+
+it.effect(
+  "an archive-when-done takes the side chats, ends their own requests, and a send reopens them",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const parentId = ThreadId.make("side-chat-deferred-archive-parent");
+      const sideChatId = ThreadId.make("side-chat-deferred-archive-child");
+      const parentRunId = RunId.make("side-chat-deferred-archive-parent-run");
+      yield* createParent(parentId);
+      yield* writeParentRun({
+        threadId: parentId,
+        runId: RunId.make("side-chat-deferred-archive-first-run"),
+        ordinal: 1,
+        status: "completed",
+        text: "Parent work",
+        stable: true,
+      });
+      yield* forkSideChat("side-chat-deferred-archive-fork", parentId, sideChatId);
+      for (const [threadId, runId] of [
+        [sideChatId, RunId.make("side-chat-deferred-archive-child-run")],
+        [parentId, parentRunId],
+      ] as const) {
+        yield* writeParentRun({ threadId, runId, ordinal: 2, status: "running", text: "Work" });
+        yield* orchestrator.dispatch({
+          type: "thread.archive.schedule",
+          commandId: CommandId.make(`${threadId}:archive-schedule`),
+          threadId,
+          afterTurn: true,
+        });
+      }
+      const parentRun = (yield* orchestrator.getThreadProjection(parentId)).runs.find(
+        (run) => run.id === parentRunId,
+      )!;
+      const now = yield* DateTime.now;
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("side-chat-deferred-archive-parent-done"),
+            type: "run.updated",
+            threadId: parentId,
+            runId: parentRunId,
+            occurredAt: now,
+            payload: { ...parentRun, status: "completed", completedAt: now },
+          },
+        ],
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.archive.execute",
+        commandId: CommandId.make("side-chat-deferred-archive-execute"),
+        threadId: parentId,
+        requestId: CommandId.make(`${parentId}:archive-schedule`),
+      });
+      const archivedParent = (yield* orchestrator.getThreadProjection(parentId)).thread;
+      assert.isNotNull(archivedParent.archivedAt);
+      assert.equal(archivedParent.archiveRequest?.status, "completed");
+      const archivedSideChat = (yield* orchestrator.getThreadProjection(sideChatId)).thread;
+      assert.isNotNull(archivedSideChat.archivedAt);
+      assert.deepInclude(archivedSideChat.archiveRequest, {
+        status: "cancelled",
+        detail: ARCHIVE_CANCEL_DETAIL.withParent,
+      });
+
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("side-chat-deferred-archive-reopen"),
+        threadId: parentId,
+        messageId: MessageId.make("side-chat-deferred-archive-reopen"),
+        text: "One more thing",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      assert.isNull((yield* orchestrator.getThreadProjection(parentId)).thread.archivedAt);
+      const reopenedSideChat = (yield* orchestrator.getThreadProjection(sideChatId)).thread;
+      assert.isNull(reopenedSideChat.archivedAt);
+      assert.equal(reopenedSideChat.archiveRequest?.status, "cancelled");
     }).pipe(Effect.provide(forkCases[0]!.layer)),
 );
 

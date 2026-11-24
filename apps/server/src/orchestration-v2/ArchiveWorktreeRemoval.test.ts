@@ -39,6 +39,7 @@ interface Fixture {
     projectId: ProjectId;
     worktreePath: string | null;
     worktreeSwitch?: { status: "pending"; targetPath: string };
+    lineage?: { sideChat: true; parentThreadId: ThreadId };
     archived?: boolean;
     title?: string;
     status?: string;
@@ -86,6 +87,7 @@ const TestLayer = archiveWorktreeRemovalLayer.pipe(
             .map((thread) => ({
               title: "Test thread",
               status: "idle",
+              lineage: {},
               ...thread,
               deletedAt: null,
             }));
@@ -227,6 +229,21 @@ it.layer(TestLayer)("archive worktree removal", (it) => {
       assert.equal(yield* removal.blocker(threadId), shared);
       assert.equal(yield* removal.remove({ threadId, worktreePath }), shared);
 
+      // The archive takes the thread's side chats along; one still active at removal keeps it.
+      fixture.otherThreads = [
+        {
+          id: ThreadId.make("side-chat"),
+          projectId,
+          worktreePath,
+          lineage: { sideChat: true, parentThreadId: threadId },
+        },
+      ];
+      assert.isNull(yield* removal.blocker(threadId));
+      assert.equal(
+        yield* removal.remove({ threadId, worktreePath }),
+        `${WORKTREE_KEPT_DETAIL.shared} 1 thread: side-chat ("Test thread", idle).`,
+      );
+
       fixture.otherThreads = Array.from({ length: 12 }, (_, index) => ({
         id: ThreadId.make(`blocker-${index}`),
         projectId,
@@ -258,6 +275,24 @@ it.layer(TestLayer)("archive worktree removal", (it) => {
         yield* removal.remove({ threadId, worktreePath: detached.worktreePath }),
         WORKTREE_KEPT_DETAIL.detached,
       );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("never removes a clean SP Labs worktree", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const removal = yield* ArchiveWorktreeRemoval;
+      const { repository, worktreePath } = yield* setup("feature/lab");
+      // sp-labs excludes its marker, so the lab stays clean for Git.
+      yield* fs.writeFileString(path.join(repository, ".git", "info", "exclude"), ".sp-lab.json\n");
+      yield* fs.writeFileString(path.join(worktreePath, ".sp-lab.json"), "{}\n");
+      assert.equal(yield* removal.blocker(threadId), WORKTREE_KEPT_DETAIL.labWorktree);
+      assert.equal(
+        yield* removal.remove({ threadId, worktreePath }),
+        WORKTREE_KEPT_DETAIL.labWorktree,
+      );
+      assert.isTrue(yield* fs.exists(worktreePath));
     }).pipe(Effect.scoped),
   );
 
