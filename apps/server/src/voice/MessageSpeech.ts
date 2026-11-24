@@ -237,6 +237,17 @@ interface MessageSpeechChange {
 // Forks of forks are rare; the bound only guards against a corrupt cycle.
 const MAX_FORK_LINEAGE_DEPTH = 32;
 
+/** A thread whose artifacts a subscriber sees; an ancestor's `boundary` ends at the fork point. */
+interface LineageThread {
+  readonly threadId: ThreadId;
+  readonly boundary: {
+    readonly runOrdinal: number;
+    readonly forkedAt: string;
+    /** Whether the ancestor's runless (imported) messages are inherited. */
+    readonly runless: boolean;
+  } | null;
+}
+
 interface MessageSpeechJob {
   readonly threadId: string;
   readonly done: Deferred.Deferred<MessageSpeechSynthesisResult, MessageSpeechError>;
@@ -540,25 +551,90 @@ export const make = Effect.gen(function* () {
    * so their artifacts are stored under that owner.
    */
   const readLineage = (threadId: ThreadId) =>
-    sql<{ readonly threadId: string }>`
-      WITH RECURSIVE lineage(thread_id, depth) AS (
-        SELECT ${threadId}, 0
+    sql<{
+      readonly threadId: string;
+      readonly depth: number;
+      readonly forkedAt: string | null;
+      readonly runOrdinal: number | null;
+      readonly historyOrigin: string | null;
+    }>`
+      WITH RECURSIVE lineage(thread_id, depth, run_id, forked_at) AS (
+        SELECT ${threadId}, 0, NULL, NULL
         UNION
-        SELECT json_extract(thread.payload_json, '$.forkedFrom.threadId'), lineage.depth + 1
+        SELECT
+          json_extract(thread.payload_json, '$.forkedFrom.threadId'),
+          lineage.depth + 1,
+          json_extract(thread.payload_json, '$.forkedFrom.runId'),
+          thread.created_at
         FROM orchestration_v2_projection_threads AS thread
         INNER JOIN lineage ON thread.thread_id = lineage.thread_id
         WHERE json_extract(thread.payload_json, '$.forkedFrom.type') = 'run'
+          AND json_extract(thread.payload_json, '$.lineage.sideChat') IS NOT 1
           AND lineage.depth < ${MAX_FORK_LINEAGE_DEPTH}
       )
-      SELECT thread_id AS "threadId" FROM lineage ORDER BY depth
+      SELECT
+        lineage.thread_id AS "threadId",
+        lineage.depth,
+        lineage.forked_at AS "forkedAt",
+        run.ordinal AS "runOrdinal",
+        json_extract(source.payload_json, '$.historyOrigin') AS "historyOrigin"
+      FROM lineage
+      LEFT JOIN orchestration_v2_projection_runs AS run
+        ON run.run_id = lineage.run_id AND run.thread_id = lineage.thread_id
+      LEFT JOIN orchestration_v2_projection_threads AS source
+        ON source.thread_id = lineage.thread_id
+      ORDER BY lineage.depth
     `.pipe(
-      Effect.map((rows) => [
-        ...new Set([threadId, ...rows.map((row) => row.threadId as ThreadId)]),
-      ]),
+      Effect.map((rows) => {
+        const lineage: Array<LineageThread> = [{ threadId, boundary: null }];
+        for (const row of rows) {
+          if (row.depth === 0 || lineage.some((entry) => entry.threadId === row.threadId)) continue;
+          // The timeline inherits nothing past a fork whose run its source no longer has.
+          if (row.runOrdinal === null || row.forkedAt === null) break;
+          lineage.push({
+            threadId: row.threadId as ThreadId,
+            boundary: {
+              runOrdinal: row.runOrdinal,
+              forkedAt: row.forkedAt,
+              runless: row.historyOrigin === "v1_import",
+            },
+          });
+        }
+        return lineage;
+      }),
     );
 
-  /** Current recordings (stale listening versions left out) of the threads, or of one message. */
-  const readRecordings = (threadIds: ReadonlyArray<ThreadId>, messageId?: MessageId) =>
+  /**
+   * Holds for a `message` row the lineage's timeline shows, as `ProjectionStore` bounds a fork:
+   * an ancestor's runs through the fork's run, less runs rolled back before the fork.
+   */
+  const inLineage = (lineage: ReadonlyArray<LineageThread>) =>
+    sql.or(
+      lineage.map(({ threadId, boundary }) =>
+        boundary === null
+          ? sql`message.thread_id = ${threadId}`
+          : sql`(
+              message.thread_id = ${threadId}
+              AND (
+                (${boundary.runless ? 1 : 0} = 1 AND message.run_id IS NULL)
+                OR EXISTS (
+                  SELECT 1
+                  FROM orchestration_v2_projection_runs AS inherited_run
+                  WHERE inherited_run.run_id = message.run_id
+                    AND inherited_run.thread_id = ${threadId}
+                    AND inherited_run.ordinal <= ${boundary.runOrdinal}
+                    AND NOT (
+                      inherited_run.status = 'rolled_back'
+                      AND COALESCE(inherited_run.completed_at < ${boundary.forkedAt}, 0)
+                    )
+                )
+              )
+            )`,
+      ),
+    );
+
+  /** Current recordings (stale listening versions left out) of the lineage, or of one message. */
+  const readRecordings = (lineage: ReadonlyArray<LineageThread>, messageId?: MessageId) =>
     sql<MessageSpeechRow & { readonly messageText: string | null }>`
       SELECT
         speech.message_id AS "messageId",
@@ -581,7 +657,8 @@ export const make = Effect.gen(function* () {
       INNER JOIN orchestration_v2_projection_threads AS thread
         ON thread.thread_id = speech.thread_id
         AND thread.deleted_at IS NULL
-      WHERE speech.thread_id IN ${sql.in(threadIds)}
+      WHERE speech.thread_id IN ${sql.in(lineage.map((entry) => entry.threadId))}
+        AND ${inLineage(lineage)}
         ${messageId === undefined ? sql`` : sql`AND speech.message_id = ${messageId}`}
       ORDER BY speech.created_at, speech.message_id
     `.pipe(
@@ -597,20 +674,30 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const isPending = (messageId: string, lineage: ReadonlyArray<string>) => {
+  const isPending = (messageId: string, lineage: ReadonlyArray<LineageThread>) => {
     const job = jobs.get(messageId);
-    return job !== undefined && lineage.includes(job.threadId);
+    return job !== undefined && lineage.some((entry) => entry.threadId === job.threadId);
   };
 
   const readThread = Effect.fn("MessageSpeech.readThread")(function* (
     threadId: ThreadId,
-    lineage: ReadonlyArray<ThreadId>,
+    lineage: ReadonlyArray<LineageThread>,
   ) {
     const recordings = yield* readRecordings(lineage);
-    const pendingMessageIds = [...jobs.keys()]
-      .filter((messageId) => isPending(messageId, lineage))
-      .map((messageId) => MessageId.make(messageId));
-    const summaries = yield* readThreadSummaries(sql, lineage);
+    const jobMessageIds = [...jobs.keys()].filter((messageId) => isPending(messageId, lineage));
+    const pendingMessageIds =
+      jobMessageIds.length === 0
+        ? []
+        : (yield* sql<{ readonly messageId: string }>`
+            SELECT message.message_id AS "messageId"
+            FROM orchestration_v2_projection_messages AS message
+            WHERE message.message_id IN ${sql.in(jobMessageIds)} AND ${inLineage(lineage)}
+          `).map((row) => MessageId.make(row.messageId));
+    const summaries = yield* readThreadSummaries(
+      sql,
+      lineage.map((entry) => entry.threadId),
+      inLineage(lineage),
+    );
     const state: MessageSpeechThreadState = {
       threadId,
       recordings,
@@ -622,11 +709,23 @@ export const make = Effect.gen(function* () {
 
   const readMessage = Effect.fn("MessageSpeech.readMessage")(function* (
     threadId: ThreadId,
-    lineage: ReadonlyArray<ThreadId>,
+    lineage: ReadonlyArray<LineageThread>,
     messageId: MessageId,
   ) {
+    // A source's message from after the fork point is not in this thread's timeline.
+    const [message] = yield* sql<{ readonly inherited: number }>`
+      SELECT ${inLineage(lineage)} AS inherited
+      FROM orchestration_v2_projection_messages AS message
+      WHERE message.message_id = ${messageId}
+    `;
+    if (message !== undefined && message.inherited === 0) return null;
     const [recording] = yield* readRecordings(lineage, messageId);
-    const [summary] = yield* readThreadSummaries(sql, lineage, messageId);
+    const [summary] = yield* readThreadSummaries(
+      sql,
+      lineage.map((entry) => entry.threadId),
+      inLineage(lineage),
+      messageId,
+    );
     const update: MessageSpeechThreadUpdate = {
       type: "message",
       threadId,
@@ -649,7 +748,9 @@ export const make = Effect.gen(function* () {
           );
         // Fixed once the fork exists; read once per subscription.
         const lineage = yield* readLineage(threadId).pipe(
-          Effect.catch((error) => logFailure(error).pipe(Effect.as([threadId]))),
+          Effect.catch((error) =>
+            logFailure(error).pipe(Effect.as([{ threadId, boundary: null } as const])),
+          ),
         );
         // The whole state first; every later change is one message's entries.
         // A failed message read is retried by that message's next change, and
@@ -661,7 +762,7 @@ export const make = Effect.gen(function* () {
         return Stream.concat(
           Stream.fromEffect(snapshot),
           Stream.fromSubscription(subscription).pipe(
-            Stream.filter((change) => lineage.includes(change.threadId as ThreadId)),
+            Stream.filter((change) => lineage.some((entry) => entry.threadId === change.threadId)),
             Stream.mapEffect((change) =>
               readMessage(threadId, lineage, MessageId.make(change.messageId)).pipe(
                 Effect.catch(logFailure),

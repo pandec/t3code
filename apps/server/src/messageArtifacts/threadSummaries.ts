@@ -7,6 +7,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import type * as Statement from "effect/sql/Statement";
 
 import { MESSAGE_SUMMARY_RECIPE_HASH, messageArtifactTextHash } from "./identity.ts";
 import {
@@ -76,6 +77,8 @@ interface ThreadSummaryRow extends Pick<
 export const readThreadSummaries = (
   sql: SqlClient.SqlClient,
   threadIds: ReadonlyArray<ThreadId>,
+  /** A condition on `message` that further scopes which summaries are read. */
+  messageScope?: Statement.Fragment,
   messageId?: MessageId,
 ) =>
   sql<ThreadSummaryRow>`
@@ -100,6 +103,7 @@ export const readThreadSummaries = (
       AND thread.deleted_at IS NULL
     ${producingRunModelJoin(sql, sql`${sql.in(threadIds)}`)}
     WHERE summary.thread_id IN ${sql.in(threadIds)}
+      ${messageScope === undefined ? sql`` : sql`AND ${messageScope}`}
       ${messageId === undefined ? sql`` : sql`AND summary.message_id = ${messageId}`}
     ORDER BY summary.created_at, summary.message_id
   `.pipe(

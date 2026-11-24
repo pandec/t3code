@@ -4,6 +4,7 @@ import {
   EventId,
   MessageId,
   type MessageSpeechThreadState,
+  NodeId,
   type MessageSpeechThreadUpdate,
   type OrchestrationV2ConversationMessage,
   ProviderInstanceId,
@@ -329,7 +330,7 @@ it.layer(TestLayer)("message listening", (it) => {
     }),
   );
 
-  it.effect("shows a fork the artifacts of the messages it inherited, live", () =>
+  it.effect("shows a fork the artifacts of only the messages it inherited, live", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       const store = yield* ProjectionStore.ProjectionStoreV2;
@@ -379,11 +380,74 @@ it.layer(TestLayer)("message listening", (it) => {
           },
         },
       });
+      // The source's next run comes after the fork point, so the fork never shows its messages.
+      const laterRunId = RunId.make("run:speech-fork-source:later");
+      const laterNodeId = NodeId.make("node:speech-fork-source:later");
+      yield* store.apply({
+        id: EventId.make("event:speech-fork-source:later-run"),
+        type: "run.created",
+        threadId: source.id,
+        runId: laterRunId,
+        nodeId: laterNodeId,
+        providerInstanceId: model.instanceId,
+        occurredAt: yield* DateTime.now,
+        payload: {
+          id: laterRunId,
+          threadId: source.id,
+          ordinal: 2,
+          providerInstanceId: model.instanceId,
+          modelSelection: model,
+          providerThreadId: null,
+          userMessageId: MessageId.make("user-message:speech-fork-source:later"),
+          rootNodeId: laterNodeId,
+          activeAttemptId: null,
+          status: "completed",
+          requestedAt: yield* DateTime.now,
+          startedAt: yield* DateTime.now,
+          completedAt: yield* DateTime.now,
+          checkpointId: null,
+          contextHandoffId: null,
+        },
+      });
+      const later: OrchestrationV2ConversationMessage = {
+        ...recorded,
+        id: MessageId.make("message:speech-fork-source:later"),
+        runId: laterRunId,
+        nodeId: laterNodeId,
+      };
+      const laterPreparing: OrchestrationV2ConversationMessage = {
+        ...later,
+        id: MessageId.make("message:speech-fork-source:later-2"),
+      };
+      yield* setMessageText(later, "Later answer.");
+      yield* setMessageText(laterPreparing, "Second later answer.");
+      yield* insertAgentRecording(later);
+      yield* sql`
+        INSERT INTO fork_message_summaries (
+          message_id, thread_id, summary, source_text_hash, recipe_hash,
+          model_selection_json, model_selection_hash, created_at
+        ) VALUES (
+          ${later.id}, ${later.threadId}, 'Later summary.',
+          ${messageArtifactTextHash("Later answer.")}, ${MESSAGE_SUMMARY_RECIPE_HASH},
+          ${provenance?.modelSelectionJson ?? ""}, ${provenance?.modelSelectionHash ?? ""},
+          '2026-01-01T00:00:01.000Z'
+        )
+      `;
       const release = yield* Deferred.make<void>();
       const { service } = yield* makeSpeech((text) =>
         Deferred.await(release).pipe(Effect.as(new TextEncoder().encode(text))),
       );
 
+      const sourceUpdates = yield* watchThread(service.streamThread(source.id));
+      const sourceSnapshot = yield* takeSnapshot(sourceUpdates);
+      assert.deepEqual(
+        sourceSnapshot.recordings.map((recording) => recording.messageId),
+        [recorded.id, later.id],
+      );
+      assert.deepEqual(
+        sourceSnapshot.summaries.map((summary) => summary.summary),
+        ["Inherited summary.", "Later summary."],
+      );
       const updates = yield* watchThread(service.streamThread(forkId));
       const snapshot = yield* takeSnapshot(updates);
       assert.equal(snapshot.threadId, forkId);
@@ -396,7 +460,16 @@ it.layer(TestLayer)("message listening", (it) => {
         ["Inherited summary."],
       );
 
-      // A job on the source thread reaches the fork's subscribers.
+      const laterJob = yield* Effect.forkChild(
+        service.synthesize({ messageId: laterPreparing.id }),
+      );
+      assert.deepEqual(yield* Queue.take(sourceUpdates), {
+        type: "message",
+        threadId: source.id,
+        messageId: laterPreparing.id,
+        pending: true,
+      });
+      // A job for an inherited message reaches the fork's subscribers; the later one does not.
       const job = yield* Effect.forkChild(service.synthesize({ messageId: preparing.id }));
       assert.deepEqual(yield* Queue.take(updates), {
         type: "message",
@@ -404,7 +477,10 @@ it.layer(TestLayer)("message listening", (it) => {
         messageId: preparing.id,
         pending: true,
       });
+      const pendingSnapshot = yield* takeSnapshot(yield* watchThread(service.streamThread(forkId)));
+      assert.deepEqual(pendingSnapshot.pendingMessageIds, [preparing.id]);
       yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(laterJob);
       const result = yield* Fiber.join(job);
       assert.deepEqual(yield* Queue.take(updates), {
         type: "message",
