@@ -643,10 +643,12 @@ export const make = Effect.gen(function* PreviewDashlaneMake() {
   ) => {
     const settings = resolveSettings(saved);
     // A load has no timeout, so saves never wait for one; most change neither setting and skip the queue.
+    // Queued work applies the latest saved settings: a later save may have been skipped meanwhile.
     const work =
       settingsKey(settings) === applied
         ? Effect.void
-        : reconcile(settings).pipe(
+        : readSettings.pipe(
+            Effect.flatMap(reconcile),
             Effect.uninterruptible,
             mutex.withPermit,
             Effect.catchCause((cause) =>

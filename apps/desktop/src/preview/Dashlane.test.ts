@@ -456,6 +456,35 @@ describe("Dashlane session lifecycle", () => {
     }).pipe(Effect.scoped, Effect.provide(testServices)),
   );
 
+  it.effect("applies the latest save once a load releases the settings queue", () =>
+    Effect.gen(function* () {
+      const allowRead = yield* Deferred.make<void>();
+      let gated = false;
+      const test = yield* makeHarness({
+        beforeRead: Effect.suspend(() => (gated ? Deferred.await(allowRead) : Effect.void)),
+      });
+      const work = { ...test.session } as unknown as Session;
+      test.configure({ profileIds: ["profile-1"] });
+      yield* test.refresh();
+      yield* test.service.prepareSession(test.session, undefined);
+      gated = true;
+      // Loading into another profile holds the queue while both saves land.
+      const loading = yield* test.service
+        .prepareSession(work, "profile-1")
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      test.configure({ profileIds: ["default", "profile-1"] });
+      const enabling = yield* test.save();
+      test.configure({ profileIds: ["profile-1"] });
+      const reverting = yield* test.save();
+      yield* Deferred.succeed(allowRead, undefined);
+      yield* Fiber.join(loading);
+      yield* Fiber.join(enabling);
+      yield* Fiber.join(reverting);
+      // Only the other profile loaded Dashlane; the reverted default profile never did.
+      assert.strictEqual(test.loadExtension.mock.calls.length, 1);
+    }).pipe(Effect.scoped, Effect.provide(testServices)),
+  );
+
   it.effect("loads once installed, and never into incognito", () =>
     Effect.gen(function* () {
       const test = yield* makeHarness();
@@ -980,11 +1009,14 @@ describe("Dashlane updates", () => {
       yield* Queue.take(test.settingsReads);
       test.configure({ enabled: false });
       yield* test.refresh();
+      // Each save re-reads the saved settings before it applies them.
+      yield* Queue.take(test.settingsReads);
       yield* TestClock.adjust("2 days");
       assert.strictEqual(yield* Queue.size(test.requests), 0);
 
       test.configure({ enabled: true });
       yield* test.refresh();
+      yield* Queue.take(test.settingsReads);
       yield* TestClock.adjust("30 seconds");
       const url = yield* Queue.take(test.requests);
       assert.strictEqual(url.searchParams.get("x"), `id=${DASHLANE_EXTENSION_ID}&v=6.2645.0&uc`);
