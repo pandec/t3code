@@ -2862,10 +2862,73 @@ describe("UsageService", () => {
         );
       }).pipe(
         Effect.provide(
-          layerService({ prefix: "usage-service-opencode-retention", home, settings }),
+          layerService({
+            prefix: "usage-service-opencode-retention",
+            home,
+            // Real time: keep the dated row inside retention.
+            settings: { ...settings, usageHistoryRetentionDays: "unlimited" },
+          }),
         ),
       );
     }).pipe(Effect.scoped),
+  );
+
+  it.effect("stops counting and keeping a deleted OpenCode row once retention drops", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-08-02T12:00:00Z"));
+      const { settings, home } = yield* setup;
+      const root = NodePath.join(home, "opencode");
+      const database = NodePath.join(root, "opencode.db");
+      yield* Effect.promise(async () => {
+        await NodeFSP.mkdir(root);
+        const db = new NodeSqlite.DatabaseSync(database);
+        try {
+          db.exec("CREATE TABLE message (id TEXT, session_id TEXT, data TEXT)");
+          const insert = db.prepare("INSERT INTO message VALUES (?, 'session', ?)");
+          for (const [id, created, output] of [
+            ["old", "2026-07-31T10:00:00Z", 5],
+            ["new", "2026-08-02T10:00:00Z", 7],
+          ] as const) {
+            insert.run(
+              id,
+              encodeUnknownJsonString({
+                role: "assistant",
+                modelID: "example-model",
+                time: { created: Date.parse(created) },
+                tokens: { input: 10, output },
+              }),
+            );
+          }
+        } finally {
+          db.close();
+        }
+      });
+      yield* Effect.gen(function* () {
+        const config = yield* ServerSettings.ServerSettingsService;
+        const service = yield* UsageService.make;
+        assert.strictEqual(totalOutputTokens(yield* service.readSummary(WINDOW)), 12);
+        // The database stays; only the old row leaves it, so only the scan cache still holds it.
+        yield* Effect.promise(async () => {
+          const db = new NodeSqlite.DatabaseSync(database);
+          try {
+            db.exec("DELETE FROM message WHERE id = 'old'");
+          } finally {
+            db.close();
+          }
+        });
+        assert.strictEqual(totalOutputTokens(yield* service.readSummary(WINDOW)), 12);
+        yield* config.updateSettings({ usageHistoryRetentionDays: 1 });
+        assert.strictEqual(totalOutputTokens(yield* service.readSummary(WINDOW)), 7);
+        yield* service.awaitPersisted;
+        yield* config.updateSettings({ usageHistoryRetentionDays: "unlimited" });
+        const restarted = yield* UsageService.make;
+        assert.strictEqual(totalOutputTokens(yield* restarted.readSummary(WINDOW)), 7);
+      }).pipe(
+        Effect.provide(
+          layerService({ prefix: "usage-service-opencode-reader-retention", home, settings }),
+        ),
+      );
+    }),
   );
 
   it.effect("counts an OpenCode fork copy once, also after its original is deleted", () =>
