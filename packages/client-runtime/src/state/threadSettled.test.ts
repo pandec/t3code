@@ -133,12 +133,12 @@ describe("archiveDiscardedQueuedMessages", () => {
     ).toEqual({ total: 0, inSideChats: 0 });
   });
 
-  it("asks again when the total or the thread's own queue grew past what was confirmed", () => {
+  it("asks again when the side chat or the thread's own queue grew past what was confirmed", () => {
     const confirmed = { total: 3, inSideChats: 2 };
     expect(discardExceedsConfirmed({ total: 3, inSideChats: 2 }, confirmed)).toBe(false);
     expect(discardExceedsConfirmed({ total: 1, inSideChats: 0 }, confirmed)).toBe(false);
-    // Side chats took over the thread's share: nothing more is discarded.
-    expect(discardExceedsConfirmed({ total: 3, inSideChats: 3 }, confirmed)).toBe(false);
+    // The same total moved to the side chats: the prompt named fewer there.
+    expect(discardExceedsConfirmed({ total: 3, inSideChats: 3 }, confirmed)).toBe(true);
     expect(discardExceedsConfirmed({ total: 4, inSideChats: 3 }, confirmed)).toBe(true);
     // The same total moved from a side chat to the thread itself.
     expect(discardExceedsConfirmed({ total: 3, inSideChats: 1 }, confirmed)).toBe(true);

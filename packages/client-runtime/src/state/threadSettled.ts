@@ -128,7 +128,7 @@ export function discardExceedsConfirmed(
   confirmed: ArchiveQueuedMessageDiscard,
 ): boolean {
   return (
-    next.total > confirmed.total ||
+    next.inSideChats > confirmed.inSideChats ||
     next.total - next.inSideChats > confirmed.total - confirmed.inSideChats
   );
 }
