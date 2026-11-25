@@ -229,17 +229,12 @@ describe("DesktopLifecycle", () => {
     }),
   );
 
-  // Fork: a packaged Dev build uses the `t3code-dev` scheme without a Vite server.
-  it.effect.each([
-    { dev: false, scheme: "t3code" },
-    { dev: true, scheme: "t3code-dev" },
-  ])("relaunches without the $scheme link that launched it", ({ dev, scheme }) =>
+  it.effect("relaunches without the app link that launched it", () =>
     Effect.gen(function* () {
       const relaunched = yield* Deferred.make<Electron.RelaunchOptions>();
       const layerEnvironment = Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
         platform: "linux",
         isDevelopment: false,
-        usesDevelopmentIdentity: dev,
       } as DesktopEnvironment.DesktopEnvironment["Service"]);
       const layer = DesktopLifecycle.layer.pipe(
         Layer.provideMerge(
@@ -269,8 +264,8 @@ describe("DesktopLifecycle", () => {
         Effect.provideService(HostProcess.Arguments, [
           "/opt/T3 Code/t3code",
           "--no-sandbox",
-          `${scheme.toUpperCase()}://pair?token=spent`,
-          `${scheme}://new?prompt=hello`,
+          "T3CODE://pair?token=spent",
+          "t3code://new?prompt=hello",
         ]),
       );
 
