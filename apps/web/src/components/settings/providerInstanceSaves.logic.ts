@@ -9,11 +9,15 @@ import {
 
 export type ProviderInstanceSave = CustomModelSave<ProviderInstanceConfig>;
 
-/** Unechoed whole-envelope writes per instance, and the stored key they were last reconciled with. */
+/** Unechoed whole-envelope writes per instance, and the stored envelope they were last reconciled with. */
 export type ProviderInstanceSaves = ReadonlyMap<
   ProviderInstanceId,
-  { readonly storedKey: string; readonly saves: ReadonlyArray<ProviderInstanceSave> }
+  { readonly stored: string; readonly saves: ReadonlyArray<ProviderInstanceSave> }
 >;
+
+// Change detection reads the whole envelope: a masked field can change while the key stays put.
+const storedSnapshot = (instance: ProviderInstanceConfig | undefined) =>
+  stableStringify(instance ?? null);
 
 /** Env values and usage-source keys can echo redacted, so a write and its echo share a key without them. */
 export function providerInstanceKey(instance: ProviderInstanceConfig | undefined): string {
@@ -32,11 +36,11 @@ export function providerInstanceKey(instance: ProviderInstanceConfig | undefined
 function withInstanceSaves(
   saves: ProviderInstanceSaves,
   instanceId: ProviderInstanceId,
-  storedKey: string,
+  stored: string,
   pending: ReadonlyArray<ProviderInstanceSave>,
 ): ProviderInstanceSaves {
   const next = new Map(saves);
-  if (pending.length > 0) next.set(instanceId, { storedKey, saves: pending });
+  if (pending.length > 0) next.set(instanceId, { stored, saves: pending });
   else next.delete(instanceId);
   return next;
 }
@@ -48,13 +52,13 @@ export function reconcileProviderInstanceSaves(
 ): ProviderInstanceSaves {
   let next = saves;
   for (const [instanceId, entry] of saves) {
-    const storedKey = providerInstanceKey(stored?.[instanceId]);
-    if (storedKey === entry.storedKey) continue;
+    const snapshot = storedSnapshot(stored?.[instanceId]);
+    if (snapshot === entry.stored) continue;
     next = withInstanceSaves(
       next,
       instanceId,
-      storedKey,
-      pendingCustomModelSaves(entry.saves, storedKey),
+      snapshot,
+      pendingCustomModelSaves(entry.saves, providerInstanceKey(stored?.[instanceId])),
     );
   }
   return next;
@@ -67,7 +71,7 @@ export function addProviderInstanceSave(
   stored: ProviderInstanceConfig | undefined,
 ): ProviderInstanceSaves {
   const entry = saves.get(instanceId);
-  return withInstanceSaves(saves, instanceId, entry?.storedKey ?? providerInstanceKey(stored), [
+  return withInstanceSaves(saves, instanceId, entry?.stored ?? storedSnapshot(stored), [
     ...(entry?.saves ?? []),
     sent,
   ]);
@@ -84,7 +88,7 @@ export function settleProviderInstanceSave(
   return withInstanceSaves(
     saves,
     instanceId,
-    entry.storedKey,
+    entry.stored,
     settleCustomModelSave(entry.saves, sent, saved),
   );
 }
