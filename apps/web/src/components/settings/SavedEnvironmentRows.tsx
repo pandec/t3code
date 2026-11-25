@@ -21,8 +21,7 @@ import {
   connectionErrorText,
   connectionStatusText,
   environmentMcpUrl,
-  type ConnectionRoute,
-  isLearned,
+  ConnectionOnboarding,
   routeHttpBaseUrl,
 } from "@t3tools/client-runtime/connection";
 import * as Option from "effect/Option";
@@ -266,7 +265,11 @@ export function SavedBackendListRow({
   // Editing rewrites the environment's first direct (bearer) route and reuses
   // its stored token, so any entry with one is editable — including one that
   // also has T3 Connect or SSH routes. The desktop-local WSL backend is not.
-  const isEditable = !isWslEnvironment && editableBearerRoute(environment.entry) !== null;
+  const editableRoute = ConnectionOnboarding.updatableBearerRoute(environment.entry);
+  const isEditable =
+    !isWslEnvironment &&
+    editableRoute !== undefined &&
+    !isDesktopLocalConnectionTarget(editableRoute.target);
   const showUpdateAction =
     enabled &&
     isConnected &&
@@ -511,18 +514,6 @@ export function SavedBackendListRow({
   );
 }
 
-/**
- * The route `updateBearer` edits: the entry's first paired (not learned) direct
- * bearer route, in the saved route order. Null when the entry has none (T3
- * Connect or SSH only).
- */
-function editableBearerRoute(entry: EnvironmentPresentation["entry"]): ConnectionRoute | null {
-  const route = connectionRoutes(entry).find(
-    (candidate) => candidate.target._tag === "BearerConnectionTarget" && !isLearned(candidate),
-  );
-  return route === undefined || isDesktopLocalConnectionTarget(route.target) ? null : route;
-}
-
 export type EditSavedBackendInput = {
   readonly environmentId: EnvironmentId;
   readonly label: string;
@@ -540,7 +531,7 @@ export function EditSavedBackendDialog({
 }) {
   const [label, setLabel] = useState(environment.label);
   const [url, setUrl] = useState(() => {
-    const route = editableBearerRoute(environment.entry);
+    const route = ConnectionOnboarding.updatableBearerRoute(environment.entry);
     return (route ? routeHttpBaseUrl(route) : null) ?? environment.displayUrl ?? "";
   });
   const [error, setError] = useState<string | null>(null);

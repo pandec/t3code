@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useRef, useState } from "react";
 import {
   DEFAULT_UNIFIED_SETTINGS,
@@ -14,11 +15,11 @@ import {
   type TtsTestResult,
 } from "@t3tools/contracts";
 
-import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
+import { useEnvironments } from "../../state/environments";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
+import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -38,6 +39,7 @@ import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
 import { useSearchableSetting } from "./settingsSearch";
+import { useSettingsScope } from "./SettingsScopeContext";
 import {
   createTtsTestAudioSession,
   describeCatalogModel,
@@ -240,23 +242,24 @@ function TtsProfileFields({
 /**
  * Synthesizes a sample with the current selection so a model or voice can
  * be judged before it is used on a real message. The audio never leaves the
- * dialog: it plays from a blob URL that is revoked when the dialog closes.
+ * dialog: it plays from a blob URL that is revoked when the sample is discarded.
  */
 function TtsTestDialog({
-  open,
-  onOpenChange,
   environmentId,
   profile,
   catalog,
+  text,
+  onTextChange,
+  onClose,
 }: {
-  readonly open: boolean;
-  readonly onOpenChange: (open: boolean) => void;
   readonly environmentId: EnvironmentId;
   readonly profile: TtsProfile;
   readonly catalog: TtsCatalogResult | null;
+  readonly text: string;
+  readonly onTextChange: (text: string) => void;
+  readonly onClose: () => void;
 }) {
   const testTts = useAtomCommand(serverEnvironment.testTts, { reportFailure: false });
-  const [text, setText] = useState(TTS_TEST_SAMPLE_TEXT);
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<TtsTestResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -264,42 +267,17 @@ function TtsTestDialog({
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const [audioSession] = useState(createTtsTestAudioSession);
-
-  // Opening, closing, or changing the selection discards the previous sample.
-  const sampleKey = [
-    open,
-    environmentId,
-    profile.provider,
-    profile.modelId,
-    profile.voiceId,
-    profile.instructions,
-  ].join("\u0000");
-  const [renderedSampleKey, setRenderedSampleKey] = useState(sampleKey);
-  if (renderedSampleKey !== sampleKey) {
-    setRenderedSampleKey(sampleKey);
-    setAudioUrl(null);
-    setResult(null);
-    setError(null);
-    setPending(false);
-  }
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- revokes the sample's blob URL
-  useEffect(
-    () => () => audioSession.clear(),
-    [
-      audioSession,
-      // oxlint-disable-next-line react/exhaustive-effect-dependencies -- A new sample key revokes the previous sample's blob URL.
-      sampleKey,
-    ],
-  );
+  useEffect(() => () => audioSession.clear(), [audioSession]);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- autoplays the new sample
   useEffect(() => {
-    if (open && audioUrl !== null) void audioRef.current?.play().catch(() => undefined);
-  }, [open, audioUrl]);
+    if (audioUrl !== null) void audioRef.current?.play().catch(() => undefined);
+  }, [audioUrl]);
 
   const generate = async () => {
     const trimmed = text.trim();
-    if (!open || trimmed.length === 0 || pending) return;
+    if (trimmed.length === 0 || pending) return;
     const request = audioSession.begin();
     setPending(true);
     setError(null);
@@ -323,63 +301,61 @@ function TtsTestDialog({
     profile.voiceId;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogPopup className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Test text-to-speech</DialogTitle>
-          <DialogDescription>
-            {TTS_PROVIDER_LABELS[profile.provider]} · {model?.name ?? profile.modelId} · {voiceName}
-          </DialogDescription>
-        </DialogHeader>
-        <DialogPanel>
-          <div className="grid gap-3">
+    <>
+      <DialogHeader>
+        <DialogTitle>Test text-to-speech</DialogTitle>
+        <DialogDescription>
+          {TTS_PROVIDER_LABELS[profile.provider]} · {model?.name ?? profile.modelId} · {voiceName}
+        </DialogDescription>
+      </DialogHeader>
+      <DialogPanel>
+        <div className="grid gap-3">
+          <div className="grid gap-1.5">
+            <Label htmlFor="tts-test-text">Sample text</Label>
+            <Textarea
+              id="tts-test-text"
+              value={text}
+              onChange={(event) => onTextChange(event.target.value)}
+              maxLength={TTS_TEST_MAX_TEXT_CHARS}
+              rows={5}
+              disabled={pending}
+            />
+            <p className="text-xs text-muted-foreground">
+              {text.trim().length.toLocaleString()} / {TTS_TEST_MAX_TEXT_CHARS.toLocaleString()}{" "}
+              chars
+              {model?.priceUsdPerMillionChars !== null &&
+              model?.priceUsdPerMillionChars !== undefined
+                ? ` · ${describeCatalogModel(model)}`
+                : ""}
+            </p>
+          </div>
+          {error !== null ? <p className="text-sm text-destructive">{error}</p> : null}
+          {audioUrl !== null && result !== null ? (
             <div className="grid gap-1.5">
-              <Label htmlFor="tts-test-text">Sample text</Label>
-              <Textarea
-                id="tts-test-text"
-                value={text}
-                onChange={(event) => setText(event.target.value)}
-                maxLength={TTS_TEST_MAX_TEXT_CHARS}
-                rows={5}
-                disabled={pending}
-              />
+              <audio ref={audioRef} controls src={audioUrl} className="w-full" />
               <p className="text-xs text-muted-foreground">
-                {text.trim().length.toLocaleString()} / {TTS_TEST_MAX_TEXT_CHARS.toLocaleString()}{" "}
-                chars
-                {model?.priceUsdPerMillionChars !== null &&
-                model?.priceUsdPerMillionChars !== undefined
-                  ? ` · ${describeCatalogModel(model)}`
-                  : ""}
+                {describeTestCost({
+                  cost: result.cost,
+                  characterCount: result.characterCount,
+                  model,
+                })}
+                {" · "}
+                {(result.sizeBytes / 1024).toFixed(0)} KB
               </p>
             </div>
-            {error !== null ? <p className="text-sm text-destructive">{error}</p> : null}
-            {audioUrl !== null && result !== null ? (
-              <div className="grid gap-1.5">
-                <audio ref={audioRef} controls src={audioUrl} className="w-full" />
-                <p className="text-xs text-muted-foreground">
-                  {describeTestCost({
-                    cost: result.cost,
-                    characterCount: result.characterCount,
-                    model,
-                  })}
-                  {" · "}
-                  {(result.sizeBytes / 1024).toFixed(0)} KB
-                </p>
-              </div>
-            ) : null}
-          </div>
-        </DialogPanel>
-        <DialogFooter variant="bare">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Close
-          </Button>
-          <Button onClick={() => void generate()} disabled={pending || text.trim().length === 0}>
-            {pending ? <Spinner /> : null}
-            {result === null ? "Generate" : "Generate again"}
-          </Button>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
+          ) : null}
+        </div>
+      </DialogPanel>
+      <DialogFooter variant="bare">
+        <Button variant="outline" onClick={onClose}>
+          Close
+        </Button>
+        <Button onClick={() => void generate()} disabled={pending || text.trim().length === 0}>
+          {pending ? <Spinner /> : null}
+          {result === null ? "Generate" : "Generate again"}
+        </Button>
+      </DialogFooter>
+    </>
   );
 }
 
@@ -393,6 +369,7 @@ function TestButton({
   readonly disabled: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [text, setText] = useState(TTS_TEST_SAMPLE_TEXT);
   const status = useTtsStatus(environmentId);
   const resolved = resolveDisplayedTtsProfile(
     profile,
@@ -410,22 +387,28 @@ function TestButton({
         Test
       </Button>
       {environmentId !== null && resolved !== null ? (
-        <TtsTestDialog
-          open={open}
-          onOpenChange={setOpen}
-          environmentId={environmentId}
-          profile={resolved}
-          catalog={catalog.data}
-        />
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogPopup className="max-w-lg">
+            <TtsTestDialog
+              // Opening, closing, or changing the selection discards the previous sample.
+              key={[open, environmentId, ...Object.values(resolved)].join("\u0000")}
+              environmentId={environmentId}
+              profile={resolved}
+              catalog={catalog.data}
+              text={text}
+              onTextChange={setText}
+              onClose={() => setOpen(false)}
+            />
+          </DialogPopup>
+        </Dialog>
       ) : null}
     </>
   );
 }
 
-function OpenRouterTtsKeyRow() {
+function OpenRouterTtsKeyRow({ environmentId }: { readonly environmentId: EnvironmentId | null }) {
   const { environments } = useEnvironments();
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const status = useTtsStatus(primaryEnvironmentId);
+  const status = useTtsStatus(environmentId);
   const configure = useAtomCommand(serverEnvironment.configureTtsOpenRouter);
   const pendingApplyRef = useRef<Promise<void>>(Promise.resolve());
 
@@ -516,17 +499,36 @@ function OpenRouterTtsKeyRow() {
   );
 }
 
+/** Fork: voice settings for the selected environment's server. */
 export function VoiceSettingsSection() {
   const searchableSetting = useSearchableSetting();
-  const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const status = useTtsStatus(primaryEnvironmentId);
+  const environmentId = useSettingsScope().environment?.environmentId ?? null;
+
+  return (
+    <SettingsSection {...searchableSetting("extras-voice-listening")}>
+      <OpenRouterTtsKeyRow environmentId={environmentId} />
+      {environmentId ? (
+        <VoiceProfileRows key={environmentId} environmentId={environmentId} />
+      ) : (
+        <p className="px-3 py-3 text-muted-foreground text-xs sm:px-4">
+          Connect an environment to set up voice.
+        </p>
+      )}
+    </SettingsSection>
+  );
+}
+
+function VoiceProfileRows({ environmentId }: { readonly environmentId: EnvironmentId }) {
+  const searchableSetting = useSearchableSetting();
+  const voice = useEnvironmentSettings(environmentId, (settings) => settings.voice);
+  const updateSettings = useUpdateEnvironmentSettings(environmentId);
+  const canWrite = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
+  const status = useTtsStatus(environmentId);
   const providerConfigured = (provider: TtsProvider) =>
     status.data === null || status.data[provider].configured;
 
-  const defaultProfile = settings.voice.tts;
-  const override = settings.voice.agentReplyTts;
+  const defaultProfile = voice.tts;
+  const override = voice.agentReplyTts;
   const defaultDirty =
     defaultProfile.provider !== DEFAULT_UNIFIED_SETTINGS.voice.tts.provider ||
     defaultProfile.modelId !== "" ||
@@ -534,9 +536,7 @@ export function VoiceSettingsSection() {
     defaultProfile.instructions !== "";
 
   return (
-    <SettingsSection {...searchableSetting("extras-voice-listening")}>
-      <OpenRouterTtsKeyRow />
-
+    <>
       <SettingsRow
         serverScoped
         title="Text-to-speech"
@@ -562,7 +562,7 @@ export function VoiceSettingsSection() {
         }
         control={
           <TestButton
-            environmentId={primaryEnvironmentId}
+            environmentId={environmentId}
             profile={defaultProfile}
             disabled={!providerConfigured(defaultProfile.provider)}
           />
@@ -573,7 +573,8 @@ export function VoiceSettingsSection() {
             idPrefix="tts-default"
             profile={defaultProfile}
             onPatch={(patch) => updateSettings({ voice: { tts: patch } })}
-            environmentId={primaryEnvironmentId}
+            environmentId={environmentId}
+            disabled={!canWrite}
           />
         </div>
       </SettingsRow>
@@ -584,7 +585,7 @@ export function VoiceSettingsSection() {
         title="Agent voice replies"
         description="Give agents a voice_reply tool that answers with a spoken recording shown as the main message. Applies to sessions started from now on."
         resetAction={
-          settings.voice.enableAgentVoiceReplies !==
+          voice.enableAgentVoiceReplies !==
           DEFAULT_UNIFIED_SETTINGS.voice.enableAgentVoiceReplies ? (
             <SettingResetButton
               ariaLabel="Reset agent voice replies to default"
@@ -600,7 +601,7 @@ export function VoiceSettingsSection() {
         }
         control={
           <Switch
-            checked={settings.voice.enableAgentVoiceReplies}
+            checked={voice.enableAgentVoiceReplies}
             onCheckedChange={(checked) =>
               updateSettings({ voice: { enableAgentVoiceReplies: Boolean(checked) } })
             }
@@ -625,7 +626,7 @@ export function VoiceSettingsSection() {
           <div className="flex items-center gap-3">
             {override !== null ? (
               <TestButton
-                environmentId={primaryEnvironmentId}
+                environmentId={environmentId}
                 profile={override}
                 disabled={!providerConfigured(override.provider)}
               />
@@ -648,11 +649,12 @@ export function VoiceSettingsSection() {
               idPrefix="tts-agent"
               profile={override}
               onPatch={(patch) => updateSettings({ voice: { agentReplyTts: patch } })}
-              environmentId={primaryEnvironmentId}
+              environmentId={environmentId}
+              disabled={!canWrite}
             />
           </div>
         ) : null}
       </SettingsRow>
-    </SettingsSection>
+    </>
   );
 }

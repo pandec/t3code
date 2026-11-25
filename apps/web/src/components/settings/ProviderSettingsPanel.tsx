@@ -41,7 +41,7 @@ import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Result from "effect/Result";
 import { PlusIcon } from "lucide-react";
-import { type ComponentProps, useEffect, useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
 import { m as resolveNow, type MessageResolver } from "../../i18n/messages";
 
@@ -113,11 +113,17 @@ import { useSearchableSetting } from "./settingsSearch";
 import { CompactIdleThreadsRow } from "./SettingsPanels";
 import {
   backgroundActivityOverrideSettings,
-  buildCodexSetupModeInstance,
   buildProviderInstanceUpdatePatch,
   durationToSeconds,
   PROVIDER_HEALTH_INTERVAL_STEP_SECONDS,
 } from "./SettingsPanels.logic";
+import {
+  addProviderInstanceSave,
+  type ProviderInstanceSaves,
+  providerInstanceKey,
+  reconcileProviderInstanceSaves,
+  settleProviderInstanceSave,
+} from "./providerInstanceSaves.logic";
 import {
   PolicyTooltip,
   SettingResetButton,
@@ -618,7 +624,8 @@ export function EnvironmentProviderSettings({
   >(() => new Set());
   const refreshingRef = useRef(false);
   const updatingInstanceIdsRef = useRef<Set<ProviderInstanceId>>(new Set());
-  const pendingInstancesRef = useRef<Map<ProviderInstanceId, ProviderInstanceConfig>>(new Map());
+  // Fork: every write replaces the whole envelope, so cards render and build on the latest unechoed one.
+  const [storedInstanceSaves, setInstanceSaves] = useState<ProviderInstanceSaves>(() => new Map());
 
   const acceptUrlAuthentication = useStableCallback(
     (instanceId: ProviderInstanceId, action: AcpRegistryUrlAuthAction) => {
@@ -819,23 +826,32 @@ export function EnvironmentProviderSettings({
     rows.find((row) => row.instanceId === selectedInstanceId) ??
     (targetInstanceMissing ? null : (rows[0] ?? null));
 
-  // A pending envelope is only acknowledged by its card; once its row is gone
-  // (e.g. a reset hides a default-off slot), drop it so a later re-create of
-  // the same id cannot build on it.
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- prunes pending envelopes of removed rows
-  useEffect(() => {
-    for (const id of pendingInstancesRef.current.keys()) {
-      if (!rows.some((row) => row.instanceId === id)) pendingInstancesRef.current.delete(id);
-    }
-  });
-
-  // A rejected write never echoes, so its pending envelope would otherwise
-  // make every later edit of the card resurrect it. A newer pending write
-  // for the same instance stays.
-  const dropPendingInstance = (instanceId: ProviderInstanceId, written: ProviderInstanceConfig) => {
-    if (pendingInstancesRef.current.get(instanceId) === written) {
-      pendingInstancesRef.current.delete(instanceId);
-    }
+  const instanceSaves = reconcileProviderInstanceSaves(
+    storedInstanceSaves,
+    settings.providerInstances,
+  );
+  if (instanceSaves !== storedInstanceSaves) setInstanceSaves(instanceSaves);
+  const trackInstanceSave = async (
+    instanceId: ProviderInstanceId,
+    next: ProviderInstanceConfig,
+    write: () => ReturnType<typeof persistProviderInstance>,
+    // A reset echoes as an absent instance.
+    echoKey = providerInstanceKey(next),
+  ) => {
+    const sent = { models: next, key: echoKey };
+    const stored = settings.providerInstances?.[instanceId];
+    setInstanceSaves((saves) => addProviderInstanceSave(saves, instanceId, sent, stored));
+    const result = await write();
+    setInstanceSaves((saves) =>
+      settleProviderInstanceSave(
+        saves,
+        instanceId,
+        sent,
+        result._tag === "Success",
+        result._tag === "Success" ? result.value.providerInstances?.[instanceId] : undefined,
+      ),
+    );
+    return result;
   };
 
   const persistInstance = async (
@@ -851,13 +867,9 @@ export function EnvironmentProviderSettings({
       instance: next,
       textGenerationModelSelection,
     });
-    const result = await persistProviderInstance(
-      { operation: "upsert", instanceId, instance: next },
-      patch,
+    const result = await trackInstanceSave(instanceId, next, () =>
+      persistProviderInstance({ operation: "upsert", instanceId, instance: next }, patch),
     );
-    if (result._tag === "Failure") {
-      dropPendingInstance(instanceId, next);
-    }
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);
       toastManager.add({
@@ -891,19 +903,9 @@ export function EnvironmentProviderSettings({
     },
   );
 
-  // Setup-driven writes build on the pending envelope, not the
-  // not-yet-acknowledged `instance`, so an editor change made just before
-  // (or after) survives.
   const enableInstance = useStableCallback(
-    (
-      instanceId: ProviderInstanceId,
-      instance: ProviderInstanceConfig,
-      build: (base: ProviderInstanceConfig) => ProviderInstanceConfig,
-    ) => {
-      const next = build(pendingInstancesRef.current.get(instanceId) ?? instance);
-      pendingInstancesRef.current.set(instanceId, next);
-      return persistInstance(instanceId, next);
-    },
+    (instanceId: ProviderInstanceId, next: ProviderInstanceConfig) =>
+      persistInstance(instanceId, next),
   );
 
   const deleteInstance = useStableCallback(
@@ -914,7 +916,6 @@ export function EnvironmentProviderSettings({
         }),
       );
       if (!confirmed) return;
-      pendingInstancesRef.current.delete(instanceId);
       const updateResult = await persistProviderInstance({
         operation: "remove",
         instanceId,
@@ -969,18 +970,13 @@ export function EnvironmentProviderSettings({
       turnsOff ? ` ${gt("It will also be turned off.")}` : "",
     );
     if (!confirmed) return;
-    // Until the reset echoes back, the card's next edit must build on the
-    // default config the unconfigured slot falls back to, not on the
-    // envelope being reset.
-    const resetInstance: ProviderInstanceConfig = { driver: driverKind };
-    pendingInstancesRef.current.set(instanceId, resetInstance);
-    const result = await persistProviderInstance({
-      operation: "remove",
+    // Until it echoes, the card shows and builds on the defaults the unconfigured slot falls back to.
+    const result = await trackInstanceSave(
       instanceId,
-    });
-    if (result._tag === "Failure") {
-      dropPendingInstance(instanceId, resetInstance);
-    }
+      { driver: driverKind },
+      () => persistProviderInstance({ operation: "remove", instanceId }),
+      providerInstanceKey(undefined),
+    );
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);
       toastManager.add({
@@ -1035,10 +1031,11 @@ export function EnvironmentProviderSettings({
         environmentLabel={environmentLabel}
         instanceId={row.instanceId}
         driver={row.driver}
-        explicitInstance={row.explicitInstance}
+        explicitInstance={
+          instanceSaves.get(row.instanceId)?.saves.at(-1)?.models ?? row.explicitInstance
+        }
         isDefault={row.isDefault}
         isDirty={row.isDirty === true}
-        pendingInstancesRef={pendingInstancesRef}
         mode={mode}
         selected={mode === "list" && selectedRow?.instanceId === row.instanceId}
         readOnly={readOnly}
@@ -1315,8 +1312,7 @@ interface ProviderInstanceRowActions {
   ) => Promise<boolean>;
   readonly enableInstance: (
     instanceId: ProviderInstanceId,
-    instance: ProviderInstanceConfig,
-    build: (base: ProviderInstanceConfig) => ProviderInstanceConfig,
+    next: ProviderInstanceConfig,
   ) => Promise<boolean>;
   readonly deleteInstance: (
     instanceId: ProviderInstanceId,
@@ -1355,7 +1351,6 @@ function ProviderInstanceRow({
   modelPreferences,
   favorites,
   actions,
-  pendingInstancesRef,
 }: {
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
@@ -1378,7 +1373,6 @@ function ProviderInstanceRow({
     | undefined;
   readonly favorites: UnifiedSettings["favorites"];
   readonly actions: ProviderInstanceRowActions;
-  readonly pendingInstancesRef: ComponentProps<typeof ProviderInstanceCard>["pendingInstancesRef"];
 }) {
   const gt = useGT();
   const allProjects = useProjects();
@@ -1431,7 +1425,6 @@ function ProviderInstanceRow({
       instance={instance}
       driverOption={driverOption}
       liveProvider={liveProvider}
-      pendingInstancesRef={pendingInstancesRef}
       mode={mode}
       selected={selected}
       onSelect={mode === "list" ? () => actions.selectInstance(instanceId) : undefined}
@@ -1457,9 +1450,7 @@ function ProviderInstanceRow({
             authMethod={readAntigravityAuthMethod(instance.config)}
             enabled={resolveProviderInstanceEnabled(instance)}
             readOnly={readOnly}
-            onEnable={() =>
-              actions.enableInstance(instanceId, instance, (base) => ({ ...base, enabled: true }))
-            }
+            onEnable={() => actions.enableInstance(instanceId, { ...instance, enabled: true })}
           />
         ) : mode === "editor" && codexSetupMode === "managed" ? (
           <CodexSetupSection
@@ -1470,9 +1461,17 @@ function ProviderInstanceRow({
             enabled={resolveProviderInstanceEnabled(instance)}
             readOnly={readOnly}
             onModeChange={(setupMode) =>
-              actions.enableInstance(instanceId, instance, (base) =>
-                buildCodexSetupModeInstance(base, setupMode),
-              )
+              actions.enableInstance(instanceId, {
+                ...instance,
+                enabled: true,
+                config: {
+                  ...(instance.config !== null && typeof instance.config === "object"
+                    ? instance.config
+                    : {}),
+                  enabled: true,
+                  setupMode,
+                },
+              })
             }
           />
         ) : mode === "editor" &&
