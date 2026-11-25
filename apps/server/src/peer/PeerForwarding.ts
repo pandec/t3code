@@ -4,6 +4,8 @@ import {
   type OrchestratorMcpEnvironmentLinksResult,
   OrchestratorMcpThreadInterruptInput,
   OrchestratorMcpThreadInterruptResult,
+  type OrchestratorMcpThreadListInput,
+  type OrchestratorMcpThreadListResult,
   OrchestratorMcpThreadReadInput,
   OrchestratorMcpThreadReadResult,
   OrchestratorMcpThreadWaitInput,
@@ -111,6 +113,29 @@ export const readNewestOrRetry = Effect.fn("PeerForwarding.readNewestOrRetry")(f
 ) {
   return yield* read(newest).pipe(Effect.catchIf(refusesBeforePosition, () => read(params)));
 });
+
+/** Fork: a peer without the `worktreePath` filter lists threads unfiltered, without that field. */
+const rejectIgnoredWorktreeFilter = <A, R>(
+  toolName: string,
+  params: unknown,
+  listed: Effect.Effect<A, OrchestratorMcpFailure, R>,
+) =>
+  toolName !== "t3_thread_list" ||
+  (params as OrchestratorMcpThreadListInput).worktreePath === undefined
+    ? listed
+    : Effect.tap(listed, (result) =>
+        (result as OrchestratorMcpThreadListResult).threads.some(
+          (thread) => thread.worktreePath === undefined,
+        )
+          ? Effect.fail(
+              new OrchestratorMcpFailure({
+                code: "invalid_request",
+                message:
+                  "The linked environment does not support the worktreePath filter. List its threads without worktreePath.",
+              }),
+            )
+          : Effect.void,
+      );
 
 const make = Effect.gen(function* () {
   const peers = yield* PeerMcpClient.PeerMcpClient;
@@ -281,7 +306,10 @@ const make = Effect.gen(function* () {
       : newest === undefined
         ? forwardTool(params)
         : readNewestOrRetry(forwardTool, newest, params);
-    return Effect.andThen(requireEnabled, forwarded);
+    return Effect.andThen(
+      requireEnabled,
+      rejectIgnoredWorktreeFilter(tool.name, params, forwarded),
+    );
   };
 
   /**

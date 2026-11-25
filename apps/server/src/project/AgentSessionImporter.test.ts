@@ -35,6 +35,7 @@ import * as ServerConfig from "../config.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import { ClaudeProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
@@ -183,6 +184,13 @@ const seedOwner = Effect.fn(function* (
   return threadId;
 });
 
+// A shadow instance shares its default instance's Claude sessions.
+const continuationKeys: Record<string, string> = {
+  claudeAgent: "claude:home:/home/user/.claude",
+  "claude-shadow": "claude:home:/home/user/.claude",
+  "claude-other": "claude:home:/home/other/.claude",
+};
+
 const makeImporter = Effect.fn(function* (
   candidates: ReadonlyArray<AgentSessionScanner.AgentSessionRecentThread>,
   beforeTransaction: Effect.Effect<void> = Effect.void,
@@ -265,9 +273,20 @@ const makeImporter = Effect.fn(function* (
                   ),
                 ),
           }),
-          Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)(
-            getAdapter === undefined ? {} : { get: getAdapter },
-          ),
+          Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
+            ...(getAdapter === undefined ? {} : { get: getAdapter }),
+            list: () =>
+              Effect.succeed(
+                Object.keys(continuationKeys).map((id) => ProviderInstanceId.make(id)),
+              ),
+            getMetadata: (instanceId) =>
+              Effect.succeed({
+                driver: ProviderDriverKind.make("claudeAgent"),
+                continuationKey: continuationKeys[instanceId] ?? instanceId,
+                enabled: true,
+                capabilities: ClaudeProviderCapabilitiesV2,
+              }),
+          }),
           Layer.succeed(
             ThreadCommandExecutor.ThreadCommandExecutor,
             threadCommands ?? (yield* ThreadCommandExecutor.make),
@@ -285,7 +304,7 @@ const makeImporter = Effect.fn(function* (
 });
 
 it.effect(
-  "ignores owned sessions, including archived and deleted threads, but imports other instances and unowned sessions",
+  "ignores owned sessions, including archived, deleted, and shadow-instance threads, but imports other instances and unowned sessions",
   () =>
     Effect.gen(function* () {
       const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -299,11 +318,36 @@ it.effect(
       );
       const deleted = candidate(CODEX_MODEL_SELECTION, "deleted");
       const ownedPi = candidate(PI_MODEL_SELECTION, "owned-pi", "pi");
+      const shadowSessionId = "5b8f2f43-34b5-4c1e-9a6f-1f0c7a2d9e10";
+      const shadowOwned = candidate(CLAUDE_MODEL_SELECTION, shadowSessionId, "claudeAgent");
+      // A since-removed shadow instance recorded the session under the default's key.
+      const removedSessionId = "7c1d9e52-0b6a-4f3e-8d21-5a9b3c4e6f70";
+      const removedOwned = candidate(CLAUDE_MODEL_SELECTION, removedSessionId, "claudeAgent");
+      yield* (yield* SqlClient.SqlClient)`
+        INSERT INTO fork_native_continuation
+          (provider_instance_id, driver, native_thread_id, continuation_key, recorded_at)
+        VALUES ('claude-removed', 'claudeAgent', ${removedSessionId},
+          ${continuationKeys.claudeAgent!}, ${timestamp})
+      `;
       const owners = [
         yield* seedOwner(active),
         yield* seedOwner(archived, "archived"),
         yield* seedOwner(deleted, "deleted"),
         yield* seedOwner(ownedPi),
+        yield* seedOwner(
+          candidate(
+            { ...CLAUDE_MODEL_SELECTION, instanceId: ProviderInstanceId.make("claude-shadow") },
+            shadowSessionId,
+            "claudeAgent",
+          ),
+        ),
+        yield* seedOwner(
+          candidate(
+            { ...CLAUDE_MODEL_SELECTION, instanceId: ProviderInstanceId.make("claude-removed") },
+            removedSessionId,
+            "claudeAgent",
+          ),
+        ),
       ];
       const before = yield* Effect.forEach(owners, (id) =>
         projections.getThreadRecords(id, ["providerThreads"]),
@@ -322,13 +366,15 @@ it.effect(
         archived,
         deleted,
         ownedPi,
+        shadowOwned,
+        removedOwned,
         otherInstance,
         unowned,
         unownedPi,
       ]);
 
       expect(yield* importer.run).toEqual({ importedCount: 3, skippedCount: 0 });
-      for (const source of [active, archived, deleted, ownedPi]) {
+      for (const source of [active, archived, deleted, ownedPi, shadowOwned, removedOwned]) {
         const threadId = importId(source);
         expect(yield* Effect.option(projections.getThread(threadId))).toEqual(Option.none());
         expect(yield* events.read({ threadId }).pipe(Stream.runCollect)).toEqual([]);

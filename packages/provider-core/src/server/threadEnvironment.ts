@@ -26,14 +26,23 @@ export function providerThreadEnvironmentVariables(
   };
 }
 
+const THREAD_VARIABLES = new Set(["T3CODE_THREAD_ID", "T3CODE_TURN_ID", "T3CODE_WORKTREE_PATH"]);
+
+/** `base` without thread-scoped variables, such as those the server inherited from an agent shell. */
+export function withoutThreadEnvironment(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = { ...base };
+  // Windows reads names without regard to case, and a copy of process.env keeps its spelling.
+  for (const name of Object.keys(environment)) {
+    if (THREAD_VARIABLES.has(name.toUpperCase())) delete environment[name];
+  }
+  return environment;
+}
+
 /** Session identity is stable; native turn IDs are allocated after process launch. */
 export function providerThreadEnvironment(
   input: ProviderThreadIdentity,
   base: NodeJS.ProcessEnv = process.env,
   paths?: ProviderThreadPaths,
 ): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = { ...base };
-  delete environment.T3CODE_TURN_ID;
-  delete environment.T3CODE_WORKTREE_PATH;
-  return { ...environment, ...providerThreadEnvironmentVariables(input, paths) };
+  return { ...withoutThreadEnvironment(base), ...providerThreadEnvironmentVariables(input, paths) };
 }

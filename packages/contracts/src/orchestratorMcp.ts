@@ -440,7 +440,8 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
   pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestratorMcpThreadBackgroundTask)),
   parentThreadId: Schema.NullOr(ThreadId),
   relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
-  worktreePath: Schema.NullOr(Schema.String),
+  /** Fork: always set here; absent from linked upstream environments. */
+  worktreePath: Schema.optional(Schema.NullOr(Schema.String)),
   /** The linked environment's thread that delegated this one; absent otherwise. */
   delegatedFrom: Schema.optional(OrchestrationV2DelegatedFrom),
   itemCount: NonNegativeInt,
