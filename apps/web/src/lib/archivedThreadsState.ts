@@ -22,8 +22,9 @@ import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentServerConfigsAtom } from "../state/server";
 import { environmentShell } from "../state/shell";
 
-// Fork: Settings, SP Labs, and the recent-shelf fallback share this archive query. It refetches
-// on archive changes, unarchives included, and on snapshots that may hide changes made meanwhile.
+// Fork: Settings, SP Labs, desktop links, and the recent-shelf fallback share this archive
+// query. It refetches on archive changes, unarchives included, and on snapshots that may hide
+// changes made meanwhile.
 const archiveRefreshAtom = Atom.family((environmentId: EnvironmentId) =>
   Atom.make((get) => {
     const state = get(environmentShell.stateValueAtom(environmentId));
