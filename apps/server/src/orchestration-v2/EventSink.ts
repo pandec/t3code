@@ -494,6 +494,21 @@ const layerBase: Layer.Layer<
       );
     });
 
+    // Fork: an owner through any instance sharing the session store also owns the session.
+    const ownerInstanceMatches = (guard: NativeThreadOwnershipGuard, nativeId: string) => {
+      const shared = guard.sharedSession;
+      const instances = sql`provider_instance_id IN ${sql.in([guard.providerInstanceId, ...(shared?.instanceIds ?? [])])}`;
+      return shared === undefined
+        ? instances
+        : sql`(${instances} OR EXISTS (
+            SELECT 1 FROM fork_native_continuation AS recorded
+            WHERE recorded.provider_instance_id = orchestration_v2_projection_provider_threads.provider_instance_id
+              AND recorded.driver = orchestration_v2_projection_provider_threads.driver
+              AND recorded.native_thread_id = ${nativeId}
+              AND recorded.continuation_key = ${shared.continuationKey}
+          ))`;
+    };
+
     const writeEffect = Effect.fn("orchestrationV2.EventSink.write")(function* (
       input: Parameters<EventSinkV2Shape["writeWithEffects"]>[0],
     ) {
@@ -511,25 +526,11 @@ const layerBase: Layer.Layer<
           // Check ownership in the same transaction that claims the native session.
           const imported = input.unlessNativeThreadOwned;
           if (imported?.nativeThreadRef != null) {
-            const shared = imported.sharedSession;
             const owners = yield* sql`
               SELECT provider_thread_id
-              FROM orchestration_v2_projection_provider_threads AS owner
+              FROM orchestration_v2_projection_provider_threads
               WHERE driver = ${imported.driver}
-                AND (
-                  provider_instance_id IN ${sql.in([imported.providerInstanceId, ...(shared?.instanceIds ?? [])])}
-                  ${
-                    shared === undefined
-                      ? sql``
-                      : sql`OR EXISTS (
-                          SELECT 1 FROM fork_native_continuation AS recorded
-                          WHERE recorded.provider_instance_id = owner.provider_instance_id
-                            AND recorded.driver = owner.driver
-                            AND recorded.native_thread_id = ${imported.nativeThreadRef.nativeId}
-                            AND recorded.continuation_key = ${shared.continuationKey}
-                        )`
-                  }
-                )
+                AND ${ownerInstanceMatches(imported, imported.nativeThreadRef.nativeId)}
                 AND thread_id IS NOT ${imported.appThreadId}
                 AND json_extract(payload_json, '$.nativeThreadRef.nativeId') = ${imported.nativeThreadRef.nativeId}
               LIMIT 1
