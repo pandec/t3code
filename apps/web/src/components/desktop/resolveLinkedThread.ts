@@ -4,6 +4,7 @@ import type { Atom } from "effect/reactivity";
 
 import { environmentCatalog } from "../../connection/catalog";
 import {
+  type DesktopThreadLinkDependencies,
   type DesktopThreadLinkResolution,
   resolveDesktopThreadLink,
 } from "../../desktopThreadLink";
@@ -61,6 +62,15 @@ const FAILURE_DESCRIPTIONS: Record<Exclude<DesktopThreadLinkResolution["kind"], 
   "thread-not-found": "The thread doesn't exist or was deleted.",
 };
 
+const linkDependencies: DesktopThreadLinkDependencies = {
+  isKnownEnvironment: (id) =>
+    appAtomRegistry.get(environmentCatalog.catalogValueAtom).entries.get(id)?.enabled === true,
+  primaryEnvironmentId: () => appAtomRegistry.get(primaryEnvironmentIdAtom),
+  waitForThreadList,
+  hasActiveThread: (threadRef) => readThreadShell(threadRef) !== null,
+  hasArchivedThread,
+};
+
 /**
  * Fork: the thread a desktop link names, active or archived, with `primary` standing in for the
  * primary environment. Shows a short error and resolves null when there is no such thread.
@@ -70,18 +80,13 @@ export async function resolveLinkedThread(
   threadId: string,
 ): Promise<ScopedThreadRef | null> {
   // Until the catalog loads, every environment (and the primary alias) reads as unknown.
-  await waitFor(environmentCatalog.catalogValueAtom, (catalog) => catalog.isReady);
-  const resolution = await resolveDesktopThreadLink(
-    { environmentId, threadId },
-    {
-      isKnownEnvironment: (id) =>
-        appAtomRegistry.get(environmentCatalog.catalogValueAtom).entries.get(id)?.enabled === true,
-      primaryEnvironmentId: () => appAtomRegistry.get(primaryEnvironmentIdAtom),
-      waitForThreadList,
-      hasActiveThread: (threadRef) => readThreadShell(threadRef) !== null,
-      hasArchivedThread,
-    },
+  const catalogReady = await waitFor(
+    environmentCatalog.catalogValueAtom,
+    (catalog) => catalog.isReady,
   );
+  const resolution: DesktopThreadLinkResolution = catalogReady
+    ? await resolveDesktopThreadLink({ environmentId, threadId }, linkDependencies)
+    : { kind: "environment-unavailable" };
   if (resolution.kind === "open") return resolution.threadRef;
   toastManager.add({
     type: "error",
