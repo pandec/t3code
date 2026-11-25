@@ -6,6 +6,7 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2TurnItem,
   OrchestrationV2StoredEvent,
+  type ProviderInstanceId,
   ProviderThreadId,
   RunAttemptId,
   RunId,
@@ -90,6 +91,20 @@ const projectedThreadIds = (events: ReadonlyArray<OrchestrationV2DomainEvent>) =
       : [event.threadId],
   );
 
+type NativeThreadOwnershipGuard = Pick<
+  OrchestrationV2ProviderThread,
+  "driver" | "providerInstanceId" | "appThreadId" | "nativeThreadRef"
+> & {
+  /**
+   * Fork: a session store several instances share (a Claude shadow and its default). Its
+   * current instances own the session, and so does any instance recorded under its key.
+   */
+  readonly sharedSession?: {
+    readonly continuationKey: string;
+    readonly instanceIds: ReadonlyArray<ProviderInstanceId>;
+  };
+};
+
 export interface EventSinkV2Shape {
   /** Items that are not provider snapshots, such as a consumer's own control items, never batch. */
   readonly consumeProviderEvents: <A extends { readonly type: string }, E, R, E2, R2>(
@@ -111,10 +126,7 @@ export interface EventSinkV2Shape {
 
   readonly write: (input: {
     /** Return no events if another thread owns this native session at commit time. */
-    readonly unlessNativeThreadOwned?: Pick<
-      OrchestrationV2ProviderThread,
-      "driver" | "providerInstanceId" | "appThreadId" | "nativeThreadRef"
-    >;
+    readonly unlessNativeThreadOwned?: NativeThreadOwnershipGuard;
     readonly guardPendingUserInputCancellations?: boolean;
     readonly commandId?: CommandId;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
@@ -125,10 +137,7 @@ export interface EventSinkV2Shape {
      * The batch must not also change that run's lifecycle.
      */
     readonly updateDelegatedCompletionOnly?: boolean;
-    readonly unlessNativeThreadOwned?: Pick<
-      OrchestrationV2ProviderThread,
-      "driver" | "providerInstanceId" | "appThreadId" | "nativeThreadRef"
-    >;
+    readonly unlessNativeThreadOwned?: NativeThreadOwnershipGuard;
     readonly guardPendingUserInputCancellations?: boolean;
     readonly commandId?: CommandId;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
@@ -485,6 +494,21 @@ const layerBase: Layer.Layer<
       );
     });
 
+    // Fork: an owner through any instance sharing the session store also owns the session.
+    const ownerInstanceMatches = (guard: NativeThreadOwnershipGuard, nativeId: string | null) => {
+      const shared = guard.sharedSession;
+      const instances = sql`provider_instance_id IN ${sql.in([guard.providerInstanceId, ...(shared?.instanceIds ?? [])])}`;
+      return shared === undefined
+        ? instances
+        : // Uncorrelated, so SQLite keeps the instance index for both branches.
+          sql`(${instances} OR provider_instance_id IN (
+            SELECT provider_instance_id FROM fork_native_continuation
+            WHERE driver = ${guard.driver}
+              AND native_thread_id = ${nativeId}
+              AND continuation_key = ${shared.continuationKey}
+          ))`;
+    };
+
     const writeEffect = Effect.fn("orchestrationV2.EventSink.write")(function* (
       input: Parameters<EventSinkV2Shape["writeWithEffects"]>[0],
     ) {
@@ -506,7 +530,7 @@ const layerBase: Layer.Layer<
               SELECT provider_thread_id
               FROM orchestration_v2_projection_provider_threads
               WHERE driver = ${imported.driver}
-                AND provider_instance_id = ${imported.providerInstanceId}
+                AND ${ownerInstanceMatches(imported, imported.nativeThreadRef.nativeId)}
                 AND thread_id IS NOT ${imported.appThreadId}
                 AND json_extract(payload_json, '$.nativeThreadRef.nativeId') = ${imported.nativeThreadRef.nativeId}
               LIMIT 1

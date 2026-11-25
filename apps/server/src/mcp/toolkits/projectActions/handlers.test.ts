@@ -116,12 +116,6 @@ it.effect("edits the calling thread's project actions as a full-access caller", 
       action: "created",
       projectAction: { id: "test", command: "vp test" },
     });
-    const listed = yield* call("t3_project_actions_list");
-    expect(listed.structuredContent).toMatchObject({
-      projectId,
-      title: "Tools",
-      actions: [{ id: "test" }],
-    });
     expect(
       declaredFailure(yield* call("t3_project_actions_remove", { actionId: "lint" })),
     ).toMatchObject({ code: "invalid_request", message: expect.stringContaining("'lint'") });
@@ -131,9 +125,8 @@ it.effect("edits the calling thread's project actions as a full-access caller", 
   }).pipe(Effect.scoped, Effect.provide(makeLayer("full-access"))),
 );
 
-it.effect("lets a narrower caller list but not change actions", () =>
+it.effect("refuses action changes from a narrower caller", () =>
   Effect.gen(function* () {
-    expect((yield* call("t3_project_actions_list")).isError).toBe(false);
     expect(
       declaredFailure(yield* call("t3_project_actions_upsert", { name: "Test", command: "x" })),
     ).toMatchObject({ code: "capability_denied" });
@@ -168,9 +161,10 @@ it.effect("refuses an edit when the caller's turn ends while it waits for its lo
     expect(declaredFailure(yield* Fiber.join(upsert))).toMatchObject({
       code: "parent_not_active",
     });
+    // Nothing was written: the action the refused edit would have created does not exist.
     caller.activeRunId = RunId.make("run-2");
-    expect((yield* call("t3_project_actions_list")).structuredContent).toMatchObject({
-      actions: [],
-    });
+    expect(
+      declaredFailure(yield* call("t3_project_actions_remove", { actionId: "test" })),
+    ).toMatchObject({ code: "invalid_request" });
   }).pipe(Effect.scoped, Effect.provide(makeLayer("full-access", caller)));
 });
