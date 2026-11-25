@@ -17,7 +17,7 @@ import {
   SendIcon,
 } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
-import { useGT } from "gt-react";
+import { msg, useGT } from "gt-react";
 import { useState, type ReactNode } from "react";
 
 import { RefreshIcon } from "~/components/ui/refresh-icon";
@@ -32,7 +32,6 @@ import { formatRelativeTimeLabel } from "~/timestampFormat";
 import { useRightPanelStore } from "../../rightPanelStore";
 import ChatMarkdown from "../ChatMarkdown";
 import { LinearIcon } from "../Icons";
-import { namedClipboardTarget } from "../../hooks/useCopyToClipboard";
 import { PullRequestCopyableCode } from "../pullRequest/PullRequestCopyableCode";
 import { PullRequestLabelChip } from "../pullRequest/pullRequestPresentation";
 import { Badge } from "../ui/badge";
@@ -298,9 +297,20 @@ function IssueDetails({ issue }: { issue: LinearIssue }) {
           <PullRequestCopyableCode
             key={issue.branchName}
             value={issue.branchName}
-            target={namedClipboardTarget("branch name")}
+            target={{
+              target: "branch name",
+              unavailableMessage: msg("Clipboard API is unavailable while copying branch name."),
+              failureMessage: msg("Failed to copy branch name to the clipboard."),
+            }}
             copyLabel={gt("Copy branch name")}
             copiedLabel={gt("Branch name copied")}
+            onError={(error) =>
+              toastManager.add({
+                type: "error",
+                title: gt("Failed to copy"),
+                description: error.message,
+              })
+            }
             className="font-mono text-2xs text-foreground/90"
           />
         </div>
