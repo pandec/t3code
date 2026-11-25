@@ -29,7 +29,7 @@ import { toastManager } from "./components/ui/toast";
 import { useAtomValue } from "@effect/atom-react";
 import { msg, useMessages } from "gt-react";
 
-import type { MessageResolver } from "./i18n/messages";
+import { m, type MessageResolver } from "./i18n/messages";
 
 export type FileContextMenuAction =
   | "reveal-in-folder"
@@ -145,22 +145,18 @@ export function buildFileContextMenuItems(input: {
   if (input.hasRelativePath) {
     items.push({
       id: "copy-relative-path",
-      label: filePathCopyLabel("relative"),
+      label: input.resolve(msg("Copy relative path")),
       icon: "copy",
       separatorBefore,
     });
   }
   items.push({
     id: "copy-full-path",
-    label: filePathCopyLabel("full"),
+    label: input.resolve(msg("Copy full path")),
     icon: "copy",
     separatorBefore: separatorBefore && !input.hasRelativePath,
   });
   return items;
-}
-
-export function filePathCopyLabel(kind: FilePathCopyKind): string {
-  return kind === "relative" ? "Copy relative path" : "Copy full path";
 }
 
 /** Copies a file path and reports the outcome with the same toasts everywhere. */
@@ -175,12 +171,14 @@ export async function copyFilePathToClipboard(
     if (!(await writeTextToClipboard(value, namedClipboardTarget(noun.toLowerCase()))))
       failure = "The path is empty.";
   } catch (error) {
-    failure = error instanceof Error ? error.message : "An error occurred.";
+    failure = error instanceof Error ? error.message : m(msg("An error occurred."));
   }
   if (failure !== null) {
     toastManager.add({
       type: "error",
-      title: `Failed to copy ${noun.toLowerCase()}`,
+      title: m(
+        kind === "relative" ? msg("Failed to copy relative path") : msg("Failed to copy full path"),
+      ),
       description: failure,
     });
     return;
