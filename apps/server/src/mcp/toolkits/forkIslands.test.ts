@@ -6,54 +6,56 @@ import { ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import { HttpBody, HttpClient, HttpRouter } from "effect/http";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 
-import * as DocumentText from "../../../provider/DocumentText.ts";
-import * as ServerConfig from "../../../config.ts";
-import * as DeviceService from "../../../device/DeviceService.ts";
-import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
-import * as GitManager from "../../../git/GitManager.ts";
-import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
-import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
-import * as ProjectionStore from "../../../orchestration-v2/ProjectionStore.ts";
-import * as ProviderAdapterRegistry from "../../../orchestration-v2/ProviderAdapterRegistry.ts";
-import * as IssueService from "../../../issue/IssueService.ts";
-import * as ThreadIssueService from "../../../orchestration-v2/ThreadIssueService.ts";
-import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
-import * as ProjectService from "../../../project/ProjectService.ts";
-import * as ProjectSetupScriptRunner from "../../../project/ProjectSetupScriptRunner.ts";
-import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
-import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
-import * as EnvironmentTheme from "../../../environmentTheme.ts";
-import * as ProviderRegistry from "../../../provider/ProviderRegistry.ts";
-import * as ScheduledTaskService from "../../../scheduledTasks/ScheduledTaskService.ts";
-import * as SecretRequests from "../../../secrets/SecretRequests.ts";
-import * as ServerSettings from "../../../serverSettings.ts";
-import * as AssetSigner from "../../../assets/AssetSigner.ts";
-import * as LabsService from "../../../labs/LabsService.ts";
-import * as TelegramService from "../../../telegram/TelegramService.ts";
-import * as VcsStatusBroadcaster from "../../../vcs/VcsStatusBroadcaster.ts";
-import * as ServerSecretStore from "../../../auth/ServerSecretStore.ts";
-import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
-import * as ThreadArchiveScheduler from "../../../orchestration-v2/ThreadArchiveScheduler.ts";
-import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
-import * as PeerLinkRequests from "../../../peer/PeerLinkRequests.ts";
-import * as PeerLinks from "../../../peer/PeerLinks.ts";
-import * as RemoteDelegation from "../../../peer/RemoteDelegation.ts";
-import * as ThreadLaunchService from "../../../orchestration-v2/ThreadLaunchService.ts";
-import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
-import * as ThreadWorktreeSwitchScheduler from "../../../orchestration-v2/ThreadWorktreeSwitchScheduler.ts";
-import * as PreviewManager from "../../../preview/Manager.ts";
-import * as SourceControlRepositoryService from "../../../sourceControl/SourceControlRepositoryService.ts";
-import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
-import * as AgentVoiceReply from "../../../voice/AgentVoiceReply.ts";
-import * as ProjectCloneTracker from "../../../project/ProjectCloneTracker.ts";
-import * as McpHttpServer from "../../McpHttpServer.ts";
-import type { McpCapability } from "../../McpInvocationContext.ts";
-import * as McpSessionRegistry from "../../McpSessionRegistry.ts";
-import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
-import * as PreviewBrowser from "../../../preview/PreviewBrowser.ts";
+import * as DocumentText from "../../provider/DocumentText.ts";
+import * as ServerConfig from "../../config.ts";
+import * as DeviceService from "../../device/DeviceService.ts";
+import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
+import * as GitManager from "../../git/GitManager.ts";
+import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
+import * as Orchestrator from "../../orchestration-v2/Orchestrator.ts";
+import * as ProjectionStore from "../../orchestration-v2/ProjectionStore.ts";
+import * as ProviderAdapterRegistry from "../../orchestration-v2/ProviderAdapterRegistry.ts";
+import * as IssueService from "../../issue/IssueService.ts";
+import * as ThreadIssueService from "../../orchestration-v2/ThreadIssueService.ts";
+import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
+import * as ProjectService from "../../project/ProjectService.ts";
+import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
+import * as PullRequestReviewGuideService from "../../pullRequest/PullRequestReviewGuideService.ts";
+import * as PullRequestService from "../../pullRequest/PullRequestService.ts";
+import * as EnvironmentTheme from "../../environmentTheme.ts";
+import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
+import * as ScheduledTaskService from "../../scheduledTasks/ScheduledTaskService.ts";
+import * as SecretRequests from "../../secrets/SecretRequests.ts";
+import * as ServerSettings from "../../serverSettings.ts";
+import * as AssetSigner from "../../assets/AssetSigner.ts";
+import * as LabsService from "../../labs/LabsService.ts";
+import * as TelegramService from "../../telegram/TelegramService.ts";
+import * as VcsStatusBroadcaster from "../../vcs/VcsStatusBroadcaster.ts";
+import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
+import * as ManagedProjectFolders from "../../project/ManagedProjectFolders.ts";
+import * as ThreadArchiveScheduler from "../../orchestration-v2/ThreadArchiveScheduler.ts";
+import * as PeerForwarding from "../../peer/PeerForwarding.ts";
+import * as PeerLinkRequests from "../../peer/PeerLinkRequests.ts";
+import * as PeerLinks from "../../peer/PeerLinks.ts";
+import * as RemoteDelegation from "../../peer/RemoteDelegation.ts";
+import * as ThreadLaunchService from "../../orchestration-v2/ThreadLaunchService.ts";
+import * as ThreadSearch from "../../orchestration-v2/ThreadSearch.ts";
+import * as ThreadWorktreeSwitchScheduler from "../../orchestration-v2/ThreadWorktreeSwitchScheduler.ts";
+import * as PreviewManager from "../../preview/Manager.ts";
+import * as SourceControlRepositoryService from "../../sourceControl/SourceControlRepositoryService.ts";
+import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
+import * as AgentVoiceReply from "../../voice/AgentVoiceReply.ts";
+import * as ProjectCloneTracker from "../../project/ProjectCloneTracker.ts";
+import * as McpHttpServer from "../McpHttpServer.ts";
+import type { McpCapability } from "../McpInvocationContext.ts";
+import * as McpSessionRegistry from "../McpSessionRegistry.ts";
+import * as McpToolAccessTestkit from "../McpToolAccess.testkit.ts";
+import * as PreviewAutomationBroker from "../PreviewAutomationBroker.ts";
+import * as PreviewBrowser from "../../preview/PreviewBrowser.ts";
 
 const StubServicesLive = Layer.mergeAll(
   McpProviderSessions.layer,
@@ -63,7 +65,14 @@ const StubServicesLive = Layer.mergeAll(
   Layer.mock(ProjectionStore.ProjectionStoreV2)({ getThreadShell: () => Effect.succeed(null) }),
   Layer.mock(DeviceService.DeviceService)({}),
   Layer.mock(AssetSigner.AssetSigner)({}),
-  Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+  // voice_reply acts as the calling thread, so the caller needs a live run.
+  Layer.mock(ThreadManagementService.ThreadManagementService)({
+    getThreadShell: (id) =>
+      Effect.succeed({
+        ...McpToolAccessTestkit.liveThreadShell(id),
+        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+      }),
+  }),
   Layer.mock(ProviderRegistry.ProviderRegistry)({}),
   Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({}),
   Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
@@ -96,7 +105,7 @@ const StubServicesLive = Layer.mergeAll(
   Layer.mock(ThreadIssueService.ThreadIssueService)({}),
 );
 
-const threadId = ThreadId.make("thread-fork-thread-tools-mcp");
+const threadId = ThreadId.make("thread-fork-islands-mcp");
 
 /** Speaks JSON-RPC to the island the credential's endpoint names. */
 const mcpSession = (
@@ -118,7 +127,7 @@ const mcpSession = (
     const init = yield* httpClient.post(path, {
       headers,
       body: HttpBody.text(
-        `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"fork-thread-tools","version":"1.0.0"}}}`,
+        `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"fork-islands","version":"1.0.0"}}}`,
         "application/json",
       ),
     });
@@ -147,12 +156,19 @@ const toolNames = (body: string): ReadonlyArray<string> => {
   return payload.result.tools.map((tool) => tool.name);
 };
 
-// Fork: thread groups and drain status ride every island, like the other thread tools.
-it.effect("t3_thread_groups and t3_thread_drain_status are listed on every island", () =>
+// Fork: every island lists the common fork tools; only voice islands list voice_reply.
+it.effect("fork tools are listed on the islands their capabilities name", () =>
   Effect.scoped(
     Effect.gen(function* () {
+      const staged = yield* Ref.make<ReadonlyArray<string>>([]);
+      const voiceStub = Layer.mock(AgentVoiceReply.AgentVoiceReply)({
+        stage: (input) =>
+          Ref.update(staged, (current) => [...current, `${input.threadId}:${input.script}`]).pipe(
+            Effect.as({ status: "staged" as const, transcriptChars: 5, audioSizeBytes: 10 }),
+          ),
+      });
       const layerEnvironment = Layer.mock(ServerEnvironment.ServerEnvironment)({
-        getEnvironmentId: Effect.succeed("environment-fork-thread-tools" as never),
+        getEnvironmentId: Effect.succeed("environment-fork-islands" as never),
       });
       const registry = Context.get(
         yield* Layer.build(McpSessionRegistry.layer.pipe(Layer.provide(layerEnvironment))),
@@ -165,9 +181,7 @@ it.effect("t3_thread_groups and t3_thread_drain_status are listed on every islan
         Layer.provide(layerEnvironment),
         Layer.provide(PreviewAutomationBroker.layer),
         Layer.provide(PreviewBrowser.layer),
-        Layer.provide(
-          Layer.merge(StubServicesLive, Layer.mock(AgentVoiceReply.AgentVoiceReply)({})),
-        ),
+        Layer.provide(Layer.merge(StubServicesLive, voiceStub)),
         Layer.build,
       );
 
@@ -184,17 +198,35 @@ it.effect("t3_thread_groups and t3_thread_drain_status are listed on every islan
       ]) {
         const session = yield* mcpSession(registry, capabilities);
         paths.add(session.path);
-        expect(toolNames(yield* session.call(2, "tools/list", {})), session.path).toEqual(
-          expect.arrayContaining(["t3_thread_groups", "t3_thread_drain_status"]),
+        const names = toolNames(yield* session.call(2, "tools/list", {}));
+        expect(names, session.path).toEqual(
+          expect.arrayContaining([
+            "archive_thread",
+            "t3_project_actions_upsert",
+            "t3_project_actions_remove",
+            "t3_thread_drain_status",
+            "t3_thread_groups",
+            "telegram_send",
+          ]),
         );
+        expect(names.includes("voice_reply"), session.path).toBe(capabilities.has("voice"));
       }
       expect(paths.size).toBe(8);
+
+      // The call stages for the credential's own thread.
+      const voice = yield* mcpSession(registry, new Set<McpCapability>(["voice"]));
+      const result = yield* voice.call(3, "tools/call", {
+        name: "voice_reply",
+        arguments: { script: "Hello." },
+      });
+      expect(result).toContain("staged");
+      expect(yield* Ref.get(staged)).toEqual([`${threadId}:Hello.`]);
     }),
   ).pipe(
     Effect.provide(
       Layer.mergeAll(
         NodeHttpServer.layerTest,
-        ServerConfig.layerTest(process.cwd(), { prefix: "t3-fork-thread-tools-mcp-" }).pipe(
+        ServerConfig.layerTest(process.cwd(), { prefix: "t3-fork-islands-mcp-" }).pipe(
           Layer.provide(NodeServices.layer),
         ),
         NodeServices.layer,

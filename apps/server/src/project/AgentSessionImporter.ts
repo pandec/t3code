@@ -21,6 +21,7 @@ import {
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2TurnItem,
+  type ProviderInstanceId,
 } from "@t3tools/contracts";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
@@ -263,6 +264,27 @@ const make = Effect.gen(function* () {
         ),
       );
     })).flat();
+    // Fork: instances with one continuation key (a Claude shadow and its default) share sessions;
+    // the guard also matches an owner recorded under that key whose instance is gone.
+    const getMetadata = registry.getMetadata;
+    const continuationKeys = new Map(
+      getMetadata === undefined
+        ? []
+        : (yield* Effect.forEach(yield* registry.list(), (instanceId) =>
+            getMetadata(instanceId).pipe(
+              Effect.map((metadata) => [instanceId, metadata.continuationKey] as const),
+              Effect.option,
+            ),
+          )).flatMap(Option.toArray),
+    );
+    const sharedSession = (instanceId: ProviderInstanceId) => {
+      const continuationKey = continuationKeys.get(instanceId);
+      if (continuationKey === undefined) return {};
+      const instanceIds = [...continuationKeys].flatMap(([other, key]) =>
+        key === continuationKey && other !== instanceId ? [other] : [],
+      );
+      return { sharedSession: { continuationKey, instanceIds } };
+    };
     const outcomes = scanner.recentThreads(project.workspaceRoot, completedSources);
     const importedThreadIds = new Set<ThreadId>();
     let importedCount = 0;
@@ -422,7 +444,10 @@ const make = Effect.gen(function* () {
           };
 
           const committed = yield* eventSink.write({
-            unlessNativeThreadOwned: providerThread,
+            unlessNativeThreadOwned: {
+              ...providerThread,
+              ...sharedSession(thread.providerInstanceId),
+            },
             events: [
               {
                 id: EventId.make(`${IMPORT_EVENT_PREFIX}:thread:${threadId}:created`),
