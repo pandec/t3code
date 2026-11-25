@@ -99,6 +99,10 @@ describe("DesktopWebLinks", () => {
       yield* webLinks.receive("https://example.com/after-close");
       assert.deepStrictEqual(sent, ["https://example.com/cold-start"]);
       assert.strictEqual(revealed.length, 2);
+
+      setOpen(true);
+      yield* webLinks.setRendererReady(true);
+      assert.deepStrictEqual(sent.at(-1), "https://example.com/after-close");
     }).pipe(Effect.provide(layer));
   });
 });

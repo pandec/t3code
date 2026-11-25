@@ -456,6 +456,7 @@ it.effect("hands web and app links to the renderer and leaves other links alone"
     const pairLink = "t3code://pair?pairingUrl=https%3A%2F%2Fvps.example.com%2F%23token%3Dabc";
     yield* Effect.gen(function* () {
       const clerk = yield* DesktopClerk.DesktopClerk;
+      assert.isFalse(clerk.openThreadLink("t3code-dev://app/primary/thread-3"));
       yield* clerk.configure;
       const open = (url: string) => {
         const event = { preventDefault: vi.fn() };
