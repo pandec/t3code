@@ -500,12 +500,12 @@ const layerBase: Layer.Layer<
       const instances = sql`provider_instance_id IN ${sql.in([guard.providerInstanceId, ...(shared?.instanceIds ?? [])])}`;
       return shared === undefined
         ? instances
-        : sql`(${instances} OR EXISTS (
-            SELECT 1 FROM fork_native_continuation AS recorded
-            WHERE recorded.provider_instance_id = orchestration_v2_projection_provider_threads.provider_instance_id
-              AND recorded.driver = orchestration_v2_projection_provider_threads.driver
-              AND recorded.native_thread_id = ${nativeId}
-              AND recorded.continuation_key = ${shared.continuationKey}
+        : // Uncorrelated, so SQLite keeps the instance index for both branches.
+          sql`(${instances} OR provider_instance_id IN (
+            SELECT provider_instance_id FROM fork_native_continuation
+            WHERE driver = ${guard.driver}
+              AND native_thread_id = ${nativeId}
+              AND continuation_key = ${shared.continuationKey}
           ))`;
     };
 
