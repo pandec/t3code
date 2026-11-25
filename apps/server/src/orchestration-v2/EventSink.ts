@@ -6,6 +6,7 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2TurnItem,
   OrchestrationV2StoredEvent,
+  type ProviderInstanceId,
   ProviderThreadId,
   RunAttemptId,
   RunId,
@@ -90,6 +91,14 @@ const projectedThreadIds = (events: ReadonlyArray<OrchestrationV2DomainEvent>) =
       : [event.threadId],
   );
 
+type NativeThreadOwnershipGuard = Pick<
+  OrchestrationV2ProviderThread,
+  "driver" | "providerInstanceId" | "appThreadId" | "nativeThreadRef"
+> & {
+  /** Fork: instances sharing this session's store (a Claude shadow and its default) also own it. */
+  readonly sharedSessionInstanceIds?: ReadonlyArray<ProviderInstanceId>;
+};
+
 export interface EventSinkV2Shape {
   /** Items that are not provider snapshots, such as a consumer's own control items, never batch. */
   readonly consumeProviderEvents: <A extends { readonly type: string }, E, R, E2, R2>(
@@ -111,10 +120,7 @@ export interface EventSinkV2Shape {
 
   readonly write: (input: {
     /** Return no events if another thread owns this native session at commit time. */
-    readonly unlessNativeThreadOwned?: Pick<
-      OrchestrationV2ProviderThread,
-      "driver" | "providerInstanceId" | "appThreadId" | "nativeThreadRef"
-    >;
+    readonly unlessNativeThreadOwned?: NativeThreadOwnershipGuard;
     readonly guardPendingUserInputCancellations?: boolean;
     readonly commandId?: CommandId;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
@@ -125,10 +131,7 @@ export interface EventSinkV2Shape {
      * The batch must not also change that run's lifecycle.
      */
     readonly updateDelegatedCompletionOnly?: boolean;
-    readonly unlessNativeThreadOwned?: Pick<
-      OrchestrationV2ProviderThread,
-      "driver" | "providerInstanceId" | "appThreadId" | "nativeThreadRef"
-    >;
+    readonly unlessNativeThreadOwned?: NativeThreadOwnershipGuard;
     readonly guardPendingUserInputCancellations?: boolean;
     readonly commandId?: CommandId;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
@@ -506,7 +509,7 @@ const layerBase: Layer.Layer<
               SELECT provider_thread_id
               FROM orchestration_v2_projection_provider_threads
               WHERE driver = ${imported.driver}
-                AND provider_instance_id = ${imported.providerInstanceId}
+                AND provider_instance_id IN ${sql.in([imported.providerInstanceId, ...(imported.sharedSessionInstanceIds ?? [])])}
                 AND thread_id IS NOT ${imported.appThreadId}
                 AND json_extract(payload_json, '$.nativeThreadRef.nativeId') = ${imported.nativeThreadRef.nativeId}
               LIMIT 1
