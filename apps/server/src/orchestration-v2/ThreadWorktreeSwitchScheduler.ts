@@ -26,8 +26,9 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { forkParked } from "../serverActivation.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
-import { isThreadPayloadEvent } from "./DeferredArchive.ts";
+import { holdRunsAwaitingCapture, isThreadPayloadEvent } from "./DeferredArchive.ts";
 import { evaluateWorktreeSwitch, pendingWorktreeSwitch } from "./DeferredWorktreeSwitch.ts";
+import * as EffectOutbox from "./EffectOutbox.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import { eventCanSettleDeferredArchive } from "./ThreadArchiveScheduler.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
@@ -59,6 +60,8 @@ export class ThreadWorktreeSwitchScheduler extends Context.Service<
       readonly threadId: ThreadId;
       readonly commandId?: CommandId;
     }) => Effect.Effect<ThreadWorktreeSwitchStatus, WorktreeSwitchError>;
+    /** Re-checks one thread's pending request. */
+    readonly recheck: (threadId: ThreadId) => Effect.Effect<void>;
     readonly start: () => Effect.Effect<void, never, Scope.Scope>;
     /** Re-checks every pending request (startup) and waits for the work to finish. */
     readonly reconcilePending: Effect.Effect<void>;
@@ -86,6 +89,7 @@ export const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const git = yield* GitVcsDriver.GitVcsDriver;
+  const outbox = yield* EffectOutbox.EffectOutboxV2;
   const providePlatform = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
@@ -125,10 +129,8 @@ export const make = Effect.gen(function* () {
   const process = Effect.fn("ThreadWorktreeSwitchScheduler.process")(function* (
     threadId: ThreadId,
   ) {
-    const { thread, runs, checkpoints } = yield* threads.getThreadRecords(threadId, [
-      "runs",
-      "checkpoints",
-    ]);
+    const records = yield* threads.getThreadRecords(threadId, ["runs", "checkpoints"]);
+    const { thread, checkpoints } = records;
     const request = pendingWorktreeSwitch(thread);
     if (request === null) {
       tracked.delete(threadId);
@@ -136,6 +138,7 @@ export const make = Effect.gen(function* () {
     }
     tracked.add(threadId);
     const shell = yield* threads.getThreadShell(threadId);
+    const runs = yield* holdRunsAwaitingCapture(outbox, records.runs);
     const decision = evaluateWorktreeSwitch({
       thread,
       request,
@@ -241,6 +244,7 @@ export const make = Effect.gen(function* () {
       return yield* status(input.threadId);
     }),
     status,
+    recheck: enqueue,
     cancel: Effect.fn("ThreadWorktreeSwitchScheduler.cancel")(function* (input) {
       const current = yield* status(input.threadId);
       if (current.request?.status !== "pending") return current;
@@ -270,6 +274,17 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(ThreadWorktreeSwitchScheduler, make);
+
+/** Fork: re-checks a thread's deferred worktree switch. A no-op where the scheduler is absent. */
+export const recheckDeferredWorktreeSwitch = (threadId: ThreadId) =>
+  Effect.serviceOption(ThreadWorktreeSwitchScheduler).pipe(
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.void,
+        onSome: (scheduler) => scheduler.recheck(threadId),
+      }),
+    ),
+  );
 
 /** Starts the deferred worktree switch worker with the server. */
 export const workerLive = Layer.effectDiscard(

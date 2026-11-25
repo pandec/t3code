@@ -36,12 +36,20 @@ export interface TranscriptParseResult {
   readonly records: readonly UsageRecord[];
   /** Unterminated tail records stay outside records/position so the next scan rereads them. */
   readonly tailRecords: readonly UsageRecord[];
-  /** Malformed usage-bearing newline-terminated lines. */
-  readonly malformedRecords: number;
-  /** Malformed usage-bearing content in the unconsumed trailing segment. */
-  readonly tailMalformedRecords: number;
+  /** Timestamps of the reducer's diagnostics on newline-terminated lines. */
+  readonly malformedRecords: readonly number[];
+  /** Newline-terminated usage-bearing lines that parsed to nothing, so they have no timestamp. */
+  readonly undatedMalformedRecords: number;
+  /** The same two diagnostics for the unconsumed trailing segment. */
+  readonly tailMalformedRecords: readonly number[];
+  readonly tailUndatedMalformedRecords: number;
   readonly position: TranscriptParsePosition;
   readonly resumed: boolean;
+}
+
+interface MalformedTally {
+  readonly dated: number[];
+  undated: number;
 }
 
 export const GUARD_LENGTH = 64;
@@ -379,10 +387,10 @@ export async function readTranscriptRecords<State>(
     const accounting = format.malformed;
     const carriesUsage = (text: string) => accounting?.carriesUsage(text) ?? false;
     const skipsOf = (lineState: State) => accounting?.deliberateSkips?.(lineState) ?? 0;
-    const diagnosedOf = (lineState: State) => format.readMalformedRecords?.(lineState) ?? 0;
+    const diagnosedOf = (lineState: State) => format.readMalformedRecords?.(lineState) ?? [];
     /**
-     * Counts a usage-bearing line that yielded nothing it chose to skip, or the reducer's own
-     * diagnostics for the line (such as requests a valid snapshot discarded), whichever is larger.
+     * Records the reducer's own dated diagnostics for the line (such as requests a valid snapshot
+     * discarded), or else one undated record for a usage-bearing line that yielded nothing it chose to skip.
      */
     const classify = (
       usageBearing: boolean,
@@ -390,15 +398,21 @@ export async function readTranscriptRecords<State>(
       lineState: State,
       before: { readonly skips: number; readonly diagnosed: number },
       out: UsageRecord[],
-    ): number => {
+      malformed: MalformedTally,
+    ): void => {
       for (const record of parsed) out.push(record);
-      const unexplained =
-        usageBearing && parsed.length === 0 && skipsOf(lineState) === before.skips ? 1 : 0;
-      return Math.max(unexplained, diagnosedOf(lineState) - before.diagnosed);
+      const diagnosed = diagnosedOf(lineState);
+      if (diagnosed.length > before.diagnosed) {
+        for (let index = before.diagnosed; index < diagnosed.length; index++) {
+          malformed.dated.push(diagnosed[index]!);
+        }
+      } else if (usageBearing && parsed.length === 0 && skipsOf(lineState) === before.skips) {
+        malformed.undated += 1;
+      }
     };
     const countersOf = (lineState: State) => ({
       skips: skipsOf(lineState),
-      diagnosed: diagnosedOf(lineState),
+      diagnosed: diagnosedOf(lineState).length,
     });
 
     const toLineString = (lineBuffer: Buffer): string => {
@@ -410,22 +424,27 @@ export async function readTranscriptRecords<State>(
     };
 
     const mightCarryUsage = transcriptLineGate(format.usageMarkers);
-    /** Returns the malformed records the line accounts for (see `classify`). */
-    const parseLine = (lineBuffer: Buffer, lineState: State, out: UsageRecord[]): number => {
-      if (!mightCarryUsage(lineBuffer)) return 0;
+    const parseLine = (
+      lineBuffer: Buffer,
+      lineState: State,
+      out: UsageRecord[],
+      malformed: MalformedTally,
+    ): void => {
+      if (!mightCarryUsage(lineBuffer)) return;
       const line = toLineString(lineBuffer);
       const before = countersOf(lineState);
-      return classify(
+      classify(
         carriesUsage(line),
         format.parseLine(line, lineState),
         lineState,
         before,
         out,
+        malformed,
       );
     };
 
     const records: UsageRecord[] = [];
-    let malformedRecords = 0;
+    const malformed: MalformedTally = { dated: [], undated: 0 };
     let resumeOffset = start;
     let scanOffset = start;
     let pendingChunks: Buffer[] = [];
@@ -463,25 +482,25 @@ export async function readTranscriptRecords<State>(
       }
       writeStreaming(decoder!.write(segment));
     };
-    const finish = (lineState: State, out: UsageRecord[]): number => {
-      let malformed = 0;
+    const finish = (lineState: State, out: UsageRecord[], tally: MalformedTally): void => {
       if (streaming) {
         writeStreaming(decoder!.end());
         const projected = streaming.finish();
         const before = countersOf(lineState);
-        malformed = classify(
+        classify(
           streamingCarriesUsage,
           format.parseProjected(projected, lineState),
           lineState,
           before,
           out,
+          tally,
         );
       } else if (pendingBytes > 0) {
         const line =
           pendingChunks.length === 1
             ? pendingChunks[0]!
             : Buffer.concat(pendingChunks, pendingBytes);
-        malformed = parseLine(line, lineState, out);
+        parseLine(line, lineState, out, tally);
       }
       pendingChunks = [];
       pendingBytes = 0;
@@ -489,7 +508,6 @@ export async function readTranscriptRecords<State>(
       decoder = undefined;
       streamingCarriesUsage = false;
       usageProbeTail = "";
-      return malformed;
     };
     for await (const chunk of readChunks(handle, start, compressed)) {
       let lineStart = 0;
@@ -500,10 +518,10 @@ export async function readTranscriptRecords<State>(
           break;
         }
         if (!streaming && pendingBytes === 0) {
-          malformedRecords += parseLine(chunk.subarray(lineStart, newlineIndex), state, records);
+          parseLine(chunk.subarray(lineStart, newlineIndex), state, records, malformed);
         } else {
           append(chunk.subarray(lineStart, newlineIndex));
-          malformedRecords += finish(state, records);
+          finish(state, records, malformed);
         }
         lineStart = newlineIndex + 1;
         resumeOffset = scanOffset + lineStart;
@@ -514,9 +532,11 @@ export async function readTranscriptRecords<State>(
     // Parse unfinished tails against copied state so the next scan can replay from resumeOffset.
     const encodedState = encodeState === undefined ? null : encodeState(state);
     const tailRecords: UsageRecord[] = [];
-    const tailMalformedRecords = finish(
+    const tailMalformed: MalformedTally = { dated: [], undated: 0 };
+    finish(
       decodeState === undefined ? state : Option.getOrThrow(decodeState(encodedState)),
       tailRecords,
+      tailMalformed,
     );
 
     const guardLength = compressed ? 0 : Math.min(GUARD_LENGTH, resumeOffset);
@@ -530,8 +550,10 @@ export async function readTranscriptRecords<State>(
     return {
       records,
       tailRecords,
-      malformedRecords,
-      tailMalformedRecords,
+      malformedRecords: malformed.dated,
+      undatedMalformedRecords: malformed.undated,
+      tailMalformedRecords: tailMalformed.dated,
+      tailUndatedMalformedRecords: tailMalformed.undated,
       position: {
         resumeOffset: compressed ? 0 : resumeOffset,
         guardLength,

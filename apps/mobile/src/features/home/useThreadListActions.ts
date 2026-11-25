@@ -29,7 +29,7 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { pauseListeningForThread, stopListeningForThread } from "../../state/listeningPlayer";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { connectedEnvironmentIdsAtom } from "../../state/presentation";
-import { readEnvironmentScope } from "../../state/session";
+import { readEnvironmentScope, readEnvironmentScopeDenied } from "../../state/session";
 import {
   enqueueThreadLifecycleIntent,
   threadLifecycleOutboxManager,
@@ -128,8 +128,22 @@ function actionFailureTitle(action: ThreadListAction): string {
   return m(msg("Could not delete thread"));
 }
 
-function checkThreadOperationPermission(thread: EnvironmentThreadShell, title: string): boolean {
-  if (readEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope)) return true;
+/**
+ * Settle, snooze and their undo queue while the environment is offline, so `triage` allows them
+ * until the host has answered without the scope.
+ */
+function checkThreadOperationPermission(
+  thread: EnvironmentThreadShell,
+  title: string,
+  triage = false,
+): boolean {
+  if (
+    triage
+      ? !readEnvironmentScopeDenied(thread.environmentId, AuthOrchestrationOperateScope)
+      : readEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope)
+  ) {
+    return true;
+  }
   Dialog.alert(title, m(msg("This connection cannot change threads.")));
   return false;
 }
@@ -179,6 +193,7 @@ function useThreadActionExecutor(
     restoreUnsettledAt?: string | null,
     /** Fork: the user confirmed that archiving discards the thread's queued messages. */
     discardQueuedMessages = false,
+    onSucceeded?: (value: unknown) => void,
   ) => {
     const key = scopedThreadKey(thread.environmentId, thread.id);
     // Drop only a repeat of the latest pending action; Settle → Un-settle → Settle must all send.
@@ -278,7 +293,8 @@ function useThreadActionExecutor(
       // Checked here, after the outbox branch: an offline connection cannot
       // confirm its grant. The lifecycle-outbox drain checks it on reconnect
       // and drops intents the connection cannot dispatch.
-      if (!checkThreadOperationPermission(thread, actionFailureTitle(action))) return false;
+      const triage = action === "settle" || action === "unsettle";
+      if (!checkThreadOperationPermission(thread, actionFailureTitle(action), triage)) return false;
       // Scheduling or cancelling a deferred archive keeps the row in place.
       if (action === "schedule-archive" || action === "cancel-archive") {
         const input = { threadId: thread.id };
@@ -335,6 +351,7 @@ function useThreadActionExecutor(
         );
         return false;
       }
+      onSucceeded?.(result.value);
       if (action === "archive" || action === "delete") {
         for (const kind of ["settle", "snooze", "pin"]) ThreadUndo.invalidate(kind, key);
       }
@@ -511,12 +528,16 @@ export function useThreadListActions(
       claim,
       undo: async () => {
         try {
+          let cancelledOnDevice = false;
           await ThreadUndo.executeThreadUndo(
             plan,
             async (step) => {
+              if (cancelledOnDevice) return true;
               switch (step.action) {
                 case "unsettle":
-                  return unsettleThread(thread, step.restoreUnsettledAt);
+                  return unsettleThread(thread, step.restoreUnsettledAt, (value) => {
+                    cancelledOnDevice = ThreadUndo.cancelledOnDevice(value);
+                  });
                 case "unsnooze":
                   return unsnoozeThread(thread);
                 case "pin":
@@ -534,7 +555,7 @@ export function useThreadListActions(
                     action === "Unpinned"
                       ? m(msg("Could not undo unpin"))
                       : m(msg("Could not undo settle"));
-                  if (!checkThreadOperationPermission(thread, failureTitle)) return false;
+                  if (!checkThreadOperationPermission(thread, failureTitle, true)) return false;
                   const result = await snoozeMutation({
                     environmentId: thread.environmentId,
                     input: { threadId: thread.id, snoozedUntil: step.snoozedUntil },
@@ -585,8 +606,11 @@ export function useThreadListActions(
     snoozedUntil: string | null,
     options?: { readonly untilDone?: boolean },
   ) => {
-    if (!checkThreadOperationPermission(thread, m(msg("Could not snooze thread")))) return false;
     const untilDone = options?.untilDone === true;
+    // Fork: until-done snoozes skip the offline triage outbox, so they need the live grant.
+    if (!checkThreadOperationPermission(thread, m(msg("Could not snooze thread")), !untilDone)) {
+      return false;
+    }
     const key = scopedThreadKey(thread.environmentId, thread.id);
     if (snoozeInFlightThreadKeys.current.has(key)) {
       return false;
@@ -663,7 +687,9 @@ export function useThreadListActions(
     return succeeded;
   };
   const unsnoozeThread = async (thread: EnvironmentThreadShell) => {
-    if (!checkThreadOperationPermission(thread, m(msg("Could not wake thread")))) return false;
+    if (!checkThreadOperationPermission(thread, m(msg("Could not wake thread")), true)) {
+      return false;
+    }
     const key = scopedThreadKey(thread.environmentId, thread.id);
     if (snoozeInFlightThreadKeys.current.has(key)) {
       return false;
@@ -711,7 +737,10 @@ export function useThreadListActions(
   const unsettleThread = async (
     thread: EnvironmentThreadShell,
     restoreUnsettledAt?: string | null,
-  ) => (await executeAction("unsettle", thread, undefined, restoreUnsettledAt)) === true;
+    onSucceeded?: (value: unknown) => void,
+  ) =>
+    (await executeAction("unsettle", thread, undefined, restoreUnsettledAt, false, onSucceeded)) ===
+    true;
   const pinThread = async (thread: EnvironmentThreadShell, restoreOrderKey?: string) => {
     if (!checkThreadOperationPermission(thread, m(msg("Could not pin thread")))) return false;
     if (!environmentConfigLoaded(thread.environmentId)) {

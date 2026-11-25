@@ -16,6 +16,7 @@ import {
   readPhysicalSourceId,
   readTranscriptRecords,
   transcriptLineGate,
+  type TranscriptParseResult,
 } from "./usageTranscriptReader.ts";
 
 /**
@@ -95,7 +96,8 @@ describe("readTranscriptRecords", () => {
     expect(result?.records).toHaveLength(1);
     expect(result?.records[0]?.totals.outputTokens).toBe(30);
     // The two copies were read perfectly; only their usage was declined.
-    expect(result?.malformedRecords).toBe(0);
+    expect(result?.malformedRecords).toEqual([]);
+    expect(result?.undatedMalformedRecords).toBe(0);
   });
 
   it("still reports a usage line it could not parse as malformed", async () => {
@@ -113,8 +115,10 @@ describe("readTranscriptRecords", () => {
     );
 
     expect(result?.records).toHaveLength(1);
-    expect(result?.malformedRecords).toBe(0);
-    expect(result?.tailMalformedRecords).toBe(1);
+    expect(result?.undatedMalformedRecords).toBe(0);
+    // A line cut before its timestamp cannot be dated.
+    expect(result?.tailMalformedRecords).toEqual([]);
+    expect(result?.tailUndatedMalformedRecords).toBe(1);
   });
 
   it("reports an unreadable file as null rather than an empty read", async () => {
@@ -267,8 +271,8 @@ describe("compressed transcripts", () => {
       assert.strictEqual(expected.tailRecords.length, 1);
       assert.deepStrictEqual(actual.records, expected.records);
       assert.deepStrictEqual(actual.tailRecords, expected.tailRecords);
-      assert.strictEqual(expected.malformedRecords, 1);
-      assert.strictEqual(actual.malformedRecords, expected.malformedRecords);
+      assert.strictEqual(expected.malformedRecords.length, 1);
+      assert.deepStrictEqual(actual.malformedRecords, expected.malformedRecords);
       assert.strictEqual(actual.records[0]?.speed, "ultrafast");
       assert.isFalse(actual.resumed);
       assert.strictEqual(actual.position.resumeOffset, 0);
@@ -306,72 +310,91 @@ describe("compressed transcripts", () => {
 
 describe("readTranscriptRecords resume", () => {
   it.each([
-    { mode: "buffered", streamingThresholdBytes: Infinity },
-    { mode: "streaming", streamingThresholdBytes: 0 },
-  ])("counts malformed tails once across $mode reads and resume", async (options) => {
-    const format: TranscriptUsageFormat<{ errors: number }> = {
-      ...TEST_FORMATS.claude,
-      selectFields: { ...TEST_FORMATS.claude.selectFields, usage: true },
-      state: {
-        initial: () => ({ errors: 0 }),
-        schema: Schema.Struct({ errors: Schema.Number }),
-      },
-      parseLine(line, state) {
-        return this.parseProjected(JSON.parse(line), state);
-      },
-      parseProjected(value, state) {
-        if (
-          typeof value === "object" &&
-          value !== null &&
-          "usage" in value &&
-          value.usage === "malformed"
-        ) {
-          state.errors += 1;
-          return [];
-        }
-        return TEST_FORMATS.claude.parseProjected(value, undefined);
-      },
-    };
-    const path = NodePath.join(dir, "diagnostics.jsonl");
-    const malformed = JSON.stringify({ usage: "malformed" });
-    // Completed lines enter the projected parser only when they cross a stream chunk.
-    const committed = `${JSON.stringify({ usage: "malformed", padding: "x".repeat(256 * 1024) })}\n${claudeLine(1, 5)}`;
-    await NodeFSP.writeFile(path, committed + malformed);
+    { mode: "buffered", streamingThresholdBytes: Infinity, dated: false },
+    { mode: "streaming", streamingThresholdBytes: 0, dated: false },
+    { mode: "buffered", streamingThresholdBytes: Infinity, dated: true },
+    { mode: "streaming", streamingThresholdBytes: 0, dated: true },
+  ])(
+    "counts malformed tails once across $mode reads and resume (dated: $dated)",
+    async ({ dated, ...options }) => {
+      // Undated lines are the reader's own detection; dated ones are the reducer's diagnostics.
+      const committedCount = (result: TranscriptParseResult) =>
+        dated ? result.malformedRecords.length : result.undatedMalformedRecords;
+      const tailCount = (result: TranscriptParseResult) =>
+        dated ? result.tailMalformedRecords.length : result.tailUndatedMalformedRecords;
+      const otherKind = (result: TranscriptParseResult) =>
+        dated
+          ? result.undatedMalformedRecords + result.tailUndatedMalformedRecords
+          : result.malformedRecords.length + result.tailMalformedRecords.length;
+      const format: TranscriptUsageFormat<{ errors: number }> = {
+        ...TEST_FORMATS.claude,
+        selectFields: { ...TEST_FORMATS.claude.selectFields, usage: true },
+        state: {
+          initial: () => ({ errors: 0 }),
+          schema: Schema.Struct({ errors: Schema.Number }),
+        },
+        parseLine(line, state) {
+          return this.parseProjected(JSON.parse(line), state);
+        },
+        parseProjected(value, state) {
+          if (
+            typeof value === "object" &&
+            value !== null &&
+            "usage" in value &&
+            value.usage === "malformed"
+          ) {
+            state.errors += 1;
+            return [];
+          }
+          return TEST_FORMATS.claude.parseProjected(value, undefined);
+        },
+        ...(dated
+          ? { readMalformedRecords: (state: { errors: number }) => Array(state.errors).fill(0) }
+          : {}),
+      };
+      const path = NodePath.join(dir, "diagnostics.jsonl");
+      const malformed = JSON.stringify({ usage: "malformed" });
+      // Completed lines enter the projected parser only when they cross a stream chunk.
+      const committed = `${JSON.stringify({ usage: "malformed", padding: "x".repeat(256 * 1024) })}\n${claudeLine(1, 5)}`;
+      await NodeFSP.writeFile(path, committed + malformed);
 
-    const first = await readTranscriptRecords(path, format, undefined, options);
-    assert.isNotNull(first);
-    assert.deepStrictEqual(
-      first.records.map((record) => record.totals.outputTokens),
-      [5],
-    );
-    assert.deepStrictEqual(first.tailRecords, []);
-    assert.strictEqual(first.position.resumeOffset, Buffer.byteLength(committed));
-    assert.deepStrictEqual(first.position.state, { errors: 1 });
-    assert.strictEqual(first.malformedRecords, 1);
-    assert.strictEqual(first.tailMalformedRecords, 1);
+      const first = await readTranscriptRecords(path, format, undefined, options);
+      assert.isNotNull(first);
+      assert.deepStrictEqual(
+        first.records.map((record) => record.totals.outputTokens),
+        [5],
+      );
+      assert.deepStrictEqual(first.tailRecords, []);
+      assert.strictEqual(first.position.resumeOffset, Buffer.byteLength(committed));
+      assert.deepStrictEqual(first.position.state, { errors: 1 });
+      assert.strictEqual(committedCount(first), 1);
+      assert.strictEqual(tailCount(first), 1);
+      assert.strictEqual(otherKind(first), 0);
 
-    const savedPosition = JSON.parse(JSON.stringify(first.position));
-    await NodeFSP.appendFile(path, `\n${claudeLine(2, 7)}${malformed}\n`);
-    const resumed = await readTranscriptRecords(path, format, savedPosition, options);
-    assert.isNotNull(resumed);
-    assert.isTrue(resumed.resumed);
-    assert.deepStrictEqual(
-      resumed.records.map((record) => record.totals.outputTokens),
-      [7],
-    );
-    assert.deepStrictEqual(resumed.position.state, { errors: 3 });
-    // The resumed read re-reads the formerly tentative tail as a completed line.
-    assert.strictEqual(resumed.malformedRecords, 2);
-    assert.strictEqual(resumed.tailMalformedRecords, 0);
+      const savedPosition = JSON.parse(JSON.stringify(first.position));
+      await NodeFSP.appendFile(path, `\n${claudeLine(2, 7)}${malformed}\n`);
+      const resumed = await readTranscriptRecords(path, format, savedPosition, options);
+      assert.isNotNull(resumed);
+      assert.isTrue(resumed.resumed);
+      assert.deepStrictEqual(
+        resumed.records.map((record) => record.totals.outputTokens),
+        [7],
+      );
+      assert.deepStrictEqual(resumed.position.state, { errors: 3 });
+      // The resumed read re-reads the formerly tentative tail as a completed line.
+      assert.strictEqual(committedCount(resumed), 2);
+      assert.strictEqual(tailCount(resumed), 0);
+      assert.strictEqual(otherKind(resumed), 0);
 
-    const full = await readTranscriptRecords(path, format, undefined, options);
-    assert.isNotNull(full);
-    assert.deepStrictEqual([...first.records, ...resumed.records], full.records);
-    assert.deepStrictEqual(resumed.tailRecords, full.tailRecords);
-    assert.deepStrictEqual(resumed.position, full.position);
-    assert.strictEqual(first.malformedRecords + resumed.malformedRecords, full.malformedRecords);
-    assert.strictEqual(resumed.tailMalformedRecords, full.tailMalformedRecords);
-  });
+      const full = await readTranscriptRecords(path, format, undefined, options);
+      assert.isNotNull(full);
+      assert.deepStrictEqual([...first.records, ...resumed.records], full.records);
+      assert.deepStrictEqual(resumed.tailRecords, full.tailRecords);
+      assert.deepStrictEqual(resumed.position, full.position);
+      assert.strictEqual(committedCount(first) + committedCount(resumed), committedCount(full));
+      assert.strictEqual(tailCount(resumed), tailCount(full));
+    },
+  );
 
   it("parses only appended lines when resuming a grown file", async () => {
     const path = NodePath.join(dir, "claude.jsonl");
@@ -380,7 +403,7 @@ describe("readTranscriptRecords resume", () => {
     assert.isNotNull(first);
     assert.strictEqual(first.records.length, 2);
     assert.isFalse(first.resumed);
-    assert.strictEqual(first.malformedRecords, 0);
+    assert.deepStrictEqual(first.malformedRecords, []);
 
     await NodeFSP.appendFile(path, claudeLine(3, 11));
     const second = await readTranscriptRecords(path, TEST_FORMATS.claude, first.position);
@@ -449,7 +472,7 @@ describe("readTranscriptRecords resume", () => {
     );
     const first = await readTranscriptRecords(path, TEST_FORMATS.codex);
     assert.isNotNull(first);
-    assert.strictEqual(first.malformedRecords, 0);
+    assert.deepStrictEqual(first.malformedRecords, []);
 
     // The rewound snapshot bills only the 20/4 request; the 40/8 one is lost.
     await NodeFSP.appendFile(path, snapshot(7, counters(20, 4), counters(60, 12)));
@@ -460,11 +483,14 @@ describe("readTranscriptRecords resume", () => {
       resumed.records.map((record) => totalTokens(record.totals)),
       [24],
     );
-    assert.strictEqual(resumed.malformedRecords, 1);
+    // The reducer dates the lost request by the snapshot that discarded it.
+    const lostAt = [Date.parse("2026-08-01T10:00:07Z")];
+    assert.deepStrictEqual(resumed.malformedRecords, lostAt);
+    assert.strictEqual(resumed.undatedMalformedRecords, 0);
 
     const full = await readTranscriptRecords(path, TEST_FORMATS.codex);
     assert.isNotNull(full);
-    assert.strictEqual(full.malformedRecords, 1);
+    assert.deepStrictEqual(full.malformedRecords, lostAt);
   });
 
   it("suppresses a Codex duplicate usage event that straddles the boundary", async () => {
@@ -541,7 +567,7 @@ describe("readTranscriptRecords resume", () => {
         first.tailRecords.map((r) => [r.totals.outputTokens, r.speed]),
         [[20, "ultrafast"]],
       );
-      assert.strictEqual(first.malformedRecords, 0);
+      assert.deepStrictEqual(first.malformedRecords, []);
 
       await NodeFSP.appendFile(path, `\n${firstLine}\n${event(usage(10, 2), usage(510, 62))}\n`);
       const resumed = await readTranscriptRecords(
@@ -563,7 +589,7 @@ describe("readTranscriptRecords resume", () => {
         ],
       );
       assert.deepStrictEqual(resumed.tailRecords, []);
-      assert.strictEqual(resumed.malformedRecords, 0);
+      assert.deepStrictEqual(resumed.malformedRecords, []);
       assert.deepStrictEqual(resumed.position, full.position);
     },
   );
@@ -637,7 +663,7 @@ describe("readTranscriptRecords resume", () => {
         {
           billedTokens: requests.reduce((sum, tokens) => sum + tokens, 0),
           requests,
-          malformedRecords: result.malformedRecords,
+          malformedRecords: result.malformedRecords.length,
         },
         { billedTokens: 510, requests: [120, 160, 230], malformedRecords: 0 },
       );

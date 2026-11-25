@@ -36,10 +36,6 @@ import {
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
 import {
-  canForkConversation,
-  canForkImportedSessionWith,
-} from "@t3tools/client-runtime/state/thread-fork";
-import {
   resolveThreadReferenceCopyTarget,
   threadIdCopyTarget,
 } from "@t3tools/client-runtime/thread-reference";
@@ -72,10 +68,7 @@ import { useLocation, useNavigate } from "@tanstack/react-router";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
-  ArchiveIcon,
   ArrowLeftIcon,
-  CircleCheckIcon,
-  CircleDotIcon,
   ArrowLeftRightIcon,
   BugIcon,
   ChartNoAxesColumnIcon,
@@ -89,7 +82,6 @@ import {
   FlaskConicalIcon,
   FolderIcon,
   FolderPlusIcon,
-  GitForkIcon,
   MessageSquareDashedIcon,
   GroupIcon,
   LinkIcon,
@@ -99,8 +91,6 @@ import {
   PencilIcon,
   PinIcon,
   PinOffIcon,
-  ZapIcon,
-  ZapOffIcon,
   RotateCcwIcon,
   SettingsIcon,
   RefreshCwIcon,
@@ -109,6 +99,7 @@ import {
   SquarePenIcon,
   TextSearchIcon,
   UserPlusIcon,
+  WorkflowIcon,
 } from "lucide-react";
 import { openThreadFind } from "./chat/threadFindStore";
 import { dispatchPreviewAction } from "./preview/previewActionBus";
@@ -139,7 +130,6 @@ import {
   canSnooze,
   canSnoozeUntilDone,
   effectiveSnoozed,
-  resolveArchiveToggleAction,
 } from "@t3tools/client-runtime/state/thread-settled";
 import { requestCustomSnooze } from "./CustomSnoozeDialog";
 import { pickSnoozePreset, resolveSnoozePresets } from "./Sidebar.snooze";
@@ -172,6 +162,7 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useScratchProject } from "../hooks/useScratchProject";
+import { useWorkflowEnvironmentIds } from "./workflows/useWorkflowEnvironmentIds";
 import { useStartTriage } from "../hooks/useStartTriage";
 import { pickTriageEnvironment } from "../lib/triageTarget";
 import { useNewProject } from "../hooks/useNewProject";
@@ -246,13 +237,11 @@ import {
   resolveCommandPaletteProject,
   ADDON_ICON_CLASS,
   browseInputEndPaddingClass,
-  buildArchiveCurrentThreadAction,
   buildSavedPromptsSubmenu,
   SAVED_PROMPTS_GROUP_VALUE,
   savedPromptItemValue,
-  buildCurrentThreadActionItems,
   buildMoveToGroupItems,
-  buildThreadCopyActionItems,
+  buildPullRequestCopyActionItems,
   buildBrowseGroups,
   buildRootGroups,
   buildLinkedThreadActionItems,
@@ -267,7 +256,6 @@ import {
   SNOOZE_THREAD_VIEW_VALUE,
   type CommandPaletteActionItem,
   type CommandPaletteProject,
-  type CommandPaletteThreadActionId,
   type CommandPaletteOpenIntent,
   type CommandPaletteReturnContext,
   type CommandPaletteSubmenuItem,
@@ -316,6 +304,7 @@ import {
   remoteProjectSourceIcon,
   sourceControlHostIcon,
 } from "./CommandPaletteAddProject";
+import { useCommandPaletteThreadActions } from "./CommandPaletteThreadActions";
 import { useCommandPaletteThreadItems } from "./CommandPaletteThreadItems";
 import { useCommandPaletteThemeItems } from "./CommandPaletteThemeItems";
 import {
@@ -412,25 +401,6 @@ function openIntentView(
 
 const NEW_THREAD_NO_PROJECT_VALUE = "new-thread-in:no-project";
 
-function threadActionIcon(id: CommandPaletteThreadActionId): ReactNode {
-  switch (id) {
-    case "settle":
-      return <CircleCheckIcon className={ITEM_ICON_CLASS} />;
-    case "unsettle":
-      return <CircleDotIcon className={ITEM_ICON_CLASS} />;
-    case "pin":
-      return <PinIcon className={ITEM_ICON_CLASS} />;
-    case "unpin":
-      return <PinOffIcon className={ITEM_ICON_CLASS} />;
-    case "mark-active":
-      return <ZapIcon className={ITEM_ICON_CLASS} />;
-    case "unmark-active":
-      return <ZapOffIcon className={ITEM_ICON_CLASS} />;
-    case "fork":
-      return <GitForkIcon className={ITEM_ICON_CLASS} />;
-  }
-}
-
 async function reportThreadActionFailure(
   title: string,
   run: () => Promise<AtomCommandResult<unknown, unknown>>,
@@ -471,6 +441,11 @@ export function CommandPalette({ children }: { children: ReactNode }) {
       <CommandDialog
         open={state.open}
         onOpenChange={(open, eventDetails) => {
+          // Held Escape emits repeat keydowns; only a fresh press should step back or close.
+          if (!open && eventDetails.reason === "escape-key" && eventDetails.event.repeat) {
+            eventDetails.cancel();
+            return;
+          }
           if (!open && eventDetails.reason === "escape-key" && state.mode !== "command") {
             eventDetails.cancel();
             dispatchCommandPalette({ _tag: "BackToCommand" });
@@ -643,18 +618,7 @@ function OpenCommandPaletteDialog(props: {
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef } =
     useHandleNewThread();
-  const {
-    attemptArchiveThread,
-    pinThread,
-    settleThread,
-    confirmAndUnpinThread,
-    setThreadActiveMark,
-    unsettleThread,
-    snoozeThread,
-    unsnoozeThread,
-    forkThread,
-    setThreadCustomGroup,
-  } = useThreadActions();
+  const { snoozeThread, unsnoozeThread, setThreadCustomGroup } = useThreadActions();
   // Fork: custom thread groups.
   const customGroupCatalog = useThreadGroupCatalog();
   const selectedThreadKeys = useThreadSelectionStore((state) => state.selectedThreadKeys);
@@ -705,6 +669,7 @@ function OpenCommandPaletteDialog(props: {
         ? scopeThreadRef(currentThread.environmentId, currentThread.id)
         : null;
   const openPanelPullRequestUrl = useOpenPanelPullRequestUrl(referenceThreadRef);
+  const workflowsReachable = useWorkflowEnvironmentIds().length > 0;
   const activeThreadServerConfig = useServerConfigs().get(
     currentThread?.environmentId ?? ("" as EnvironmentId),
   );
@@ -953,6 +918,12 @@ function OpenCommandPaletteDialog(props: {
     currentProjectId,
   );
   const currentProjectCwd = currentProject?.workspaceRoot ?? null;
+  // Fork: the menu rows follow the palette's pane, and an archived thread gets none.
+  const currentThreadActionItems = useCommandPaletteThreadActions({
+    threadRef: currentThread?.archivedAt === null ? currentThreadRef : null,
+    projectCwd: currentProjectCwd,
+    paneId: threadActionPane,
+  });
   const currentProjectCwdForBrowse =
     browseEnvironmentId && currentProjectEnvironmentId === browseEnvironmentId
       ? currentProjectCwd
@@ -1047,7 +1018,6 @@ function OpenCommandPaletteDialog(props: {
           ),
         )
       : null;
-    // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
     const now = new Date().toISOString();
     const openableThreads = threads.filter(
       (thread) => thread.settledOverride !== "settled" && !effectiveSnoozed(thread, { now }),
@@ -1737,88 +1707,11 @@ function OpenCommandPaletteDialog(props: {
 
   const openUnarchivedThread = currentThread?.archivedAt === null ? currentThread : null;
   const openUnarchivedThreadRef = openUnarchivedThread === null ? null : currentThreadRef;
-  // Fork: archive goes through the shared toggle, confirmation and in-flight guard.
-  const openThreadArchiveAction =
-    openUnarchivedThread === null ? "archive" : resolveArchiveToggleAction(openUnarchivedThread);
-  const archiveCurrentThreadAction = buildArchiveCurrentThreadAction({
-    threadRef: openUnarchivedThreadRef,
-    archiveAction: openThreadArchiveAction,
-    icon: <ArchiveIcon className={ITEM_ICON_CLASS} />,
-    runThread: (threadRef) =>
-      attemptArchiveThread(threadRef, { expectedAction: openThreadArchiveAction }),
-  });
-  if (archiveCurrentThreadAction) {
-    actionItems.push(archiveCurrentThreadAction);
-  }
-
   const openThreadCapabilities =
     openUnarchivedThreadRef === null
       ? null
       : (serverConfigs.get(openUnarchivedThreadRef.environmentId)?.environment.capabilities ??
         null);
-  actionItems.push(
-    ...buildCurrentThreadActionItems({
-      threadRef: openUnarchivedThreadRef,
-      isPinned: openUnarchivedThread?.pinnedAt != null,
-      isActiveMarked: openUnarchivedThread?.activeMarkedAt != null,
-      isSettled:
-        openThreadCapabilities?.threadSettlement === true &&
-        openUnarchivedThread?.settledOverride === "settled",
-      // The server owns settle eligibility and returns the authoritative error.
-      canSettleNow: true,
-      canFork:
-        openUnarchivedThread !== null &&
-        canForkConversation(openUnarchivedThread, {
-          canForkImportedSession: canForkImportedSessionWith(
-            openUnarchivedThread.providerInstanceId,
-            providersByEnvironment.get(openUnarchivedThread.environmentId),
-          ),
-        }),
-      supports: {
-        settlement: openThreadCapabilities?.threadSettlement === true,
-        // Not gated on the sidebar variant: pinning is server-side state the
-        // mobile thread list renders, and the sibling thread menus offer it
-        // regardless of which sidebar the web client shows.
-        pinning: openThreadCapabilities?.threadPinning === true,
-        activeMark: openThreadCapabilities?.threadActiveMark === true,
-      },
-      icon: (id) => threadActionIcon(id),
-      run: async (id, threadRef) => {
-        switch (id) {
-          case "settle":
-            await reportThreadActionFailure("Failed to settle thread", () =>
-              settleThread(threadRef),
-            );
-            return;
-          case "unsettle":
-            await reportThreadActionFailure("Failed to un-settle thread", () =>
-              unsettleThread(threadRef),
-            );
-            return;
-          case "pin":
-            await reportThreadActionFailure("Failed to pin thread", () => pinThread(threadRef));
-            return;
-          case "unpin":
-            await reportThreadActionFailure("Failed to unpin thread", () =>
-              confirmAndUnpinThread(threadRef),
-            );
-            return;
-          case "mark-active":
-          case "unmark-active":
-            await reportThreadActionFailure("Failed to update the active mark", () =>
-              setThreadActiveMark(threadRef, id === "mark-active"),
-            );
-            return;
-          case "fork":
-            await reportThreadActionFailure("Failed to fork conversation", () =>
-              forkThread(threadRef, { pane: threadActionPane }),
-            );
-            return;
-        }
-      },
-    }),
-  );
-
   if (openUnarchivedThread !== null && openUnarchivedThreadRef !== null) {
     const threadRef = openUnarchivedThreadRef;
     const thread = openUnarchivedThread;
@@ -2125,8 +2018,7 @@ function OpenCommandPaletteDialog(props: {
   }
 
   actionItems.push(
-    ...buildThreadCopyActionItems({
-      threadId: copyThreadIdTarget,
+    ...buildPullRequestCopyActionItems({
       reference: activeThreadReferenceCopyTarget,
       icon: <LinkIcon className={ITEM_ICON_CLASS} />,
       copy: copyActiveThreadReference,
@@ -2227,6 +2119,8 @@ function OpenCommandPaletteDialog(props: {
       },
     });
   }
+
+  actionItems.push(...currentThreadActionItems);
 
   actionItems.push({
     kind: "action",
@@ -2386,6 +2280,19 @@ function OpenCommandPaletteDialog(props: {
       openUseInAnotherApp(currentProjectEnvironmentId ?? currentThreadRef?.environmentId ?? null);
     },
   });
+
+  if (workflowsReachable) {
+    actionItems.push({
+      kind: "action",
+      value: "action:workflows",
+      searchTerms: ["workflows", "workflow", "runs", "automation", "definitions", "schedule"],
+      title: gt("Open workflows"),
+      icon: <WorkflowIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({ to: "/workflows" });
+      },
+    });
+  }
 
   actionItems.push({
     kind: "action",
@@ -3121,7 +3028,6 @@ function OpenCommandPaletteDialog(props: {
       input: {
         projectId: newProjectId(),
         title: inferProjectTitleFromPath(destinationPath),
-        // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
         createdAt: new Date().toISOString(),
         remoteUrl: addProjectCloneFlow.remoteUrl,
         destinationPath,
@@ -3171,7 +3077,7 @@ function OpenCommandPaletteDialog(props: {
           cloneDirectoryName: pinnedCloneDirectoryName,
           caseSensitive: !isWindowsPlatform(browseEnvironmentPlatform),
         })
-      : appendBrowsePathSegment(query, name);
+      : appendBrowsePathSegment(browsePath.directoryPath, name);
     await browseNavigation.run(
       () => prefetchBrowsePath(getBrowseDirectoryPath(nextQuery)),
       () => {
@@ -3610,13 +3516,20 @@ function OpenCommandPaletteDialog(props: {
       return;
     }
 
-    if (event.key === "Backspace" && query === "" && isSubmenu) {
+    if (event.ctrlKey || event.shiftKey || event.altKey || event.metaKey) return;
+
+    if (
+      event.key === "Backspace" &&
+      query === "" &&
+      isSubmenu &&
+      !event.repeat &&
+      !event.nativeEvent.isComposing &&
+      event.keyCode !== 229
+    ) {
       event.preventDefault();
       popView();
       return;
     }
-
-    if (event.ctrlKey || event.shiftKey || event.altKey || event.metaKey) return;
 
     if (event.key === "Tab" && isBrowsing && !relativePathNeedsActiveProject) {
       if (event.nativeEvent.isComposing || event.keyCode === 229) return;
@@ -3636,7 +3549,7 @@ function OpenCommandPaletteDialog(props: {
         void browseTo(completion.name);
       } else if (completion && !pinnedCloneDirectoryName) {
         setHighlightedItemValue(null);
-        setQuery(`${getBrowseDirectoryPath(query)}${completion.name}`);
+        setQuery(`${browsePath.directoryPath}${completion.name}`);
       }
       return;
     }

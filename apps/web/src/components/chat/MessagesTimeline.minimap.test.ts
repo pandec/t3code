@@ -244,6 +244,24 @@ describe("computeTimelineMinimapState", () => {
     );
   });
 
+  it("never cuts an emoji in half at the preview cap", () => {
+    const prefix = "A".repeat(TIMELINE_MINIMAP_PREVIEW_MAX_LENGTH - 1);
+    const user = messageRow({ id: "user", role: "user", text: "Prompt" });
+    const state = computeTimelineMinimapState(
+      [user, messageRow({ id: "assistant", role: "assistant", text: `${prefix}🎉 done` })],
+      EMPTY_TIMELINE_MINIMAP_STATE,
+    );
+    expect(state.userItems[0]?.secondaryText).toBe(prefix);
+
+    const streaming = (text: string, previous: typeof state) =>
+      computeTimelineMinimapState(
+        [user, messageRow({ id: "assistant", role: "assistant", text, streaming: true })],
+        previous,
+      );
+    const cut = streaming(`${prefix}🎉`, EMPTY_TIMELINE_MINIMAP_STATE);
+    expect(streaming(`${prefix}🎉 done`, cut).userItems[0]?.secondaryText).toBe(prefix);
+  });
+
   it("provides a new visibility refresh token for same-length layout changes", () => {
     const user = messageRow({ id: "user", role: "user", text: "Prompt" });
     const assistant = messageRow({

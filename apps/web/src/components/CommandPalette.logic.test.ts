@@ -7,11 +7,9 @@ import { resolveThreadReferenceCopyTarget } from "@t3tools/client-runtime/thread
 import type { Thread } from "../types";
 import { makeThreadFixture } from "../test-fixtures";
 import {
-  buildArchiveCurrentThreadAction,
-  buildCurrentThreadActionItems,
   newThreadNoProjectIndex,
   buildNestedSearchItems,
-  buildThreadCopyActionItems,
+  buildPullRequestCopyActionItems,
   buildProjectActionItems,
   resolveCommandPaletteProject,
   buildThreadActionItems,
@@ -33,21 +31,15 @@ import {
   type CommandPaletteUiState,
 } from "./CommandPalette.logic";
 
-describe("buildThreadCopyActionItems", () => {
-  const threadId = "thread-current";
+describe("buildPullRequestCopyActionItems", () => {
   const threadRef = scopeThreadRef(
     EnvironmentId.make("environment-local"),
-    ThreadId.make(threadId),
+    ThreadId.make("thread-current"),
   );
   const prUrl = "https://github.com/example/repo/pull/42";
 
   it.each([
-    {
-      name: "no PR",
-      linkedPullRequestUrl: null,
-      openPanelPullRequestUrl: undefined,
-      hasPr: false,
-    },
+    { name: "no PR", linkedPullRequestUrl: null, openPanelPullRequestUrl: undefined, hasPr: false },
     {
       name: "linked PR",
       linkedPullRequestUrl: prUrl,
@@ -67,7 +59,7 @@ describe("buildThreadCopyActionItems", () => {
       hasPr: true,
     },
   ])(
-    "keeps ID copying available with $name",
+    "offers Copy PR link only for a PR reference with $name",
     async ({ linkedPullRequestUrl, openPanelPullRequestUrl, hasPr }) => {
       const copy = vi.fn(async () => undefined);
       const reference = resolveThreadReferenceCopyTarget({
@@ -76,20 +68,10 @@ describe("buildThreadCopyActionItems", () => {
         linkedPullRequestUrl,
         openPanelPullRequestUrl,
       });
-      const items = buildThreadCopyActionItems({ threadId, reference, icon: null, copy });
-      expect(items.map((item) => item.title)).toEqual(
-        hasPr
-          ? ["Copy thread ID", "Copy PR link"]
-          : openPanelPullRequestUrl === null
-            ? ["Copy thread ID"]
-            : ["Copy thread ID", "Copy thread"],
-      );
-      await items[0]!.run();
-      expect(copy).toHaveBeenLastCalledWith(
-        expect.objectContaining({ kind: "thread", value: threadId }),
-      );
+      const items = buildPullRequestCopyActionItems({ reference, icon: null, copy });
+      expect(items.map((item) => item.title)).toEqual(hasPr ? ["Copy PR link"] : []);
       if (hasPr) {
-        await items[1]!.run();
+        await items[0]!.run();
         expect(copy).toHaveBeenLastCalledWith(
           expect.objectContaining({ kind: "pull-request", value: prUrl }),
         );
@@ -97,123 +79,10 @@ describe("buildThreadCopyActionItems", () => {
     },
   );
 
-  it("does not offer an ID on the standalone PR page or without a thread", () => {
-    const input = { threadId: null, icon: null, copy: vi.fn(async () => undefined) };
-    expect(buildThreadCopyActionItems({ ...input, reference: null })).toEqual([]);
-    const reference = resolveThreadReferenceCopyTarget({
-      threadRef,
-      title: "Current thread",
-      openPanelPullRequestUrl: prUrl,
-    });
-    expect(buildThreadCopyActionItems({ ...input, reference }).map((item) => item.title)).toEqual([
-      "Copy PR link",
-    ]);
-  });
-});
-
-describe("buildArchiveCurrentThreadAction", () => {
-  it("omits the action when no thread is open", () => {
-    expect(
-      buildArchiveCurrentThreadAction({
-        threadRef: null,
-        icon: null,
-        runThread: vi.fn(),
-      }),
-    ).toBeNull();
-  });
-
-  it("builds an archive action for the open thread", async () => {
-    const threadRef = scopeThreadRef(
-      EnvironmentId.make("environment-local"),
-      ThreadId.make("thread-current"),
+  it("offers nothing without a reference", () => {
+    expect(buildPullRequestCopyActionItems({ reference: null, icon: null, copy: vi.fn() })).toEqual(
+      [],
     );
-    const runThread = vi.fn(async () => undefined);
-    const item = buildArchiveCurrentThreadAction({
-      threadRef,
-      icon: null,
-      runThread,
-    });
-
-    expect(item).toMatchObject({
-      kind: "action",
-      value: "action:archive-current-thread",
-      title: "Archive current thread",
-      shortcutCommand: "thread.archive",
-    });
-    await item?.run();
-    expect(runThread).toHaveBeenCalledWith(threadRef);
-  });
-});
-
-describe("buildCurrentThreadActionItems", () => {
-  const threadRef = scopeThreadRef(
-    EnvironmentId.make("environment-local"),
-    ThreadId.make("thread-current"),
-  );
-  const baseInput = {
-    threadRef,
-    isPinned: false,
-    isSettled: false,
-    canSettleNow: true,
-    canFork: true,
-    supports: { settlement: true, pinning: true },
-    icon: () => null,
-    run: async () => undefined,
-  };
-
-  it("omits every action when no thread is open", () => {
-    expect(buildCurrentThreadActionItems({ ...baseInput, threadRef: null })).toEqual([]);
-  });
-
-  it("lists one verb per lifecycle pair for an active pinnable thread", () => {
-    expect(buildCurrentThreadActionItems(baseInput).map((item) => item.value)).toEqual([
-      "action:thread:pin",
-      "action:thread:settle",
-      "action:thread:fork",
-    ]);
-  });
-
-  it("swaps each lifecycle verb for its inverse on a pinned settled thread", () => {
-    expect(
-      buildCurrentThreadActionItems({ ...baseInput, isPinned: true, isSettled: true }).map(
-        (item) => item.value,
-      ),
-    ).toEqual(["action:thread:unpin", "action:thread:unsettle", "action:thread:fork"]);
-  });
-
-  it("drops capability-gated and unavailable actions", () => {
-    expect(
-      buildCurrentThreadActionItems({
-        ...baseInput,
-        canFork: false,
-        supports: { settlement: false, pinning: false },
-      }).map((item) => item.value),
-    ).toEqual([]);
-  });
-
-  it("disables settle while the thread cannot be settled", () => {
-    expect(
-      buildCurrentThreadActionItems({ ...baseInput, canSettleNow: false }).find(
-        (item) => item.value === "action:thread:settle",
-      ),
-    ).toMatchObject({ disabled: true });
-  });
-
-  it("never disables un-settle, which has no activity precondition", () => {
-    expect(
-      buildCurrentThreadActionItems({
-        ...baseInput,
-        isSettled: true,
-        canSettleNow: false,
-      }).find((item) => item.value === "action:thread:unsettle"),
-    ).not.toHaveProperty("disabled");
-  });
-
-  it("dispatches the action id and the open thread ref", async () => {
-    const run = vi.fn(async () => undefined);
-    const items = buildCurrentThreadActionItems({ ...baseInput, run });
-    await items.find((item) => item.value === "action:thread:fork")?.run();
-    expect(run).toHaveBeenCalledWith("fork", threadRef);
   });
 });
 

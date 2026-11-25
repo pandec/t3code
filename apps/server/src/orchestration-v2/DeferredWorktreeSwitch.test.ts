@@ -30,6 +30,8 @@ import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
+import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
+import { layerNoTaskFolders } from "./ProviderTurnStartService.testkit.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
@@ -195,6 +197,11 @@ describe("evaluateWorktreeSwitch", () => {
       evaluate({ runs, checkpoints: [{ id: checkpointId, status: "missing" }] }).type,
       "switch",
     );
+    // A capture that failed for good before writing a checkpoint.
+    assert.deepEqual(
+      evaluate({ runs: [{ ...run("run-1", 1, "completed"), checkpointCaptureFailed: true }] }),
+      { type: "fail", detail: WORKTREE_SWITCH_DETAIL.checkpointFailed },
+    );
   });
 });
 
@@ -220,11 +227,15 @@ const providerInstance = {
   } as ProviderAdapterV2["Service"],
   textGeneration: {} as ProviderInstance["textGeneration"],
 } satisfies ProviderInstance;
-const PlatformTestLayer = Layer.merge(
+const PlatformTestLayer = Layer.mergeAll(
   Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
   Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
     resolveLink: () => Effect.die("unused title link"),
   }),
+  Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
+    runForThread: () => Effect.succeed({ status: "no-script" }),
+  }),
+  layerNoTaskFolders,
 );
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-orchestration-v2-worktree-switch-",

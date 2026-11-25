@@ -1,45 +1,43 @@
 import { parseThreadLinkHref } from "@t3tools/shared/threadLinks";
-import type { Nodes } from "mdast";
-import remarkGfm from "remark-gfm";
-import remarkParse from "remark-parse";
-import { unified } from "unified";
+import type { Nodes } from "hast";
 
-const markdownPreviewParser = unified().use(remarkParse).use(remarkGfm).freeze();
+import { markdownTree } from "~/markdown/wordsHast";
 
-const INLINE_PARENT_TYPES = new Set<Nodes["type"]>([
-  "paragraph",
-  "heading",
-  "tableCell",
-  "emphasis",
+// Elements whose children run together; every other element is separated by a space.
+const INLINE_PARENTS = new Set([
+  "p",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "td",
+  "th",
+  "em",
   "strong",
-  "delete",
-  "link",
-  "linkReference",
+  "del",
+  "a",
+  "code",
+  "span",
+  "sup",
+  "sub",
 ]);
 
 function markdownNodeText(node: Nodes): string {
-  if (node.type === "html") {
-    return node.value
-      .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
-      .replace(/<\/?([a-z][\w-]*)(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi, (_, tag: string) =>
-        /^(?:address|article|aside|blockquote|br|dd|details|div|dl|dt|figcaption|figure|footer|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|summary|table|tbody|td|th|thead|tr|ul)$/i.test(
-          tag,
-        )
-          ? " "
-          : "",
-      );
-  }
-  if (node.type === "break") return " ";
-  if ("value" in node) return node.value;
-  if (node.type === "image" || node.type === "imageReference") return node.alt ?? "";
-  if (!("children" in node)) return "";
-  const separator = INLINE_PARENT_TYPES.has(node.type) ? "" : " ";
+  if (node.type === "text") return node.value;
+  if (node.type === "element" && node.tagName === "br") return " ";
+  if (node.type === "element" && node.tagName === "img") return String(node.properties.alt ?? "");
+  if (node.type !== "element" && node.type !== "root") return "";
+  const separator = node.type === "element" && INLINE_PARENTS.has(node.tagName) ? "" : " ";
   const text = node.children.map(markdownNodeText).join(separator);
   // A thread autolink's only text is its URL.
-  return node.type === "link" && parseThreadLinkHref(text) !== null ? "a thread" : text;
+  return node.type === "element" && node.tagName === "a" && parseThreadLinkHref(text) !== null
+    ? "a thread"
+    : text;
 }
 
 /** Markdown as one line of the text it renders, without markup or link targets. */
 export function markdownPlainText(markdown: string): string {
-  return markdownNodeText(markdownPreviewParser.parse(markdown)).replace(/\s+/g, " ").trim();
+  return markdownNodeText(markdownTree(markdown)).replace(/\s+/g, " ").trim();
 }

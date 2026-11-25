@@ -8,6 +8,8 @@ import {
   ChatAttachmentId,
   ComposerContextId,
   MessageId,
+  EnvironmentId,
+  ThreadId,
   ProviderInstanceId,
   RunId,
   type ChatAttachment,
@@ -55,6 +57,7 @@ vi.mock("./threads", async () => {
   const key = (ref: { environmentId: string; threadId: string }) =>
     `${ref.environmentId}:${ref.threadId}`;
   return {
+    threadEnvironment: { setModelSelection: {} },
     environmentThreadShells: {
       quietThreadShellAtom: (ref: { environmentId: string; threadId: string }) =>
         Atom.make(harness.shells.get(key(ref)) ?? null),
@@ -66,9 +69,15 @@ vi.mock("./threads", async () => {
   };
 });
 
+vi.mock("../components/ui/Dialog", () => ({ alert: vi.fn() }));
+vi.mock("./session", () => ({ readEnvironmentScope: () => false }));
+
+import { selectThreadModel } from "./thread-model-selection";
+import { scopedThreadKey } from "../lib/scopedEntities";
 import { appAtomRegistry } from "./atom-registry";
 import {
   activeComposerDraftKey,
+  startQueuedRunEditSave,
   beginQueuedRunEdit,
   getQueuedRunEdit,
   queuedEditDraftKey,
@@ -311,4 +320,33 @@ describe("activeComposerDraftKey", () => {
   it("falls back to the thread's draft once the edit has ended", () => {
     expect(activeComposerDraftKey(threadKey, editKey, null)).toBe(threadKey);
   });
+});
+
+it("blocks model and option picks while a queued edit save is in flight", () => {
+  const ref = {
+    environmentId: EnvironmentId.make("env-model-save"),
+    threadId: ThreadId.make("thread"),
+  };
+  const threadKey = scopedThreadKey(ref.environmentId, ref.threadId);
+  const originalSelection = { instanceId: ProviderInstanceId.make("codex"), model: "original" };
+  const edited = { ...edit([]), modelSelection: originalSelection };
+  const draftKey = queuedEditDraftKey(threadKey, edited.runId);
+  const runs = Atom.make([{ id: edited.runId, status: "queued" }]);
+  beginQueuedRunEdit(threadKey, edited, runs);
+  const finishSave = startQueuedRunEditSave(threadKey)!;
+  const changed = {
+    ...originalSelection,
+    model: "changed",
+    options: [{ id: "effort", value: "high" }],
+  };
+  const thread = {
+    modelSelection: originalSelection,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+  } as const;
+  selectThreadModel({ ...ref, draftKey }, changed, thread);
+  expect(getComposerDraftSnapshot(draftKey).modelSelection).toEqual(originalSelection);
+  finishSave(false);
+  selectThreadModel({ ...ref, draftKey }, changed, thread);
+  expect(getComposerDraftSnapshot(draftKey).modelSelection).toEqual(changed);
 });

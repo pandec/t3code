@@ -1,4 +1,5 @@
 import {
+  ChatAttachmentId,
   ComposerContextId,
   EnvironmentId,
   MessageId,
@@ -24,6 +25,7 @@ import {
 } from "../../composerDraftStore";
 import { environmentContextRecord, responseContextRecord } from "../../lib/composerContextRecords";
 import {
+  matchRestorableQueuedAttachment,
   prepareQueuedEditAttachments,
   recoverQueuedMessageEdit,
   restoreQueuedEditAttachments,
@@ -32,6 +34,11 @@ import {
 const environmentId = EnvironmentId.make("remote-environment");
 const threadTarget = scopeThreadRef(environmentId, ThreadId.make("thread:edit"));
 const editTarget = DraftId.make("queued-edit:test");
+const originalModelSelection = {
+  instanceId: ProviderInstanceId.make("codex"),
+  model: "original-model",
+};
+const changedModelSelection = { ...originalModelSelection, model: "changed-model" };
 const file: ComposerFileAttachment = {
   type: "file",
   id: "file:report",
@@ -401,6 +408,81 @@ describe("queued message file edits", () => {
     ).toBe("clean");
     expect(store.getComposerDraft(threadTarget)?.prompt).toBe("Separate draft");
     expect(store.getComposerDraft(editTarget)).toBeNull();
+  });
+
+  it.each([
+    { edit: "changed", modelSelection: changedModelSelection, outcome: "kept" },
+    { edit: "unchanged", modelSelection: originalModelSelection, outcome: "clean" },
+  ])("reports $outcome for an edit whose model is $edit", ({ modelSelection, outcome }) => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(editTarget, "Original message");
+    store.setModelSelection(editTarget, modelSelection, { explicit: true });
+    expect(
+      recoverQueuedMessageEdit({
+        editTarget,
+        threadTarget,
+        originalText: "Original message",
+        originalModelSelection,
+        modelSelection: originalModelSelection,
+      }).outcome,
+    ).toBe(outcome);
+    expect(store.getComposerDraft(editTarget)).toBeNull();
+    if (outcome === "kept") {
+      expect(
+        store.getComposerDraft(threadTarget)?.modelSelectionByProvider[modelSelection.instanceId],
+      ).toEqual(changedModelSelection);
+    } else {
+      expect(store.getComposerDraft(threadTarget)).toBeNull();
+    }
+  });
+
+  it("matches a removed queued attachment for same-environment paste while rejecting other environments or payloads", () => {
+    const fileId = ChatAttachmentId.make("server-file-1");
+    const contextId = ComposerContextId.make("file_local-1");
+    const removedAttachment = {
+      type: "file" as const,
+      id: fileId,
+      name: "notes.txt",
+      mimeType: "text/plain",
+      sizeBytes: 12,
+    };
+    const record = {
+      version: 1 as const,
+      kind: "file" as const,
+      contextId,
+      label: "notes.txt",
+      attachmentId: fileId,
+      name: "notes.txt",
+      mimeType: "text/plain",
+      sizeBytes: 12,
+    };
+
+    expect(
+      matchRestorableQueuedAttachment({
+        environmentId,
+        sourceEnvironmentId: environmentId,
+        record,
+        removedQueuedAttachments: [{ attachment: removedAttachment, contextIds: [contextId] }],
+      }),
+    ).toEqual({ attachment: removedAttachment, contextId });
+
+    expect(
+      matchRestorableQueuedAttachment({
+        environmentId,
+        sourceEnvironmentId: EnvironmentId.make("other-environment"),
+        record,
+        removedQueuedAttachments: [{ attachment: removedAttachment, contextIds: [contextId] }],
+      }),
+    ).toBeNull();
+
+    expect(
+      matchRestorableQueuedAttachment({
+        environmentId,
+        sourceEnvironmentId: environmentId,
+        record: { ...record, attachmentId: ChatAttachmentId.make("different-file") },
+        removedQueuedAttachments: [{ attachment: removedAttachment, contextIds: [contextId] }],
+      }),
+    ).toBeNull();
   });
 
   it("restores a rescued edit's saved attachments as draft images and files", async () => {

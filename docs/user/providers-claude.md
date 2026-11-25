@@ -84,9 +84,9 @@ sends your message. Click the chip to switch it to **Keep** and keep the full
 history; the choice holds for that thread until the message is sent. ⌘Enter
 (Ctrl+Enter) sends once with the chip's other choice. To start every old thread
 on **Keep**, set **Settings → Chat → Old thread send** to **Full history**.
-The mobile app shows no chip: an eligible message sent from it summarizes first.
-The cache lasts about an hour on a Claude subscription and 5 minutes with an API
-key, Bedrock, or Vertex. See [commands and skills](./composer.md#commands-and-skills) for using
+The mobile app shows the same chip, labelled with the token count: tap it to keep
+the full history for that message. The cache lasts about an hour on a Claude
+subscription and 5 minutes with an API key, Bedrock, or Vertex. See [commands and skills](./composer.md#commands-and-skills) for using
 composer commands.
 
 **Compact idle threads** in **Settings > Providers > Advanced** controls this for threads

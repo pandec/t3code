@@ -18,6 +18,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -354,7 +355,7 @@ it.effect(
             ...settings,
             thread: {
               ...expected,
-              latestUserAuthoredMessageAt: candidate.latestUserAuthoredMessageAt,
+              latestResumingMessageAt: candidate.latestResumingMessageAt,
             },
           }),
         );
@@ -370,7 +371,7 @@ it.effect(
     }).pipe(Effect.provide(layerSql)),
 );
 
-it.effect("sql: the user-authored message time ignores agent notifications", () =>
+it.effect("sql: the resuming message time counts MCP sends and ignores agent notifications", () =>
   Effect.gen(function* () {
     const store = yield* ProjectionStore.ProjectionStoreV2;
     const threadId = yield* createThread("agent-woken");
@@ -378,7 +379,7 @@ it.effect("sql: the user-authored message time ignores agent notifications", () 
     const message = (
       id: string,
       createdBy: "user" | "agent",
-      creationSource: "web" | "provider",
+      creationSource: "web" | "mcp" | "provider",
       at: DateTime.Utc,
     ) =>
       store.apply({
@@ -402,16 +403,15 @@ it.effect("sql: the user-authored message time ignores agent notifications", () 
         },
       });
     const written = DateTime.subtract(now, { hours: 2 });
+    const sent = DateTime.subtract(now, { hours: 1 });
     yield* message("written", "user", "web", written);
+    yield* message("sent", "agent", "mcp", sent);
     yield* message("notification", "agent", "provider", now);
 
     const [candidate] = yield* store.getSettlementCandidates(threadId);
     assert.isDefined(candidate);
     assert.equal(DateTime.formatIso(candidate.latestUserMessageAt!), DateTime.formatIso(now));
-    assert.equal(
-      DateTime.formatIso(candidate.latestUserAuthoredMessageAt!),
-      DateTime.formatIso(written),
-    );
+    assert.equal(DateTime.formatIso(candidate.latestResumingMessageAt!), DateTime.formatIso(sent));
     const shellThread = (yield* store.getShellSnapshot()).threads.find(
       (thread) => thread.id === threadId,
     );
@@ -438,7 +438,7 @@ it.effect("sql: lists only active threads with pull request links, oldest first"
     const store = yield* ProjectionStore.ProjectionStoreV2;
     yield* createThread("no-links");
     yield* createThread("empty-links", { pullRequests: [] });
-    yield* createThread("archived-link", {
+    const archived = yield* createThread("archived-link", {
       archivedAt: old,
       pullRequests: [pullRequestLink(1)],
     });
@@ -464,6 +464,12 @@ it.effect("sql: lists only active threads with pull request links, oldest first"
       (yield* store.getThreadsWithPullRequests(open)).map((thread) => thread.id),
       [open],
     );
+    assert.deepEqual(
+      (yield* store.getThreadsWithPullRequests(undefined, { includeArchived: true })).map(
+        (thread) => thread.id,
+      ),
+      [settled, archived, open],
+    );
   }).pipe(Effect.provide(layerSql)),
 );
 
@@ -481,6 +487,33 @@ it.effect("sql: an unsettled-only shell read skips settled threads", () =>
     assert.equal(shell.archivedThreads.length, 0);
     const all = yield* store.getShellSnapshot({ location: "active" });
     assert.equal(all.threads.length, 4);
+  }).pipe(Effect.provide(layerSql)),
+);
+
+// Fork: settling runs the settle script, which must follow the turn-end checkpoint.
+it.effect("sql: a completed run still capturing its checkpoint is not a candidate", () =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const sql = yield* SqlClient.SqlClient;
+    const threadId = yield* createThread("capturing");
+    const runId = yield* createRun(threadId);
+    const setCapture = (status: string) => sql`
+      INSERT INTO orchestration_v2_effect_outbox (
+        effect_id, command_id, thread_id, effect_type, payload_json, status,
+        available_at, created_at, updated_at
+      ) VALUES (
+        ${`effect:checkpoint.capture:${runId}`}, 'command:capture', ${threadId},
+        'checkpoint.capture', '{}', ${status}, ${DateTime.formatIso(old)},
+        ${DateTime.formatIso(old)}, ${DateTime.formatIso(old)}
+      )
+      ON CONFLICT(effect_id) DO UPDATE SET status = excluded.status
+    `;
+    const ids = () =>
+      store.getSettlementCandidates(threadId).pipe(Effect.map((rows) => rows.map((row) => row.id)));
+    yield* setCapture("running");
+    assert.deepEqual(yield* ids(), []);
+    yield* setCapture("failed");
+    assert.deepEqual(yield* ids(), [threadId]);
   }).pipe(Effect.provide(layerSql)),
 );
 

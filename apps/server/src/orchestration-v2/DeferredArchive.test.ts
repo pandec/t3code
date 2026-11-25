@@ -37,6 +37,8 @@ import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
+import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
+import { layerNoTaskFolders } from "./ProviderTurnStartService.testkit.ts";
 import { ArchiveToolkitHandlersLive } from "../mcp/toolkits/archive/handlers.ts";
 import { ArchiveToolkit } from "../mcp/toolkits/archive/tools.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -55,6 +57,7 @@ import {
   ARCHIVE_CANCEL_DETAIL,
   evaluateDeferredArchive,
   finishedWorktreeRemoval,
+  holdRunsAwaitingCapture,
   isThreadPayloadEvent,
   planArchiveSchedule,
   restartContinuationPending,
@@ -268,6 +271,49 @@ describe("evaluateDeferredArchive checkpoint outcome", () => {
     });
     assert.equal(evaluate("missing").type, "archive");
   });
+
+  // Runs complete at the provider's turn end; the capture that can still fail commits later.
+  it.effect("waits on a completed run's pending capture, then fails if the capture failed", () =>
+    Effect.gen(function* () {
+      const checkpointId = CheckpointId.make("checkpoint-1");
+      let captureStatus: "pending" | "completed" | "failed" = "pending";
+      const outbox = {
+        get: (effectId: string) =>
+          Effect.succeed(
+            effectId === "effect:checkpoint.capture:run-1"
+              ? Option.some({ status: captureStatus } as EffectOutbox.OrchestrationEffectV2)
+              : Option.none(),
+          ),
+      };
+      const evaluate = (
+        runs: ReadonlyArray<
+          Omit<ReturnType<typeof run>, "checkpointId"> & { checkpointId: CheckpointId | null }
+        >,
+      ) =>
+        evaluateDeferredArchive({
+          thread: { worktreePath: "/work/tree" },
+          request: pendingRequest(),
+          runs,
+          checkpoints: [{ id: checkpointId, status: "error" }],
+          pendingBackgroundTasks: [],
+        });
+      const completed = run("run-1", 1, "completed");
+      assert.equal(evaluate(yield* holdRunsAwaitingCapture(outbox, [completed])).type, "wait");
+      captureStatus = "completed";
+      assert.equal(evaluate(yield* holdRunsAwaitingCapture(outbox, [completed])).type, "archive");
+      const failed = { ...completed, checkpointId };
+      assert.deepEqual(evaluate(yield* holdRunsAwaitingCapture(outbox, [failed])), {
+        type: "fail",
+        detail: ARCHIVE_CANCEL_DETAIL.checkpointFailed,
+      });
+      // A capture that failed for good before writing a checkpoint vetoes the archive too.
+      captureStatus = "failed";
+      assert.deepEqual(evaluate(yield* holdRunsAwaitingCapture(outbox, [completed])), {
+        type: "fail",
+        detail: ARCHIVE_CANCEL_DETAIL.checkpointFailed,
+      });
+    }),
+  );
 });
 
 describe("isThreadPayloadEvent", () => {
@@ -636,11 +682,15 @@ const providerInstance = {
   } as ProviderAdapterV2["Service"],
   textGeneration: {} as ProviderInstance["textGeneration"],
 } satisfies ProviderInstance;
-const PlatformTestLayer = Layer.merge(
+const PlatformTestLayer = Layer.mergeAll(
   Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
   Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
     resolveLink: () => Effect.die("unused title link"),
   }),
+  Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
+    runForThread: () => Effect.succeed({ status: "no-script" }),
+  }),
+  layerNoTaskFolders,
 );
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-orchestration-v2-deferred-archive-",

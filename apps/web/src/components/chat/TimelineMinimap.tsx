@@ -42,7 +42,7 @@ function onMouseButtonsReleased(onRelease: () => void): () => void {
 export const TimelineMinimap = memo(function TimelineMinimap({
   anchorIndex,
   hasPersistentGutter,
-  hitStripWidth,
+  hitStrip: { left: hitStripLeft, width: hitStripWidth },
   currentIndex = null,
   atEnd = false,
   items,
@@ -56,7 +56,8 @@ export const TimelineMinimap = memo(function TimelineMinimap({
 }: {
   anchorIndex: number | null;
   hasPersistentGutter: boolean;
-  hitStripWidth: number;
+  /** `left` is the strip's inset from the minimap's own side. */
+  hitStrip: { left: number; width: number };
   currentIndex?: number | null;
   atEnd?: boolean;
   items: ReadonlyArray<TimelineMinimapItem>;
@@ -160,7 +161,7 @@ export const TimelineMinimap = memo(function TimelineMinimap({
   return (
     <div
       className={cn(
-        "group/minimap pointer-events-none absolute inset-y-0 z-40 w-18",
+        "group/minimap pointer-events-none absolute bottom-0 top-[calc(-1*var(--chat-header-height,0px))] z-40 w-18",
         side === "left" ? "left-0" : "right-0",
         hasPersistentGutter
           ? "opacity-100"
@@ -175,7 +176,6 @@ export const TimelineMinimap = memo(function TimelineMinimap({
         <div
           className={cn(
             "absolute top-1/2 -translate-y-1/2",
-            side === "left" ? "left-3" : "right-3",
             hitStripWidth > 0 && !passThrough ? "pointer-events-auto" : "pointer-events-none",
           )}
           onMouseDown={() => {
@@ -194,6 +194,7 @@ export const TimelineMinimap = memo(function TimelineMinimap({
           style={{
             height: resolveTimelineMinimapHeightStyle(items.length),
             maxHeight: "100%",
+            ...(side === "left" ? { left: hitStripLeft } : { right: hitStripLeft }),
             width: hitStripWidth,
           }}
         >

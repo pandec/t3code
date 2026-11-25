@@ -785,11 +785,13 @@ describe("account switch races (generation fencing, per-thread ownership, compac
             yield* providerTurnRunning(first.providerTurnId);
             const sessionA = first.input.providerThread.providerSessionId;
             const feedback = [yield* uploadFeedback(threadId)];
-            for (const step of order) {
+            for (const [index, step] of order.entries()) {
               yield* step === "send"
                 ? send(threadId, "follow-up", ACCOUNT_B, { type: "queue_after_active" })
                 : stop(threadId, first.input.runId, "first");
               yield* worker.drain();
+              // Once both landed B's run starts, possibly on the background worker past the drain.
+              if (index === order.length - 1) yield* runSettled(threadId, 2);
               feedback.push(yield* uploadFeedback(threadId));
             }
             // The provider never acknowledges Stop in time: Stop's follow-up

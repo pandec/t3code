@@ -69,7 +69,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { BackgroundThreadContext } from "./backgroundThread";
+import { BackgroundThreadContext, HiddenThreadContext } from "./backgroundThread";
 import { isInSideChatPane } from "../../lib/sideChatPane";
 import { useStableCallback } from "../../hooks/useStableCallback";
 
@@ -787,7 +787,8 @@ export function useComposerStash(input: {
   });
   // Capture phase while the composer is mounted, so Mod+S never reaches the browser's save
   // dialog even when a focused widget (the model picker search) stops the key.
-  const backgroundThread = use(BackgroundThreadContext);
+  const embedded = use(BackgroundThreadContext);
+  const hiddenThread = use(HiddenThreadContext);
   const readShortcutContext = useStableCallback(() => ({
     terminalOpen: Boolean(
       selectThreadTerminalUiState(
@@ -798,17 +799,18 @@ export function useComposerStash(input: {
   }));
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers the capture-phase stash shortcut with the command registry while the composer is mounted
   useEffect(() => {
-    if (backgroundThread) return;
+    if (hiddenThread) return;
     return registerCommands(
       { "composer.stash": handleStashShortcut },
       {
         capture: true,
         context: readShortcutContext,
-        // Split view: only the active pane's composer may claim the stash shortcut.
-        when: (event) => isThreadPaneActive(threadPaneId) && !isInSideChatPane(event.target),
+        // Split view: only the active pane claims it; a side chat's composer takes keys in its pane.
+        when: (event) =>
+          isThreadPaneActive(threadPaneId) && isInSideChatPane(event.target) === embedded,
       },
     );
-  }, [backgroundThread, handleStashShortcut, readShortcutContext, threadPaneId]);
+  }, [embedded, hiddenThread, handleStashShortcut, readShortcutContext, threadPaneId]);
 
   return {
     stashQueue,

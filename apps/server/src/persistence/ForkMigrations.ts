@@ -32,19 +32,22 @@ const run = Migrator.make({});
 
 const latestForkMigrationId = Math.max(...forkMigrationEntries.map(([id]) => id));
 
-/** Runs pending fork migrations and logs them; returns the [id, name] pairs it executed. */
-export const runForkMigrations = Effect.fn("runForkMigrations")(function* () {
+export const hasPendingForkMigrations = Effect.fn("hasPendingForkMigrations")(function* () {
   const sql = yield* SqlClient.SqlClient;
-  // The Migrator takes the write lock even with nothing to run; a current ledger skips it.
   const ledger = yield* sql`
     SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'fork_sql_migrations'
   `;
-  if (ledger.length > 0) {
-    const [latest] = yield* sql<{
-      readonly id: number | null;
-    }>`SELECT MAX(migration_id) AS id FROM fork_sql_migrations`;
-    if ((latest?.id ?? 0) >= latestForkMigrationId) return [];
-  }
+  if (ledger.length === 0) return true;
+  const [latest] = yield* sql<{
+    readonly id: number | null;
+  }>`SELECT MAX(migration_id) AS id FROM fork_sql_migrations`;
+  return (latest?.id ?? 0) < latestForkMigrationId;
+});
+
+/** Runs pending fork migrations and logs them; returns the [id, name] pairs it executed. */
+export const runForkMigrations = Effect.fn("runForkMigrations")(function* () {
+  // The Migrator takes the write lock even with nothing to run; a current ledger skips it.
+  if (!(yield* hasPendingForkMigrations())) return [];
   const executed = yield* run({
     table: "fork_sql_migrations",
     loader: Migrator.fromRecord(

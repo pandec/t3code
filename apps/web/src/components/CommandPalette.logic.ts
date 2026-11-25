@@ -1,8 +1,5 @@
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
-import {
-  threadIdCopyTarget,
-  type ThreadReferenceCopyTarget,
-} from "@t3tools/client-runtime/thread-reference";
+import { type ThreadReferenceCopyTarget } from "@t3tools/client-runtime/thread-reference";
 import {
   foldSearchQuery,
   PALETTE_SECONDARY_LIMIT,
@@ -58,43 +55,29 @@ const NO_THREAD_KEYS: ReadonlySet<string> = new Set();
 export const ITEM_ICON_CLASS = "size-4 text-icon-muted";
 export const ADDON_ICON_CLASS = "size-4";
 
-export function buildThreadCopyActionItems(input: {
-  threadId: string | null;
+/**
+ * Fork: "Copy PR link" for the open pull request panel. Copy thread and Copy
+ * thread ID come from the thread action menu rows instead.
+ */
+export function buildPullRequestCopyActionItems(input: {
   reference: ThreadReferenceCopyTarget | null;
   icon: ReactNode;
   copy: (target: ThreadReferenceCopyTarget | null) => Promise<void>;
 }): CommandPaletteActionItem[] {
-  const items: CommandPaletteActionItem[] = [];
-  if (input.threadId !== null) {
-    const target = threadIdCopyTarget(input.threadId);
-    items.push({
-      kind: "action",
-      value: "action:copy-thread-id",
-      searchTerms: ["copy", "thread id"],
-      title: "Copy thread ID",
-      description: input.threadId,
-      icon: input.icon,
-      shortcutCommand: "thread.copyId",
-      run: () => input.copy(target),
-    });
-  }
   const reference = input.reference;
-  if (reference !== null) {
-    items.push({
+  if (reference?.kind !== "pull-request") return [];
+  return [
+    {
       kind: "action",
       value: "action:copy-thread-reference",
-      searchTerms:
-        reference.kind === "pull-request"
-          ? ["copy", "pull request", "pr link", "reference"]
-          : ["copy", "thread", "reference"],
-      title: reference.kind === "pull-request" ? "Copy PR link" : "Copy thread",
+      searchTerms: ["copy", "pull request", "pr link", "reference"],
+      title: "Copy PR link",
       description: reference.description,
       icon: input.icon,
       shortcutCommand: "thread.copyReference",
       run: () => input.copy(reference),
-    });
-  }
-  return items;
+    },
+  ];
 }
 
 export function buildLinkedThreadActionItems(
@@ -536,149 +519,6 @@ export function buildSavedPromptsSubmenu(input: {
       },
     ],
   };
-}
-
-export function buildArchiveCurrentThreadAction(input: {
-  threadRef: ScopedThreadRef | null;
-  /** See `resolveArchiveToggleAction`; omitted means archive now. */
-  archiveAction?: "archive" | "schedule" | "cancel";
-  icon: ReactNode;
-  runThread: (threadRef: ScopedThreadRef) => Promise<void>;
-}): CommandPaletteActionItem | null {
-  if (!input.threadRef) {
-    return null;
-  }
-  const threadRef = input.threadRef;
-  return {
-    kind: "action",
-    value: "action:archive-current-thread",
-    searchTerms: ["archive", "close", "done", "finish", "current thread", "when done", "cancel"],
-    title:
-      input.archiveAction === "cancel"
-        ? "Cancel pending archive"
-        : input.archiveAction === "schedule"
-          ? "Archive current thread when done"
-          : "Archive current thread",
-    icon: input.icon,
-    shortcutCommand: "thread.archive",
-    run: async () => {
-      await input.runThread(threadRef);
-    },
-  };
-}
-
-/**
- * Per-thread actions the palette offers for the open thread, mirroring the
- * per-thread context menu. Ids are shared between the item builder and the
- * dispatcher so labels and handlers cannot drift apart.
- */
-export type CommandPaletteThreadActionId =
-  | "settle"
-  | "unsettle"
-  | "pin"
-  | "unpin"
-  | "mark-active"
-  | "unmark-active"
-  | "fork";
-
-interface CommandPaletteThreadActionSpec {
-  readonly id: CommandPaletteThreadActionId;
-  readonly title: string;
-  readonly searchTerms: ReadonlyArray<string>;
-}
-
-const THREAD_ACTION_SPECS = {
-  settle: {
-    id: "settle",
-    title: "Settle current thread",
-    searchTerms: ["settle", "done", "park", "current thread"],
-  },
-  unsettle: {
-    id: "unsettle",
-    title: "Un-settle current thread",
-    searchTerms: ["unsettle", "un-settle", "reactivate", "keep active", "current thread"],
-  },
-  pin: {
-    id: "pin",
-    title: "Pin current thread",
-    searchTerms: ["pin", "keep on top", "current thread"],
-  },
-  unpin: {
-    id: "unpin",
-    title: "Unpin current thread",
-    searchTerms: ["unpin", "remove pin", "current thread"],
-  },
-  "mark-active": {
-    id: "mark-active",
-    title: "Mark current thread as active",
-    searchTerms: ["mark active", "active", "zap", "focus", "current thread"],
-  },
-  "unmark-active": {
-    id: "unmark-active",
-    title: "Unmark current thread as active",
-    searchTerms: ["unmark active", "active", "zap", "current thread"],
-  },
-  fork: {
-    id: "fork",
-    title: "Fork current thread",
-    searchTerms: ["fork", "fork conversation", "branch", "duplicate", "current thread"],
-  },
-} as const satisfies Record<CommandPaletteThreadActionId, CommandPaletteThreadActionSpec>;
-
-export function buildCurrentThreadActionItems(input: {
-  readonly threadRef: ScopedThreadRef | null;
-  readonly isPinned: boolean;
-  readonly isActiveMarked?: boolean;
-  readonly isSettled: boolean;
-  /** Client-side twin of the server's settle invariants (no live/queued work). */
-  readonly canSettleNow: boolean;
-  readonly canFork: boolean;
-  readonly supports: {
-    readonly settlement: boolean;
-    readonly pinning: boolean;
-    readonly activeMark?: boolean;
-  };
-  readonly icon: (id: CommandPaletteThreadActionId) => ReactNode;
-  readonly run: (id: CommandPaletteThreadActionId, threadRef: ScopedThreadRef) => Promise<void>;
-}): CommandPaletteActionItem[] {
-  const threadRef = input.threadRef;
-  if (!threadRef) {
-    return [];
-  }
-
-  // One verb per lifecycle pair, resolved from the same state the sidebar row
-  // and chat header menus resolve theirs from, so the three surfaces cannot
-  // disagree about what the open thread is.
-  const ids: CommandPaletteThreadActionId[] = [];
-  if (input.supports.pinning) {
-    ids.push(input.isPinned ? "unpin" : "pin");
-  }
-  if (input.supports.activeMark) {
-    ids.push(input.isActiveMarked ? "unmark-active" : "mark-active");
-  }
-  if (input.supports.settlement) {
-    ids.push(input.isSettled ? "unsettle" : "settle");
-  }
-  if (input.canFork) {
-    ids.push("fork");
-  }
-
-  return ids.map((id) => {
-    const spec: CommandPaletteThreadActionSpec = THREAD_ACTION_SPECS[id];
-    return {
-      kind: "action",
-      value: `action:thread:${id}`,
-      searchTerms: [...spec.searchTerms],
-      title: spec.title,
-      icon: input.icon(id),
-      ...(id === "settle" && !input.canSettleNow
-        ? { disabled: true, description: "Thread has running or pending work" }
-        : {}),
-      run: async () => {
-        await input.run(id, threadRef);
-      },
-    };
-  });
 }
 
 const MOVE_TO_GROUP_NONE_VALUE = "group:none";

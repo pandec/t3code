@@ -56,6 +56,10 @@ import * as McpSessionRegistry from "../McpSessionRegistry.ts";
 import * as McpToolAccessTestkit from "../McpToolAccess.testkit.ts";
 import * as PreviewAutomationBroker from "../PreviewAutomationBroker.ts";
 import * as PreviewBrowser from "../../preview/PreviewBrowser.ts";
+import * as FeedbackStore from "../../feedback/FeedbackStore.ts";
+import * as MilestoneHub from "../../milestones/MilestoneHub.ts";
+import * as TaskFolders from "../../workspace/TaskFolders.ts";
+import * as Workflows from "../../workflows/Workflows.ts";
 
 const StubServicesLive = Layer.mergeAll(
   McpProviderSessions.layer,
@@ -103,6 +107,10 @@ const StubServicesLive = Layer.mergeAll(
   Layer.mock(EnvironmentTheme.EnvironmentThemeService)({}),
   Layer.mock(IssueService.IssueService)({}),
   Layer.mock(ThreadIssueService.ThreadIssueService)({}),
+  Layer.mock(FeedbackStore.FeedbackStore)({}),
+  MilestoneHub.layer,
+  Layer.mock(TaskFolders.TaskFolders)({}),
+  Layer.mock(Workflows.Workflows)({}),
 );
 
 const threadId = ThreadId.make("thread-fork-islands-mcp");

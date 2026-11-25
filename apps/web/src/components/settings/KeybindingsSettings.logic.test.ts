@@ -3,6 +3,7 @@ import type { ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import {
   compileResolvedKeybindingsConfig,
   DEFAULT_RESOLVED_KEYBINDINGS,
+  mergeWithDefaultKeybindings,
   parseKeybindingShortcut,
 } from "@t3tools/shared/keybindings";
 
@@ -18,6 +19,7 @@ import {
   keybindingFromKeyboardEvent,
   parseWhenExpressionDraft,
   shortcutToKeybindingInput,
+  shortcutToKeybindingParts,
   unknownWhenVariables,
   whenAstToExpression,
 } from "./KeybindingsSettings.logic";
@@ -57,6 +59,35 @@ describe("KeybindingsSettings.logic", () => {
     expect(after.find((row) => row.command === "chat.new")?.id).not.toBe(
       before.find((row) => row.command === "chat.new")?.id,
     );
+  });
+
+  it("resets an edited shortcut to the built-in one its command no longer has", () => {
+    const rows = buildKeybindingRows(
+      mergeWithDefaultKeybindings(
+        compileResolvedKeybindingsConfig([
+          { command: "chat.new", key: "mod+n", when: "!terminalFocus" },
+          { command: "chat.new", key: "f8", when: "!terminalFocus" },
+        ]),
+      ),
+    );
+    expect(
+      rows
+        .filter((row) => row.command === "chat.new")
+        .map(({ key, defaultKey }) => ({ key, defaultKey })),
+    ).toEqual([
+      { key: "f8", defaultKey: "mod+shift+o" },
+      { key: "mod+n", defaultKey: "mod+n" },
+    ]);
+    const unassigned = buildKeybindingRows(
+      mergeWithDefaultKeybindings(
+        compileResolvedKeybindingsConfig([
+          { command: "chat.new", key: "mod+n", when: "!terminalFocus" },
+          { command: "chat.new", key: "mod+shift+o", when: "false" },
+          { command: "chat.new", key: "f8", when: "!terminalFocus" },
+        ]),
+      ),
+    );
+    expect(unassigned.find((row) => row.key === "f8")?.defaultKey).toBe("mod+n");
   });
 
   it("shares a stable editor for resolved duplicates but separates commands, shortcuts, and conditions", () => {
@@ -206,6 +237,31 @@ describe("KeybindingsSettings.logic", () => {
         expected: "alt+1",
         defaultInput: "alt+1",
       },
+      {
+        key: "π",
+        code: "KeyP",
+        altKey: true,
+        shiftKey: false,
+        expected: "alt+p",
+        defaultInput: "alt+p",
+      },
+      // Dvorak Option+L and AZERTY Option+A: not the US glyph at its US key.
+      {
+        key: "¬",
+        code: "KeyP",
+        altKey: true,
+        shiftKey: false,
+        expected: "alt+¬",
+        defaultInput: "alt+¬",
+      },
+      {
+        key: "æ",
+        code: "KeyQ",
+        altKey: true,
+        shiftKey: false,
+        expected: "alt+æ",
+        defaultInput: "alt+æ",
+      },
     ]) {
       const pressed = {
         key,
@@ -243,6 +299,15 @@ describe("KeybindingsSettings.logic", () => {
         "MacIntel",
       ),
     ).toBe("mod+m");
+  });
+
+  it("keeps a literal plus key as its own part", () => {
+    expect(shortcutToKeybindingParts(parseKeybindingShortcut("mod++")!)).toEqual(["mod", "+"]);
+    expect(shortcutToKeybindingParts(parseKeybindingShortcut("mod+shift++")!)).toEqual([
+      "mod",
+      "shift",
+      "+",
+    ]);
   });
 
   it("serializes shortcuts and when expressions for upserts", () => {

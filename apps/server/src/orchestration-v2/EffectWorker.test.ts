@@ -34,6 +34,7 @@ import * as CheckpointRollbackService from "./CheckpointRollbackService.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EffectWorker from "./EffectWorker.ts";
+import * as ProjectionMaintenance from "./ProjectionMaintenance.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
@@ -41,7 +42,9 @@ import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
 import * as ProviderTurnStartService from "./ProviderTurnStartService.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationService.ts";
+import * as ThreadArchiveScheduler from "./ThreadArchiveScheduler.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
+import * as ThreadWorktreeSwitchScheduler from "./ThreadWorktreeSwitchScheduler.ts";
 import * as ServerSettings from "../serverSettings.ts";
 
 const threadId = ThreadId.make("thread:effect-worker-restart");
@@ -176,6 +179,7 @@ function layerExecutorFor(input: {
         layerDependencies,
         Layer.mock(ThreadManagementService.ThreadManagementService)(input.threads ?? {}),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
+        Layer.mock(ProjectionMaintenance.ProjectionMaintenanceV2)({}),
         ServerSettings.layerTest(
           input.continueAfterRestart === true ? { continueThreadsAfterServerUpdate: true } : {},
         ),
@@ -669,6 +673,71 @@ it.effect("terminalizes a process-bound claim when success settlement fails", ()
     assert.isDefined(terminalError);
     assert.include(terminalError, "after execution started");
     assert.include(terminalError, "simulated success settlement failure");
+  }),
+);
+
+// Fork: a capture that fails for good writes no event, yet it vetoes the deferred requests.
+it.effect("rechecks deferred archive and worktree switch once a checkpoint capture fails", () =>
+  Effect.gen(function* () {
+    const now = DateTime.formatIso(yield* DateTime.now);
+    const workerId = "worker-capture-failure";
+    const claimedEffect: EffectOutbox.OrchestrationEffectV2 = {
+      id: `effect:checkpoint.capture:${runId}`,
+      commandId: CommandId.make("command:capture-failure"),
+      threadId,
+      request: {
+        type: "checkpoint.capture",
+        runId,
+        scopeId: CheckpointScopeId.make("checkpoint-scope:capture-failure"),
+      },
+      status: "running",
+      attemptCount: 5,
+      availableAt: now,
+      leaseOwner: workerId,
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+      lastError: null,
+    };
+    const rechecked = yield* Ref.make<ReadonlyArray<string>>([]);
+    const layerOutbox = Layer.mock(EffectOutbox.EffectOutboxV2)({
+      claimNext: () => Effect.succeedSome(claimedEffect),
+      get: () => Effect.succeedSome(claimedEffect),
+      awaitCancellation: () => Effect.never,
+      clearCancellation: () => Effect.void,
+      fail: () => Effect.succeed(true),
+    });
+    const layerExecutor = Layer.succeed(
+      EffectWorker.OrchestrationEffectExecutorV2,
+      EffectWorker.OrchestrationEffectExecutorV2.of({
+        execute: (effect) =>
+          Effect.fail(
+            new EffectWorker.OrchestrationEffectExecutionError({
+              effectId: effect.id,
+              effectType: effect.request.type,
+              cause: "capture failed",
+            }),
+          ),
+      }),
+    );
+    const layerSchedulers = Layer.merge(
+      Layer.mock(ThreadArchiveScheduler.ThreadArchiveScheduler)({
+        recheck: (id) => Ref.update(rechecked, (ids) => [...ids, `archive:${id}`]),
+      }),
+      Layer.mock(ThreadWorktreeSwitchScheduler.ThreadWorktreeSwitchScheduler)({
+        recheck: (id) => Ref.update(rechecked, (ids) => [...ids, `switch:${id}`]),
+      }),
+    );
+    const layerWorker = EffectWorker.layerWithOptions({ workerId }).pipe(
+      Layer.provide(Layer.merge(layerOutbox, layerExecutor)),
+    );
+
+    yield* EffectWorker.OrchestrationEffectWorkerV2.pipe(
+      Effect.flatMap((worker) => worker.runOnce()),
+      Effect.provide(Layer.merge(layerWorker, layerSchedulers)),
+    );
+
+    assert.deepEqual(yield* Ref.get(rechecked), [`archive:${threadId}`, `switch:${threadId}`]);
   }),
 );
 

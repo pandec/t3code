@@ -183,7 +183,7 @@ const scenario = (name: string) =>
             (event) =>
               event.type === "run.updated" &&
               event.payload.id === turnInput.runId &&
-              event.payload.status === "waiting",
+              event.payload.status === "completed",
           );
           yield* Queue.offer(harness.events, {
             type: "provider_turn.updated",
@@ -204,6 +204,19 @@ const scenario = (name: string) =>
           yield* worker.drain();
         });
       const endActiveTurn = endTurn(0);
+      // The queue starts a run in a run-update reaction, which can land after the turn-end drain.
+      const startsAfter = <A, E, R>(runId: RunId, trigger: Effect.Effect<A, E, R>) =>
+        Effect.gen(function* () {
+          const starting = yield* watch(
+            (event) =>
+              event.type === "run.updated" &&
+              event.payload.id === runId &&
+              event.payload.status === "starting",
+          );
+          yield* trigger;
+          yield* Fiber.join(starting);
+          yield* worker.drain();
+        });
       yield* orchestrator.dispatch({
         type: "thread.create",
         commandId: CommandId.make("create"),
@@ -224,7 +237,7 @@ const scenario = (name: string) =>
       yield* send("active", "start");
       yield* worker.drain();
       yield* Fiber.join(firstRunning);
-      return { orchestrator, worker, watch, send, hold, endTurn, endActiveTurn };
+      return { orchestrator, worker, watch, send, hold, endTurn, endActiveTurn, startsAfter };
     });
     return { ...harness, threadId, setup };
   });
@@ -452,7 +465,7 @@ it.effect(
         const { started, steered, events, deferRunning, threadId, setup, layer } =
           yield* scenario("edit-hold-batch-usage");
         yield* Effect.gen(function* () {
-          const { orchestrator, worker, watch, send, hold, endTurn } = yield* setup;
+          const { orchestrator, worker, watch, send, hold, endTurn, startsAfter } = yield* setup;
           yield* send("leader", "queue");
           yield* send("follower", "queue");
           yield* send("held", "queue");
@@ -464,7 +477,7 @@ it.effect(
           // The leader starts with the follower and the third message stamped
           // into its batch; the edit begins before the leader's turn runs.
           deferRunning.current = true;
-          yield* endTurn(0);
+          yield* startsAfter(leader!.id, endTurn(0));
           assert.equal(started[1]!.runId, leader!.id);
           yield* hold("hold", held!.id, true);
           const stamped = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
@@ -543,10 +556,13 @@ it.effect("steers an early steer edited while its turn became ready once the edi
       const { started, steered, events, deferRunning, threadId, setup, layer } =
         yield* scenario("edit-hold-early-steer");
       yield* Effect.gen(function* () {
-        const { orchestrator, worker, watch, send, hold, endTurn } = yield* setup;
+        const { orchestrator, worker, watch, send, hold, endTurn, startsAfter } = yield* setup;
         yield* send("next", "queue");
+        const next = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+          (run) => run.status === "queued",
+        )!;
         deferRunning.current = true;
-        yield* endTurn(0);
+        yield* startsAfter(next.id, endTurn(0));
         const sendSteer = (id: string) =>
           orchestrator.dispatch({
             type: "message.dispatch",
@@ -607,7 +623,7 @@ const reorderedQueue = (name: string) =>
   Effect.gen(function* () {
     const { started, threadId, setup, layer } = yield* scenario(name);
     const reordered = Effect.gen(function* () {
-      const { orchestrator, worker, watch, send, hold, endTurn, endActiveTurn } = yield* setup;
+      const { orchestrator, watch, send, hold, endTurn, endActiveTurn, startsAfter } = yield* setup;
       yield* send("older", "queue");
       yield* send("newer", "queue");
       const queued = (yield* orchestrator.getThreadProjection(threadId)).runs
@@ -631,13 +647,12 @@ const reorderedQueue = (name: string) =>
         beforeRunId: older,
       });
       const newerRunning = yield* turnRunning(1);
-      yield* endActiveTurn;
+      yield* startsAfter(newer, endActiveTurn);
       yield* Fiber.join(newerRunning);
       assert.equal(started[1]!.runId, newer);
       const releaseOlder = Effect.gen(function* () {
         const olderRunning = yield* turnRunning(0);
-        yield* hold("release-older", older, false);
-        yield* worker.drain();
+        yield* startsAfter(older, hold("release-older", older, false));
         yield* Fiber.join(olderRunning);
         assert.equal(started[2]!.runId, older);
       });

@@ -26,7 +26,7 @@ export const resolveMacDevSigningTeam = Effect.fn("resolveMacDevSigningTeam")(fu
       (cause) =>
         new MacDevSigningError({
           message:
-            "macOS Dev builds require T3CODE_DESKTOP_MAC_TEAM_ID in .env.local or the environment, and a Developer ID Application certificate with its private key in Keychain. See docs/operations/development.md#signed-macos-dev-builds.",
+            "macOS Dev builds require T3CODE_DESKTOP_MAC_TEAM_ID in .env.local or the environment, and a Developer ID Application certificate with its private key in Keychain. See docs/operations/00_development.md#signed-macos-dev-builds.",
           cause,
         }),
     ),

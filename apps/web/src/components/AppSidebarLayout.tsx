@@ -485,6 +485,7 @@ export function AppSidebarLayout({
               role="navigation"
               aria-label={gt("Threads")}
               resizable={{
+                collapseOnResize: true,
                 maxWidth: sidebarMaximumWidth,
                 minWidth: sidebarMinimumWidth,
                 // Match the responsive clamp above so a drag is never rejected at

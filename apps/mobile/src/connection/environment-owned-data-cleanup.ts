@@ -9,6 +9,7 @@ import { clearThreadComposerErrorsForEnvironment } from "../state/thread-compose
 import { clearThreadLifecycleOutboxEnvironment } from "../state/thread-lifecycle-outbox";
 import { clearThreadOutboxEnvironment } from "../state/thread-outbox-removal";
 import { clearComposerDraftsEnvironment } from "../state/use-composer-drafts";
+import { mobileThreadTriageOutboxStore } from "../state/thread-triage-outbox-storage";
 
 class EnvironmentOwnedDataClearError extends Schema.TaggedError<EnvironmentOwnedDataClearError>()(
   "EnvironmentOwnedDataClearError",
@@ -42,6 +43,7 @@ export const layer = Layer.succeed(
           settle("drafts", clearComposerDraftsEnvironment),
           settle("lifecycle", clearThreadLifecycleOutboxEnvironment),
           Effect.sync(() => clearThreadComposerErrorsForEnvironment(environmentId)),
+          Effect.ignore(mobileThreadTriageOutboxStore.clearEnvironment(environmentId)),
         ],
         { concurrency: "unbounded", discard: true },
       );

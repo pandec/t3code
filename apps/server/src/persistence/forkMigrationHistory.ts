@@ -31,6 +31,39 @@ const previewMigrationNames: ReadonlySet<string> = new Set([
 
 const badState = (message: string) => new Migrator.MigrationError({ kind: "BadState", message });
 
+const readForkHistory = Effect.fn("readForkMigrationHistory")(function* (
+  upstreamIds: ReadonlyMap<string, number>,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const tables = yield* sql`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
+  `;
+  if (tables.length === 0) return undefined;
+  const history = yield* sql<{
+    readonly migration_id: number;
+    readonly name: string;
+    readonly created_at: string;
+  }>`SELECT migration_id, name, created_at FROM effect_sql_migrations ORDER BY migration_id`;
+  const isForkHistory = history.some((row) => {
+    const upstreamId = upstreamIds.get(row.name);
+    return (
+      forkOnlyMigrationNames.has(row.name) ||
+      (upstreamId !== undefined &&
+        upstreamId !== row.migration_id &&
+        !previewMigrationNames.has(row.name))
+    );
+  });
+  return isForkHistory ? history : undefined;
+});
+
+/** Read-only: whether `repairForkMigrationHistory` would rewrite this ledger. */
+export const needsForkMigrationHistoryRepair = Effect.fn("needsForkMigrationHistoryRepair")(
+  function* (manifest: ReadonlyArray<readonly [number, string]>) {
+    const history = yield* readForkHistory(new Map(manifest.map(([id, name]) => [name, id])));
+    return history !== undefined;
+  },
+);
+
 /**
  * Old fork builds interleaved migrations, so relocated upstream ids mask newer
  * ones. Upstream rows are remapped by name, fork-only rows move out, and every
@@ -42,32 +75,11 @@ export const repairForkMigrationHistory = Effect.fn("repairForkMigrationHistory"
 ) {
   const sql = yield* SqlClient.SqlClient;
   const upstreamIds = new Map(manifest.map(([id, name]) => [name, id]));
-  const readForkHistory = Effect.gen(function* () {
-    const tables = yield* sql`
-      SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
-    `;
-    if (tables.length === 0) return undefined;
-    const history = yield* sql<{
-      readonly migration_id: number;
-      readonly name: string;
-      readonly created_at: string;
-    }>`SELECT migration_id, name, created_at FROM effect_sql_migrations ORDER BY migration_id`;
-    const isForkHistory = history.some((row) => {
-      const upstreamId = upstreamIds.get(row.name);
-      return (
-        forkOnlyMigrationNames.has(row.name) ||
-        (upstreamId !== undefined &&
-          upstreamId !== row.migration_id &&
-          !previewMigrationNames.has(row.name))
-      );
-    });
-    return isForkHistory ? history : undefined;
-  });
   // Detect before BEGIN IMMEDIATE: a current database must not take the write lock.
-  if ((yield* readForkHistory) === undefined) return [];
+  if ((yield* readForkHistory(upstreamIds)) === undefined) return [];
   return yield* sql.withTransaction(
     Effect.gen(function* () {
-      const history = yield* readForkHistory;
+      const history = yield* readForkHistory(upstreamIds);
       if (history === undefined) return [];
 
       const unknown = history.filter(

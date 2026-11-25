@@ -193,7 +193,7 @@ it.effect("releases the messages queued at a turn's start into it as steers", ()
           (event) =>
             event.type === "run.updated" &&
             event.payload.id === started[0]!.runId &&
-            event.payload.status === "waiting",
+            event.payload.status === "completed",
         );
         yield* Queue.offer(events, {
           type: "provider_turn.updated",

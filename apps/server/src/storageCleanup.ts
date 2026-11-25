@@ -5,6 +5,7 @@ import {
   GitCommandError,
   OrchestrationV2AppThreadJson,
   OrchestrationV2ProviderSessionJson,
+  StorageCleanupReportEntry,
 } from "@t3tools/contracts";
 import * as Base64Url from "effect/encoding/Base64Url";
 import * as Schema from "effect/Schema";
@@ -18,9 +19,9 @@ import type {
   TerminalSummary,
   WorktreeCleanupRules,
   StorageCleanupReport,
-  StorageCleanupReportEntry,
   ThreadId,
 } from "@t3tools/contracts";
+import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
 import { resolveWorktreeT3Home } from "@t3tools/shared/devHome";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
@@ -58,9 +59,11 @@ import { forkParked } from "./serverActivation.ts";
 import * as Settings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "./worktreesDirectory.ts";
+import * as CheckpointCaptureIndex from "./vcs/checkpointCaptureIndex.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import { isNonRepositoryGitStderr } from "./vcs/GitVcsDriverCore.ts";
 import { isLinkedWorktree, removeLinkedWorktree } from "./vcs/worktreeRemoval.ts";
+import * as TaskFolders from "./workspace/TaskFolders.ts";
 import {
   canonicalWorkspacePath,
   reserveWorkspace,
@@ -76,6 +79,11 @@ const decodeCleanupThread = Schema.decodeUnknownEffect(
 );
 const decodeCleanupSession = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2ProviderSessionJson),
+);
+const decodeWorktreeLeftovers = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Array(Schema.Struct({ adminDir: Schema.String, entry: StorageCleanupReportEntry })),
+  ),
 );
 // pnpm 11 writes this file as JSON, older versions as YAML.
 const decodePnpmModulesManifest = Schema.decodeUnknownEffect(
@@ -436,6 +444,7 @@ const make = Effect.gen(function* () {
   const terminals = yield* TerminalManager.TerminalManager;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const taskFolders = yield* TaskFolders.TaskFolders;
   const liveTerminals = new Map<string, Map<string, TerminalSummary>>();
   const orphanSizes = new Map<string, number | null>();
   const noteTerminal = (terminal: TerminalSummary) => {
@@ -551,6 +560,22 @@ const make = Effect.gen(function* () {
           (markers.has("head") && markers.has("objects") && markers.has("refs"))
         );
       };
+      // A gitfile whose target is missing holds no repository data. An unreadable one counts.
+      // Parsed and joined as Git does: only trailing CR/LF is stripped, and `..` is left to the
+      // kernel so a symlinked parent resolves the same way.
+      const isDanglingGitfile = Effect.fn("storageCleanup.isDanglingGitfile")(
+        function* (directory: string, name: string) {
+          const gitPath = path.join(directory, name);
+          if ((yield* fs.lstat(gitPath)).type !== "File") return false;
+          const contents = (yield* fs.readFileString(gitPath)).replace(/[\r\n]+$/u, "");
+          if (!contents.startsWith("gitdir: ") || contents.length === 8) return false;
+          const gitDir = contents.slice(8);
+          // Statting a network path makes Windows sign in to its host with the user's credentials.
+          if (isNetworkPath(gitDir)) return false;
+          return !(yield* fs.exists(path.isAbsolute(gitDir) ? gitDir : `${directory}/${gitDir}`));
+        },
+        Effect.orElseSucceed(() => false),
+      );
       const pending = [root];
       let entries = 1;
       let bytes = 0;
@@ -594,8 +619,15 @@ const make = Effect.gen(function* () {
         );
         for (const result of inspected) {
           if (result === null) return incomplete;
-          if (inspectRepositories && isNestedRepository(result.target, result.names))
-            return { bytes: null, reason: "contains a nested Git repository" };
+          if (inspectRepositories && isNestedRepository(result.target, result.names)) {
+            const names = yield* Effect.filter(result.names, (name) =>
+              name.toLowerCase() === ".git"
+                ? Effect.map(isDanglingGitfile(result.target, name), (dangling) => !dangling)
+                : Effect.succeed(true),
+            );
+            if (isNestedRepository(result.target, names))
+              return { bytes: null, reason: "contains a nested Git repository" };
+          }
           bytes += result.bytes;
           entries += result.names.length;
           if (entries > 2_000_000) return incomplete;
@@ -608,9 +640,19 @@ const make = Effect.gen(function* () {
       }
       return { bytes, reason: null };
     },
-    Effect.timeout("30 seconds"),
+    // No time limit: the entry cap bounds the walk, and a removal that timed out would
+    // repeat the whole walk on every sweep without ever deleting the worktree.
     Effect.orElseSucceed(() => ({ bytes: null, reason: "worktree could not be fully inspected" })),
   );
+  // For walks under a workspace lease, which provider startup waits on, or repeated under one.
+  const measureWorktreeBounded = (...args: Parameters<typeof measureWorktree>) =>
+    measureWorktree(...args).pipe(
+      Effect.timeoutOrElse({
+        duration: "30 seconds",
+        orElse: () =>
+          Effect.succeed({ bytes: null, reason: "worktree could not be fully inspected" }),
+      }),
+    );
 
   const readThreads = () =>
     readStorageCleanupThreads().pipe(
@@ -795,9 +837,9 @@ const make = Effect.gen(function* () {
       if (orphanSizes.has(key)) continue;
       const remaining = measurementDeadline - (yield* Clock.currentTimeMillis);
       if (!firstMeasurement && remaining <= 0) break;
-      const measured = yield* measureWorktree(path).pipe(
-        firstMeasurement ? Effect.asSome : Effect.timeoutOption(remaining),
-      );
+      const measured = yield* firstMeasurement
+        ? measureWorktreeBounded(path).pipe(Effect.asSome)
+        : measureWorktree(path).pipe(Effect.timeoutOption(remaining));
       firstMeasurement = false;
       if (Option.isSome(measured)) orphanSizes.set(key, measured.value.bytes);
     }
@@ -1185,6 +1227,103 @@ const make = Effect.gen(function* () {
       });
   });
 
+  // Git deletes a checkout before its metadata under `<repository>/.git/worktrees`. When the
+  // metadata then cannot be deleted, no checkout is left for a sweep to find and Git may no longer
+  // list the worktree, so the leftover is written down here and retried until it is gone.
+  const leftoversPath = path.join(config.stateDir, "storage-cleanup-leftovers.json");
+  // Only a missing file is empty: an unreadable one may hold records a write would replace.
+  const readLeftovers = fs.readFileString(leftoversPath).pipe(
+    Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed("[]")),
+    Effect.flatMap(decodeWorktreeLeftovers),
+  );
+  const writeLeftovers = (
+    leftovers: ReadonlyArray<{
+      readonly adminDir: string;
+      readonly entry: StorageCleanupReportEntry;
+    }>,
+  ) =>
+    leftovers.length === 0
+      ? fs.remove(leftoversPath, { force: true })
+      : writeFileStringAtomically({
+          filePath: leftoversPath,
+          contents: `${JSON.stringify(leftovers, null, 2)}\n`,
+        });
+  const worktreeAdminDir = Effect.fn("StorageCleanup.worktreeAdminDir")(function* (
+    worktreePath: string,
+  ) {
+    const gitDir = yield* git.execute({
+      operation: "StorageCleanup.worktreeAdminDir",
+      cwd: worktreePath,
+      args: ["rev-parse", "--absolute-git-dir"],
+    });
+    return gitDir.stdout.trim();
+  });
+  const noteLeftover = Effect.fn("StorageCleanup.noteLeftover")(
+    function* (adminDir: string, entry: StorageCleanupReportEntry) {
+      if (entry.path === null || path.basename(path.dirname(adminDir)) !== "worktrees") return;
+      // A removal Git refused keeps its checkout, and the next sweep looks at it again.
+      if (yield* fs.exists(entry.path).pipe(Effect.orElseSucceed(() => true))) return;
+      if (!(yield* fs.exists(adminDir).pipe(Effect.orElseSucceed(() => true)))) return;
+      const others = (yield* readLeftovers).filter((leftover) => leftover.adminDir !== adminDir);
+      yield* writeLeftovers([...others, { adminDir, entry }]);
+    },
+    Effect.catch((error) =>
+      Effect.logWarning("storage cleanup could not record leftover git metadata", { error }),
+    ),
+  );
+  const removeLeftover = Effect.fn("StorageCleanup.removeLeftover")(function* (adminDir: string) {
+    // Pruning by hand frees the name, and a worktree recreated since may have taken it.
+    const gitFile = yield* fs.readFileString(path.join(adminDir, "gitdir")).pipe(
+      Effect.map((gitdir) => path.resolve(adminDir, gitdir.trim())),
+      Effect.option,
+    );
+    if (Option.isSome(gitFile) && (yield* fs.exists(gitFile.value))) {
+      const current = yield* worktreeAdminDir(path.dirname(gitFile.value));
+      if ((yield* fs.realPath(current)) === (yield* fs.realPath(adminDir))) return false;
+    }
+    yield* fs.remove(adminDir, { recursive: true });
+    return true;
+  });
+  const retryLeftovers = Effect.fn("StorageCleanup.retryLeftovers")(function* (
+    entries: StorageCleanupReportEntry[],
+  ) {
+    const leftovers = yield* readLeftovers;
+    const remaining: Array<(typeof leftovers)[number]> = [];
+    for (const leftover of leftovers) {
+      const { adminDir, entry } = leftover;
+      if (!(yield* fs.exists(adminDir).pipe(Effect.orElseSucceed(() => true)))) continue;
+      const failure = yield* removeLeftover(adminDir).pipe(
+        Effect.map((removed) => {
+          if (removed)
+            entries.push({
+              ...entry,
+              outcome: "removed",
+              reason: "Deleted git metadata an earlier cleanup left behind",
+            });
+          return null;
+        }),
+        Effect.catch((error) => Effect.succeed(error)),
+      );
+      if (failure === null) continue;
+      remaining.push(leftover);
+      entries.push({
+        ...entry,
+        outcome: "failed",
+        reason: `Git metadata at ${adminDir} could not be deleted: ${cleanupFailureReason(failure)}`,
+      });
+      yield* Effect.logWarning("storage cleanup failed for leftover git metadata", {
+        threadId: entry.threadId,
+        error: failure,
+      });
+    }
+    if (remaining.length !== leftovers.length)
+      yield* writeLeftovers(remaining).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("storage cleanup could not update leftover git metadata", { error }),
+        ),
+      );
+  });
+
   const cleanWorktrees = Effect.fn("StorageCleanup.cleanWorktrees")(function* (
     serverSettings: ServerSettings,
     now: number,
@@ -1256,6 +1395,54 @@ const make = Effect.gen(function* () {
       if (!linked) return "not a linked worktree";
       return null;
     });
+    // The checks a single worktree passes before removal, for one checkout of a task folder.
+    const inspectCheckout = Effect.fn("StorageCleanup.inspectCheckout")(
+      function* (
+        checkoutPath: string,
+        branch: string | null,
+        rules: WorktreeCleanupRules,
+        settingsChanged: Effect.Effect<boolean, ServerSettingsError>,
+      ) {
+        // Run before and after measuring, then again right before the layout command and each
+        // deletion: files written meanwhile, such as an ignored `.env`, keep the checkout.
+        const recheck = Effect.gen(function* () {
+          if (yield* isLabWorktree(checkoutPath)) return LAB_WORKTREE_REASON;
+          if (yield* branchChanged(checkoutPath, branch)) return "repository or branch changed";
+          return yield* localChangesReason(checkoutPath, rules);
+        }).pipe(
+          Effect.catch((error) => Effect.succeed(cleanupFailureReason(error))),
+          Effect.provideService(FileSystem.FileSystem, fs),
+          Effect.provideService(Path.Path, path),
+        );
+        const reason = (yield* worktreePathReason(checkoutPath)) ?? (yield* recheck);
+        if (reason !== null) return { keep: reason, force: false, bytes: null };
+        const { bytes, reason: measureReason } = yield* measureWorktreeBounded(checkoutPath, true);
+        if (measureReason !== null) return { keep: measureReason, force: false, bytes };
+        if (yield* settingsChanged)
+          return { keep: "settings changed since check", force: false, bytes };
+        // A submodule may be the reason this checkout stays whole.
+        const submodules = yield* submoduleRemoval(checkoutPath, rules);
+        if (submodules.reason !== null)
+          return { keep: submodules.reason, force: submodules.force, bytes };
+        // Verdicts can be reused, so deleting ignored files waits for the final guard.
+        const prepare =
+          rules.worktreeKeepWhen === "tracked-changes" && !submodules.force
+            ? cleanupGit(checkoutPath, ["clean", "-ffdx"], "git clean").pipe(
+                Effect.as(null),
+                Effect.catch((error) => Effect.succeed(cleanupFailureReason(error))),
+              )
+            : undefined;
+        return { keep: yield* recheck, force: submodules.force, recheck, prepare, bytes };
+      },
+      Effect.catch((error) =>
+        Effect.succeed({
+          keep: cleanupFailureReason(error),
+          force: false,
+          prepare: undefined,
+          bytes: null,
+        }),
+      ),
+    );
     const deletedRows = yield* sql<{ payload_json: string; workspaceRoot: string }>`
           SELECT t.payload_json, p.workspace_root AS "workspaceRoot"
           FROM orchestration_v2_projection_threads t
@@ -1388,7 +1575,38 @@ const make = Effect.gen(function* () {
           Effect.map((idle) => idle.every(Boolean)),
         );
       yield* Effect.gen(function* () {
-        const exists = yield* fs.exists(worktreePath).pipe(
+        const taskFolder = yield* taskFolders.find(worktreePath);
+        // Terminals, sessions, threads and project folders anywhere in a task folder protect all
+        // of it: the canonical root, and each checkout recorded outside it.
+        const guardedPaths: string[] = [];
+        for (const target of taskFolder === null
+          ? [worktreePath]
+          : [taskFolder.root, ...taskFolder.repositories.map((entry) => entry.worktreePath)]) {
+          const canonical = yield* canonicalWorkspacePath(target);
+          if (
+            !guardedPaths.some(
+              (guarded) => samePath(guarded, canonical) || inside(guarded, canonical),
+            )
+          )
+            guardedPaths.push(canonical);
+        }
+        const guardedPath = guardedPaths[0]!;
+        const anyGuarded = <E, R>(check: (guarded: string) => Effect.Effect<boolean, E, R>) =>
+          Effect.forEach(guardedPaths, check).pipe(Effect.map((hits) => hits.some(Boolean)));
+        const inUse = (
+          threads: ReadonlyArray<OrchestrationV2ThreadShell>,
+          sessionCwds: ReadonlyArray<string>,
+        ) =>
+          anyGuarded((guarded) =>
+            storageCleanupWorktreeInUse({
+              worktreePath: guarded,
+              candidateId: deleted ? null : thread.id,
+              familyIds,
+              threads,
+              sessionCwds,
+            }),
+          );
+        const exists = yield* fs.exists(guardedPath).pipe(
           // A stored path under a regular file cannot exist, but access() fails with ENOTDIR.
           Effect.catchIf(
             (error) =>
@@ -1409,16 +1627,8 @@ const make = Effect.gen(function* () {
         if (thread.branch === null && !scratch) return keep("thread has no branch");
         if (group.some((member) => member.branch !== thread.branch))
           return keep("a subagent thread's branch differs from this worktree's branch");
-        if (yield* hasTerminal(worktreePath)) return keep(waitForStop("open terminal"));
-        if (
-          yield* storageCleanupWorktreeInUse({
-            worktreePath,
-            candidateId: deleted ? null : thread.id,
-            familyIds,
-            threads: pendingThreads,
-            sessionCwds,
-          })
-        )
+        if (yield* anyGuarded(hasTerminal)) return keep(waitForStop("open terminal"));
+        if (yield* inUse(taskFolder === null ? pendingThreads : snapshot.threads, sessionCwds))
           return keep(waitForStop("worktree is in use by a session or a pending archive or move"));
         if (
           [...group, ...settlementChain.slice(1)].some(
@@ -1480,19 +1690,11 @@ const make = Effect.gen(function* () {
         // scratch folder is deleted. Returns why the worktree must be kept, or null.
         const keepReasonNow = Effect.fn("StorageCleanup.keepReasonNow")(function* () {
           const latestSnapshot = yield* readThreads();
-          if (yield* containsProjectRoot([worktreePath], [project, ...latestSnapshot.projects]))
+          if (yield* containsProjectRoot(guardedPaths, [project, ...latestSnapshot.projects]))
             return "contains a project checkout";
-          if (yield* hasTerminal(worktreePath)) return waitForStop("open terminal");
+          if (yield* anyGuarded(hasTerminal)) return waitForStop("open terminal");
           if (yield* isLabWorktree(worktreePath)) return LAB_WORKTREE_REASON;
-          if (
-            yield* storageCleanupWorktreeInUse({
-              worktreePath,
-              candidateId: deleted ? null : thread.id,
-              familyIds,
-              threads: latestSnapshot.threads,
-              sessionCwds: yield* readLiveSessionCwds(),
-            })
-          )
+          if (yield* inUse(latestSnapshot.threads, yield* readLiveSessionCwds()))
             return waitForStop("worktree came into use since check");
           if (deleted) {
             if (
@@ -1580,13 +1782,13 @@ const make = Effect.gen(function* () {
             (yield* scratchKeepReason(worktreePath, threadIds, settings)) ??
             (yield* keepReasonNow());
           if (blocked !== null) return keep(blocked);
-          const inspection = yield* measureWorktree(worktreePath, "plain-folder");
+          const inspection = yield* measureWorktreeBounded(worktreePath, "plain-folder");
           if (inspection.reason !== null) return keep(inspection.reason);
           return yield* withWorkspaceLease(
             worktreePath,
             Effect.gen(function* () {
               // Walked again under the lease: a repository deleted with the folder is gone for good.
-              const finalInspection = yield* measureWorktree(worktreePath, "plain-folder");
+              const finalInspection = yield* measureWorktreeBounded(worktreePath, "plain-folder");
               if (finalInspection.reason !== null) return keep(finalInspection.reason);
               if (yield* settingsChangedSinceCheck) return keep("settings changed since check");
               // Runs inside this folder's lease; never take that lease again here.
@@ -1612,6 +1814,89 @@ const make = Effect.gen(function* () {
                 threadId: thread.id,
               });
             }),
+          );
+        }
+        if (taskFolder !== null) {
+          // Merged and unchanged compare one branch with one default branch; a task folder has
+          // a repository per folder, so only age, settling and deletion remove it.
+          if (!eligible) return keep(notDueReason);
+          const blockedTaskFolder = yield* keepReasonNow();
+          if (blockedTaskFolder !== null) return keep(blockedTaskFolder);
+          // The thread's project-path lease, as turn start and restore take it.
+          return yield* withWorkspaceLease(
+            worktreePath,
+            Effect.gen(function* () {
+              for (const guarded of guardedPaths)
+                if (!(yield* reserveWorkspace(guarded, "removal"))) return keep("worktree is busy");
+              const blockedSinceLease = yield* keepReasonNow();
+              if (blockedSinceLease !== null) return keep(blockedSinceLease);
+              if (yield* settingsChangedSinceCheck) return keep("settings changed since check");
+              const checkoutBytes = new Map<string, number | null>();
+              const adminDirs = new Map<string, string>();
+              // Each checkout passes the checks a single worktree does, or it stays. The full
+              // recheck runs again after measuring, in the layout command's turn, and before
+              // each deletion.
+              const result = yield* taskFolders.remove({
+                root: taskFolder.root,
+                force: false,
+                forget: deleted,
+                projectCommands: TaskFolders.projectCommandsForLink(thread.linkOrigin),
+                guard: Effect.gen(function* () {
+                  return (
+                    (yield* keepReasonNow()) ??
+                    ((yield* settingsChangedSinceCheck) ? "settings changed since check" : null)
+                  );
+                }).pipe(
+                  Effect.catch((error) => Effect.succeed(cleanupFailureReason(error))),
+                  Effect.provideService(FileSystem.FileSystem, fs),
+                  Effect.provideService(Path.Path, path),
+                ),
+                inspect: (checkout) =>
+                  worktreeAdminDir(checkout.worktreePath).pipe(
+                    Effect.map((adminDir) => adminDirs.set(checkout.worktreePath, adminDir)),
+                    Effect.ignore,
+                    Effect.andThen(
+                      inspectCheckout(
+                        checkout.worktreePath,
+                        thread.branch,
+                        settings,
+                        settingsChangedSinceCheck,
+                      ),
+                    ),
+                    Effect.tap(({ bytes }) =>
+                      Effect.sync(() => checkoutBytes.set(checkout.worktreePath, bytes)),
+                    ),
+                    Effect.provideService(FileSystem.FileSystem, fs),
+                    Effect.provideService(Path.Path, path),
+                  ),
+              });
+              for (const removedPath of result.removed)
+                entries.push({
+                  ...entry,
+                  path: removedPath,
+                  outcome: "removed",
+                  reason: sentence(removalReason),
+                  bytes: checkoutBytes.get(removedPath) ?? null,
+                });
+              for (const keptCheckout of result.kept) {
+                entries.push({
+                  ...entry,
+                  path: keptCheckout.path,
+                  reason: sentence(keptCheckout.reason),
+                });
+                const adminDir = adminDirs.get(keptCheckout.path);
+                if (adminDir !== undefined)
+                  yield* noteLeftover(adminDir, { ...entry, path: keptCheckout.path });
+              }
+              if (result.kept.length > 0 && deleted && settings.worktreeOnDelete)
+                kept.push(worktreePath);
+              yield* gitManager.invalidateStatus(project.workspaceRoot);
+              yield* Effect.logInfo("storage cleanup removed task folder", {
+                threadId: thread.id,
+                removed: result.removed.length,
+                kept: result.kept.length,
+              });
+            }).pipe(Effect.scoped),
           );
         }
         const pathReason = yield* worktreePathReason(worktreePath);
@@ -1714,10 +1999,20 @@ const make = Effect.gen(function* () {
               remote === null
                 ? "no commits beyond the project branch"
                 : "no commits beyond the default branch";
+          // A subagent's isolated branch ships through its parent's pull request or a direct
+          // merge, never a pull request of its own, so a finished one counts once on the default.
+          const subagentFinished =
+            settings.worktreeOnMerge &&
+            thread.lineage.relationshipToParent === "subagent" &&
+            settledThread !== undefined;
+          if (!eligible && integrated && remote !== null && subagentFinished) {
+            eligible = true;
+            removalReason = "work is on the default branch";
+          }
           if (!eligible && remote !== null && settings.worktreeOnMerge && thread.branch !== null) {
             const pullRequest = yield* gitManager.branchPullRequest(
               { cwd: worktreePath, branch: thread.branch },
-              { refresh: true },
+              { refresh: true, includeHeadRepository: true },
             );
             eligible = storageCleanupPullRequestMerged(pullRequest, {
               branch: thread.branch,
@@ -1726,6 +2021,39 @@ const make = Effect.gen(function* () {
               integrated,
             });
             if (eligible) removalReason = "pull request was merged";
+          }
+          // Squash and rebase merges leave a subagent's commits off the default branch, so
+          // its work counts as shipped when a parent's merged pull request head contains it.
+          if (!eligible && subagentFinished && remote !== null) {
+            const seen = new Set<string>([thread.id]);
+            let child: Pick<OrchestrationV2ThreadShell, "lineage"> = thread;
+            while (!eligible && child.lineage.relationshipToParent === "subagent") {
+              const parent = threadsById.get(child.lineage.parentThreadId!);
+              if (parent === undefined || seen.has(parent.id)) break;
+              seen.add(parent.id);
+              child = parent;
+              if (parent.branch === null || parent.branch === thread.branch) continue;
+              const pullRequest = yield* gitManager.branchPullRequest(
+                { cwd: worktreePath, branch: parent.branch },
+                { refresh: true, includeHeadRepository: true },
+              );
+              const headSha = pullRequest?.headSha;
+              if (
+                pullRequest?.state !== "merged" ||
+                pullRequest.baseRef !== branch ||
+                typeof headSha !== "string" ||
+                !/^[0-9a-f]{40,64}$/i.test(headSha)
+              )
+                continue;
+              const shipped = yield* git.execute({
+                operation: "StorageCleanup.shippedThroughParent",
+                cwd: worktreePath,
+                args: ["merge-base", "--is-ancestor", head.commitSha, headSha],
+                allowNonZeroExit: true,
+              });
+              eligible = shipped.exitCode === 0;
+              if (eligible) removalReason = "parent's pull request was merged";
+            }
           }
           if (!eligible && remote === null)
             return keep(integrated ? notDueReason : "has commits beyond the project branch");
@@ -1767,6 +2095,8 @@ const make = Effect.gen(function* () {
                 if (changes !== null) return changes;
               }
               const repository = yield* worktreeRepository(worktreePath);
+              // Read before the last recheck: Git deletes the checkout before its metadata.
+              const adminDir = yield* worktreeAdminDir(worktreePath);
               // Recheck after the submodule walk, right before anything is deleted.
               const reason = yield* keepReasonNow();
               if (reason !== null) return reason;
@@ -1782,7 +2112,7 @@ const make = Effect.gen(function* () {
                 force: submodules.force,
                 execute: git.execute,
                 run: (args) => cleanupGit(repository, [...args], "git worktree remove"),
-              });
+              }).pipe(Effect.tapError(() => noteLeftover(adminDir, entry)));
               return null;
             }).pipe(Effect.scoped);
             if (blockedReason !== null) return keep(blockedReason);
@@ -1836,8 +2166,10 @@ const make = Effect.gen(function* () {
     ): Effect.fn.Return<void, PlatformError | ServerSettingsError> {
       for (const name of yield* fs.readDirectory(directory)) {
         const target = path.join(directory, name);
-        if ((yield* fs.realPath(target)) !== target || !inside(realRoot, target)) continue;
-        const stat = yield* fs.stat(target);
+        if (!inside(realRoot, target)) continue;
+        const stat = yield* fs.lstat(target);
+        if (stat.type === "SymbolicLink") continue;
+        if ((yield* fs.realPath(target)) !== target) continue;
         if (stat.type === "Directory" && rotatedLogs) {
           yield* visit(target);
         } else if (stat.type === "File" && (!rotatedLogs || /\.(?:log|ndjson)\.\d+$/.test(name))) {
@@ -1933,8 +2265,9 @@ const make = Effect.gen(function* () {
         ),
       );
     }
-    for (const { cwd, prefixes } of repositories.values()) {
+    for (const [commonDir, { cwd, prefixes }] of repositories) {
       yield* Effect.gen(function* () {
+        yield* CheckpointCaptureIndex.removeForScopes(fs, path, commonDir, prefixes);
         const result = yield* git.execute({
           operation: "StorageCleanup.listCheckpointRefs",
           cwd,
@@ -1983,6 +2316,26 @@ const make = Effect.gen(function* () {
     const entries: StorageCleanupReportEntry[] = [];
     yield* cleanCheckpointRefs().pipe(
       Effect.catch((cause) => Effect.logWarning("checkpoint ref cleanup failed", { cause })),
+    );
+    yield* retryLeftovers(entries).pipe(
+      Effect.catch((error) =>
+        Effect.gen(function* () {
+          entries.push({
+            kind: "worktree",
+            outcome: "failed",
+            reason: `Could not read the record of leftover git metadata: ${cleanupFailureReason(error)}`,
+            path: leftoversPath,
+            projectPath: null,
+            threadId: null,
+            threadTitle: null,
+            bytes: null,
+            files: null,
+          });
+          yield* Effect.logWarning("storage cleanup could not read leftover git metadata", {
+            error,
+          });
+        }),
+      ),
     );
     const deletedWorktrees = yield* cleanWorktrees(serverSettings, now, entries, trigger).pipe(
       Effect.catch((error) =>

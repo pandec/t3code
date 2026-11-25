@@ -11,8 +11,8 @@ import { mergeUsageCopies } from "./usageAggregation.ts";
 import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptReader.ts";
 
 // Fork and upstream v4-v13 share versions with different layouts, identified by `x`/`tx`.
-// Upstream alone wrote v14-v17.
-const USAGE_SCAN_CACHE_VERSION = 18 as const;
+// Upstream alone wrote v14-v17, the fork alone v18 (undated malformed counts).
+const USAGE_SCAN_CACHE_VERSION = 19 as const;
 const OLDEST_MIGRATED_VERSION = 4;
 
 /**
@@ -20,8 +20,9 @@ const OLDEST_MIGRATED_VERSION = 4;
  * newer cache and drop saved usage. Without its own file, this server migrates older builds' files:
  * fork v4/v5 and upstream v4 share the unversioned name, upstream v5 has its own, v6-v13 share theirs.
  */
-export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v18.json";
+export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v19.json";
 export const LEGACY_SCAN_CACHE_FILE_NAMES = [
+  "usage-scan-cache-v18.json",
   "usage-scan-cache-v17.json",
   "usage-scan-cache-v16.json",
   "usage-scan-cache-v15.json",
@@ -46,12 +47,15 @@ export interface CachedFile {
   readonly mtimeMs: number;
   readonly provider: UsageProviderKind;
   readonly records: readonly UsageRecord[];
-  /** Malformed usage-bearing newline-terminated lines up to the resume offset. */
-  readonly malformedRecords: number;
+  /** Timestamps of malformed records up to the resume offset. */
+  readonly malformedRecords: readonly number[];
+  /** Malformed usage-bearing lines up to the resume offset that carry no timestamp. */
+  readonly undatedMalformedRecords: number;
   /** Unterminated tail records stay separate because incremental parsing rereads them. */
   readonly tailRecords: readonly UsageRecord[];
-  /** Malformed usage-bearing content in the unconsumed trailing segment. */
-  readonly tailMalformedRecords: number;
+  /** The unconsumed trailing segment's diagnostics, likewise dated and undated. */
+  readonly tailMalformedRecords: readonly number[];
+  readonly tailUndatedMalformedRecords: number;
   readonly position: TranscriptParsePosition;
   /** Migrated history is a fallback until its transcript can be parsed in full. */
   readonly requiresReparse?: true;
@@ -84,12 +88,16 @@ interface SerializedFile {
   readonly m: number;
   readonly p: UsageProviderKind;
   readonly r: readonly SerializedRecord[];
-  /** Completed and trailing malformed usage-bearing line counts. */
+  /** Completed and trailing undated malformed counts; through v18 they counted every malformed record. */
   readonly x: number;
   readonly tx: number;
+  /** Completed and trailing malformed record timestamps (v19+), omitted when empty. */
+  readonly xd?: readonly number[];
+  readonly txd?: readonly number[];
   readonly t: readonly SerializedRecord[];
-  /** Upstream's whole-file malformed count, read only from its layouts. */
+  /** Upstream's whole-file malformed count and v17 timestamps, read only from its layouts. */
   readonly mr?: number;
+  readonly mt?: readonly number[];
   readonly o: number;
   readonly gl: number;
   readonly gh: number;
@@ -156,9 +164,11 @@ function serializeFile(entry: CachedFile, tables: InternTables): SerializedFile 
     m: entry.mtimeMs,
     p: entry.provider,
     r: entry.records.map(serializeRecord),
-    x: entry.malformedRecords,
+    x: entry.undatedMalformedRecords,
+    ...(entry.malformedRecords.length === 0 ? {} : { xd: entry.malformedRecords }),
     t: entry.tailRecords.map(serializeRecord),
-    tx: entry.tailMalformedRecords,
+    tx: entry.tailUndatedMalformedRecords,
+    ...(entry.tailMalformedRecords.length === 0 ? {} : { txd: entry.tailMalformedRecords }),
     o: entry.position.resumeOffset,
     gl: entry.position.guardLength,
     gh: entry.position.guardHash,
@@ -200,12 +210,19 @@ function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
+/** Absent is no timestamps; anything else must be a list of finite times. */
+function decodeTimestamps(value: unknown): readonly number[] | null {
+  if (value === undefined) return [];
+  return Array.isArray(value) && value.every(Number.isFinite) ? (value as number[]) : null;
+}
+
 /**
  * The entry layouts this build reads, named for the build that wrote them.
  * Fork entries always carry malformed counts (`x`, `tx`); upstream's never do.
  */
 type EntryLayout =
   | "current"
+  | "forkV18"
   | "forkV13"
   | "forkV12"
   | "forkV11"
@@ -234,6 +251,7 @@ type EntryLayout =
 function entryLayout(version: number, entry: Partial<SerializedFile>): EntryLayout | null {
   if (version === USAGE_SCAN_CACHE_VERSION) return "current";
   const fork = entry.x !== undefined || entry.tx !== undefined;
+  if (version === 18) return fork ? "forkV18" : null;
   if (version === 17) return fork ? null : "upstreamV17";
   if (version === 16) return fork ? null : "upstreamV16";
   if (version === 15) return fork ? null : "upstreamV15";
@@ -254,6 +272,7 @@ function entryLayout(version: number, entry: Partial<SerializedFile>): EntryLayo
 /** Shortest row each layout writes; the columns after it are absent. */
 const ROW_LENGTH: Record<EntryLayout, number> = {
   current: 12,
+  forkV18: 12,
   forkV13: 12,
   forkV12: 12,
   forkV11: 12,
@@ -283,6 +302,7 @@ const ROW_LENGTH: Record<EntryLayout, number> = {
 /** Layouts whose speed column may hold ultrafast, not just the legacy `fast` flag. */
 const ULTRAFAST_LAYOUTS: ReadonlySet<EntryLayout> = new Set([
   "current",
+  "forkV18",
   "forkV13",
   "forkV12",
   "forkV11",
@@ -309,6 +329,7 @@ const ULTRAFAST_LAYOUTS: ReadonlySet<EntryLayout> = new Set([
 /** Layouts whose rows always carry `rateModel`; upstream's may append it. */
 const RATE_MODEL_LAYOUTS: ReadonlySet<EntryLayout> = new Set([
   "current",
+  "forkV18",
   "forkV13",
   "forkV12",
   "forkV11",
@@ -376,6 +397,7 @@ export function decodeScanCache(
       // tier turn where the fork's provisional flag sits, and v13+ their one-hour count after it.
       const forkTurnColumn =
         layout === "current" ||
+        layout === "forkV18" ||
         layout === "forkV13" ||
         layout === "forkV12" ||
         layout === "forkV11" ||
@@ -464,6 +486,7 @@ export function decodeScanCache(
             : // Saved copies of moved transcripts must still match the re-parsed v17 key.
               provider === "grok" &&
                 layout !== "current" &&
+                layout !== "forkV18" &&
                 layout !== "upstreamV17" &&
                 dedupeKey.endsWith(`:${model}`) &&
                 !dedupeKey.endsWith(`:${timestampMs}:${model}`)
@@ -487,6 +510,20 @@ export function decodeScanCache(
     if (countsMalformed && (!isCount(entry.x) || !isCount(entry.tx))) continue;
     // Upstream's whole-file count is kept for deleted transcripts; a live one re-parses.
     if (!countsMalformed && entry.mr !== undefined && !isCount(entry.mr)) continue;
+    // Fork counts are undated through v18; upstream's v17 may date its whole-file count.
+    const malformedRecords = decodeTimestamps(
+      layout === "current" ? entry.xd : countsMalformed ? undefined : entry.mt,
+    );
+    const tailMalformedRecords = decodeTimestamps(layout === "current" ? entry.txd : undefined);
+    if (malformedRecords === null || tailMalformedRecords === null) continue;
+    const upstreamDated = !countsMalformed && entry.mt !== undefined;
+    if (upstreamDated && malformedRecords.length !== entry.mr) continue;
+    const undatedMalformedRecords = countsMalformed
+      ? (entry.x ?? 0)
+      : upstreamDated
+        ? 0
+        : (entry.mr ?? 0);
+    const tailUndatedMalformedRecords = countsMalformed ? (entry.tx ?? 0) : 0;
     // Position fields feed byte offsets and a Buffer allocation in the reader,
     // so anything outside their real ranges must reject the entry: a bogus
     // guard length would otherwise fail every parse of the file, silently
@@ -505,16 +542,21 @@ export function decodeScanCache(
     ) {
       continue;
     }
+    const forkCurrent = layout === "current" || layout === "forkV18";
     const requiresReparse =
       entry.reparse === true ||
       !countsMalformed ||
       layout === "forkV4" ||
       // Older Codex reducers lack request ledgers, rewind repair, and dated baselines.
-      (entry.p === "codex" && layout !== "current") ||
+      (entry.p === "codex" && !forkCurrent) ||
       // Older Claude entries lack advisor one-hour writes and per-channel maxima per key.
-      (entry.p === "claude" && layout !== "current") ||
+      (entry.p === "claude" && !forkCurrent) ||
       // Older Grok keys merged turns that shared a prompt id.
-      (entry.p === "grok" && layout !== "current");
+      (entry.p === "grok" && !forkCurrent) ||
+      // v18 counts cannot be limited to a window where the reducer can date its diagnostics.
+      (layout === "forkV18" &&
+        formats.get(entry.p)?.readMalformedRecords !== undefined &&
+        undatedMalformedRecords + tailUndatedMalformedRecords > 0);
     const migrated = layout !== "current" && requiresReparse;
     // A corrupt state must not attribute appended usage to another model or replay copied history.
     if (!migrated && !isValidState(entry.p, entry.cs)) continue;
@@ -531,9 +573,11 @@ export function decodeScanCache(
       mtimeMs: entry.m,
       provider,
       records,
-      malformedRecords: countsMalformed ? (entry.x ?? 0) : (entry.mr ?? 0),
+      malformedRecords,
+      undatedMalformedRecords,
       tailRecords,
-      tailMalformedRecords: countsMalformed ? (entry.tx ?? 0) : 0,
+      tailMalformedRecords,
+      tailUndatedMalformedRecords,
       position: resumable
         ? {
             resumeOffset: entry.o,

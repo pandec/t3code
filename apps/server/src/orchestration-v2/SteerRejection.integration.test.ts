@@ -262,7 +262,7 @@ it.effect.each([{ stop: false }, { stop: true }])(
               (event) =>
                 event.type === "run.updated" &&
                 event.payload.id === first.runId &&
-                event.payload.status === "waiting",
+                event.payload.status === "completed",
             );
             yield* Queue.offer(events, {
               type: "provider_turn.updated",
@@ -313,7 +313,7 @@ it.effect.each([{ stop: false }, { stop: true }])(
               (event) =>
                 event.type === "run.updated" &&
                 event.payload.id === followUp.runId &&
-                event.payload.status === "waiting",
+                event.payload.status === "completed",
             );
             yield* Queue.offer(events, {
               type: "turn.terminal",
@@ -326,6 +326,8 @@ it.effect.each([{ stop: false }, { stop: true }])(
               threadDisposition: "reusable",
             });
             yield* Fiber.join(followUpSettled);
+            // Commit the turn-end capture, so the next message starts at once rather than queueing.
+            yield* worker.drain();
           }
           yield* send("next", "next");
           yield* worker.drain();

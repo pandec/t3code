@@ -1,8 +1,8 @@
 /**
  * Fork: deferred archive service (rules in DeferredArchive.ts). `start` re-checks
  * pending requests after a restart. A `removeWorktree` request stays pending until
- * `thread.archive.complete`; a restart continuation is re-checked explicitly
- * because a declined continuation emits no event.
+ * `thread.archive.complete`; a restart continuation and a checkpoint capture are
+ * re-checked explicitly because a declined continuation or failed capture emits no event.
  */
 import {
   CommandId,
@@ -29,6 +29,7 @@ import { forkParked } from "../serverActivation.ts";
 import * as ArchiveWorktreeRemoval from "./ArchiveWorktreeRemoval.ts";
 import {
   evaluateDeferredArchive,
+  holdRunsAwaitingCapture,
   formatArchiveThreadDetails,
   isThreadPayloadEvent,
   pendingArchiveRequest,
@@ -174,10 +175,8 @@ export const make = Effect.gen(function* () {
   const queued = new Set<ThreadId>();
 
   const process = Effect.fn("ThreadArchiveScheduler.process")(function* (threadId: ThreadId) {
-    const { thread, runs, checkpoints } = yield* threads.getThreadRecords(threadId, [
-      "runs",
-      "checkpoints",
-    ]);
+    const records = yield* threads.getThreadRecords(threadId, ["runs", "checkpoints"]);
+    const { thread, checkpoints } = records;
     const removal = worktreeRemovalRequest(thread);
     if (removal !== null) {
       tracked.delete(threadId);
@@ -201,6 +200,7 @@ export const make = Effect.gen(function* () {
     }
     tracked.add(threadId);
     const shell = yield* threads.getThreadShell(threadId);
+    const runs = yield* holdRunsAwaitingCapture(outbox, records.runs);
     const decision = evaluateDeferredArchive({
       thread,
       request,
@@ -441,22 +441,23 @@ export const make = Effect.gen(function* () {
 
 export const layer = Layer.effect(ThreadArchiveScheduler, make);
 
-/**
- * Fork: after a restart continuation settles (EffectWorker), re-checks the
- * deferred archive it may have held. A no-op where the scheduler is absent.
- */
+/** Fork: re-checks a thread's deferred archive. A no-op where the scheduler is absent. */
+export const recheckDeferredArchive = (threadId: ThreadId) =>
+  Effect.serviceOption(ThreadArchiveScheduler).pipe(
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.void,
+        onSome: (scheduler) => scheduler.recheck(threadId),
+      }),
+    ),
+  );
+
+/** Fork: after a restart continuation settles (EffectWorker), re-checks the archive it may have held. */
 export const recheckAfterRestartContinuation = (
   effect: Pick<EffectOutbox.OrchestrationEffectV2, "threadId" | "request">,
 ) =>
   effect.request.type === "provider-runtime.continue"
-    ? Effect.serviceOption(ThreadArchiveScheduler).pipe(
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.void,
-            onSome: (scheduler) => scheduler.recheck(effect.threadId),
-          }),
-        ),
-      )
+    ? recheckDeferredArchive(effect.threadId)
     : Effect.void;
 
 /** Starts the deferred archive worker with the server. */

@@ -99,20 +99,22 @@ function cacheWith(
     path: string,
     mtimeMs: number,
     records: readonly UsageRecord[],
-    malformedRecords?: number,
-    tailMalformedRecords?: number,
+    undatedMalformedRecords?: number,
+    tailUndatedMalformedRecords?: number,
   ][],
 ): ScanCache {
   const cache: ScanCache = new Map();
-  for (const [path, mtimeMs, records, malformedRecords, tailMalformedRecords] of entries) {
+  for (const [path, mtimeMs, records, undated, tailUndated] of entries) {
     cache.set(path, {
       size: records.length * 10,
       mtimeMs,
       provider: "claude",
       records,
-      malformedRecords: malformedRecords ?? 0,
+      malformedRecords: [],
+      undatedMalformedRecords: undated ?? 0,
       tailRecords: [],
-      tailMalformedRecords: tailMalformedRecords ?? 0,
+      tailMalformedRecords: [],
+      tailUndatedMalformedRecords: tailUndated ?? 0,
       position: position(),
     });
   }
@@ -147,7 +149,7 @@ describe("scan cache round trip", () => {
     );
     expect(migrated).toEqual(expected);
     expect(migrated.get("/deleted/session.jsonl")?.records[0]?.speed).toBe("standard");
-    expect(encodeScanCache(migrated).version).toBe(18);
+    expect(encodeScanCache(migrated).version).toBe(19);
     expect(decodeScanCache(encodeScanCache(migrated), TEST_FORMAT_MAP)).toEqual(expected);
   });
 
@@ -157,8 +159,8 @@ describe("scan cache round trip", () => {
       ...original.get("/deleted/claude.jsonl")!,
       provider: "cursor",
       records: [record({ provider: "cursor", model: "display-name", rateModel: "tier" })],
-      malformedRecords: 0,
-      tailMalformedRecords: 0,
+      undatedMalformedRecords: 0,
+      tailUndatedMalformedRecords: 0,
     });
     original.set("/codex.jsonl", {
       ...original.get("/deleted/claude.jsonl")!,
@@ -325,12 +327,12 @@ describe("scan cache round trip", () => {
   it("migrates fork v9, re-parsing Claude and every Codex entry", () => {
     const codexRecord = record({ provider: "codex", model: "gpt-6-astra", dedupeKey: null });
     const original = cacheWith([["/claude.jsonl", 100, [record()], 2, 1]]);
-    const codexEntry = (malformedRecords: number, tailMalformedRecords: number) => ({
+    const codexEntry = (undatedMalformedRecords: number, tailUndatedMalformedRecords: number) => ({
       ...original.get("/claude.jsonl")!,
       provider: "codex" as const,
       records: [codexRecord],
-      malformedRecords,
-      tailMalformedRecords,
+      undatedMalformedRecords,
+      tailUndatedMalformedRecords,
       position: position({ state: codexState() }),
     });
     original.set("/clean/codex.jsonl", codexEntry(0, 0));
@@ -509,7 +511,8 @@ describe("scan cache round trip", () => {
     ]);
     original.set("/grok.jsonl", {
       size: 40,
-      malformedRecords: 2,
+      malformedRecords: [1, 2],
+      undatedMalformedRecords: 0,
       mtimeMs: 300,
       provider: "grok",
       records: [
@@ -517,7 +520,8 @@ describe("scan cache round trip", () => {
         record({ provider: "grok", model: "<synthetic>", dedupeKey: "s:p:<synthetic>" }),
       ],
       tailRecords: [record({ provider: "grok", model: "<synthetic>", dedupeKey: null })],
-      tailMalformedRecords: 1,
+      tailMalformedRecords: [],
+      tailUndatedMalformedRecords: 1,
       position: position({ resumeOffset: 30, guardLength: 30, guardHash: 123 }),
     });
     const state = initialCodexScanState();
@@ -546,7 +550,8 @@ describe("scan cache round trip", () => {
     const pendingTail = { ...pending, unresolvedServiceTierTurnId: "native-tail" };
     original.set("/codex.jsonl", {
       size: 80,
-      malformedRecords: 3,
+      malformedRecords: [1, 2, 3],
+      undatedMalformedRecords: 2,
       mtimeMs: 400,
       provider: "codex",
       records: [
@@ -560,7 +565,8 @@ describe("scan cache round trip", () => {
         pending,
       ],
       tailRecords: [pendingTail],
-      tailMalformedRecords: 1,
+      tailMalformedRecords: [4],
+      tailUndatedMalformedRecords: 1,
       position: position({ state }),
     });
 
@@ -610,19 +616,19 @@ describe("scan cache round trip", () => {
         ...original.get("/gone.jsonl")!,
         provider: "codex",
         records: [pending],
-        malformedRecords: 2,
+        undatedMalformedRecords: 2,
         position: position({ state: codexState() }),
       });
       original.set("/gone-pi.jsonl", {
         ...original.get("/gone.jsonl")!,
         provider: "pi",
         records: [record({ provider: "pi", model: "anthropic/claude-fable-5" })],
-        malformedRecords: 3,
+        undatedMalformedRecords: 3,
         position: position({ state: { sessionId: "session-a" } }),
       });
       const cleanCodex = {
         ...original.get("/gone-codex.jsonl")!,
-        malformedRecords: 0,
+        undatedMalformedRecords: 0,
       };
       original.set("/clean-codex.jsonl", cleanCodex);
       const encoded = encodeScanCache(original);
@@ -697,8 +703,8 @@ describe("scan cache round trip", () => {
       });
       original.set("/clean-codex.jsonl", {
         ...original.get("/codex.jsonl")!,
-        malformedRecords: 0,
-        tailMalformedRecords: 0,
+        undatedMalformedRecords: 0,
+        tailUndatedMalformedRecords: 0,
       });
       const legacy = { ...encodeScanCache(original), version };
 
@@ -763,20 +769,76 @@ describe("scan cache round trip", () => {
     expect(decodeScanCache({ ...encoded, version: 17 }, TEST_FORMAT_MAP).size).toBe(0);
   });
 
+  it("serves fork v18 entries, re-parsing live Codex files whose counts lack dates", () => {
+    const original = cacheWith([["/claude.jsonl", 100, [record()], 2, 1]]);
+    const codexEntry = (undated: number): CachedFile => ({
+      ...original.get("/claude.jsonl")!,
+      provider: "codex",
+      records: [record({ provider: "codex", model: "gpt-6-astra", dedupeKey: null })],
+      undatedMalformedRecords: undated,
+      tailUndatedMalformedRecords: 0,
+      position: position({ state: codexState() }),
+    });
+    original.set("/skipped-codex.jsonl", codexEntry(1));
+    original.set("/clean-codex.jsonl", codexEntry(0));
+    // v18 wrote every diagnostic as an undated `x`/`tx` count.
+    const v18 = { ...encodeScanCache(original), version: 18 };
+
+    const restored = decodeScanCache(JSON.parse(JSON.stringify(v18)), TEST_FORMAT_MAP);
+
+    // Claude diagnostics are always undated, so its entries resume unchanged.
+    expect(restored.get("/claude.jsonl")).toEqual(original.get("/claude.jsonl"));
+    expect(restored.get("/clean-codex.jsonl")).toEqual(original.get("/clean-codex.jsonl"));
+    // A deleted rollout keeps its records and count; a live one re-parses to date them.
+    expect(restored.get("/skipped-codex.jsonl")).toEqual({
+      ...codexEntry(1),
+      requiresReparse: true,
+      position: MIGRATED_POSITION,
+    });
+    expect(decodeScanCache(encodeScanCache(restored), TEST_FORMAT_MAP)).toEqual(restored);
+  });
+
+  it("keeps upstream v17 malformed timestamps and drops ones that disagree with the count", () => {
+    const original = cacheWith([["/gone.jsonl", 100, [record()]]]);
+    const encoded = encodeScanCache(original);
+    const file = encoded.files["/gone.jsonl"]!;
+    const { x: _x, tx: _tx, ...upstreamFile } = file;
+    const upstreamV17 = {
+      ...encoded,
+      version: 17,
+      files: {
+        "/dated.jsonl": { ...upstreamFile, mr: 2, mt: [5, 6] },
+        "/undated.jsonl": { ...upstreamFile, mr: 2 },
+        "/mismatched.jsonl": { ...upstreamFile, mr: 3, mt: [5, 6] },
+      },
+    };
+
+    const restored = decodeScanCache(JSON.parse(JSON.stringify(upstreamV17)), TEST_FORMAT_MAP);
+
+    const migrated = {
+      ...original.get("/gone.jsonl")!,
+      requiresReparse: true,
+      position: MIGRATED_POSITION,
+    };
+    expect(restored.get("/dated.jsonl")).toEqual({ ...migrated, malformedRecords: [5, 6] });
+    expect(restored.get("/undated.jsonl")).toEqual({ ...migrated, undatedMalformedRecords: 2 });
+    expect(restored.has("/mismatched.jsonl")).toBe(false);
+  });
+
   it("rewrites only changed entries and still restores the whole cache", () => {
     const write = makeScanCacheWriter();
     const cache = cacheWith([
       ["/a.jsonl", 100, [record()]],
       ["/b.jsonl", 200, [record({ sessionId: "session-b" })]],
     ]);
-    cache.set("/b.jsonl", { ...cache.get("/b.jsonl")!, malformedRecords: 2 });
+    cache.set("/b.jsonl", { ...cache.get("/b.jsonl")!, malformedRecords: [1, 2] });
     const sources = { "claude\u0000/projects": { dir: "/projects", volumeId: "1:2" } };
     expect(decodeScanCache(parse(write(cache, { sources })), TEST_FORMAT_MAP)).toEqual(cache);
 
     cache.set("/b.jsonl", {
       ...cache.get("/b.jsonl")!,
       size: 30,
-      malformedRecords: 4,
+      malformedRecords: [1, 2, 3, 4],
       records: [record({ sessionId: "session-c", model: "claude-opus-5-5", dedupeKey: "msg_3:" })],
     });
     const document = parse(write(cache, { sources }));
@@ -829,14 +891,18 @@ describe("scan cache round trip", () => {
     // The tail is re-read on resume, so its count must stay separate from
     // completed lines rather than being accumulated again on every scan.
     const original = cacheWith([["/a.jsonl", 100, [record()], 3, 2]]);
+    original.set("/a.jsonl", {
+      ...original.get("/a.jsonl")!,
+      malformedRecords: [1_786_000_000_000],
+      tailMalformedRecords: [1_786_000_000_001, 1_786_000_000_002],
+    });
 
     const restored = decodeScanCache(
       JSON.parse(JSON.stringify(encodeScanCache(original))),
       TEST_FORMAT_MAP,
     );
 
-    expect(restored.get("/a.jsonl")?.malformedRecords).toBe(3);
-    expect(restored.get("/a.jsonl")?.tailMalformedRecords).toBe(2);
+    expect(restored.get("/a.jsonl")).toEqual(original.get("/a.jsonl"));
   });
 
   it("rejects a cache written before entries carried a malformed count", () => {
@@ -860,6 +926,8 @@ describe("scan cache round trip", () => {
         "/missing.jsonl": { ...good, x: undefined },
         "/negative.jsonl": { ...good, x: -1 },
         "/negative-tail.jsonl": { ...good, tx: -1 },
+        "/bad-dates.jsonl": { ...good, xd: ["yesterday"] },
+        "/bad-tail-dates.jsonl": { ...good, txd: 1 },
       },
     };
 

@@ -35,7 +35,13 @@ import {
   visibleThreadPullRequests,
 } from "@t3tools/client-runtime/thread-pull-requests";
 import { useRender } from "@base-ui/react/use-render";
-import { type ReactNode, type AnimationEvent, type MouseEvent, type ReactElement } from "react";
+import {
+  type ComponentType,
+  type ReactNode,
+  type AnimationEvent,
+  type MouseEvent,
+  type ReactElement,
+} from "react";
 import { cn } from "../lib/utils";
 import { revealThreadTerminal } from "../lib/revealThreadTerminal";
 
@@ -44,6 +50,7 @@ import { linkedPullRequestDetailAtom, useSharedPullRequestSummary } from "../sta
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { vcsEnvironment } from "../state/vcs";
 import { useUiStateStore } from "../uiStateStore";
+import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import {
   pullRequestMatchesSearchQuery,
@@ -55,7 +62,6 @@ import {
 } from "./Sidebar.logic";
 
 import type { SidebarThreadSummary } from "../types";
-import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
   PULL_REQUEST_STATE_PRESENTATION,
@@ -476,13 +482,52 @@ function PullRequestBadge({
     },
   });
   return (
-    <Tooltip key={opensList ? "list" : "link"}>
+    <ThreadLinkBadge
+      key={opensList ? "list" : "link"}
+      control={control}
+      Icon={presentation.Icon}
+      toneClassName={presentation.toneClassName}
+      text={presentation.text}
+    >
+      {visibleThreadPullRequests(pullRequests).length > 0 ? (
+        <ThreadPullRequestsMiniList
+          pullRequests={pullRequests}
+          onOpenPullRequest={onOpenPullRequest}
+        />
+      ) : number !== undefined && url !== undefined ? (
+        <ul className="flex flex-col gap-1">
+          <ThreadPullRequestMiniListItem
+            number={number}
+            url={url}
+            title={status?.tooltipTitle ?? presentation.label}
+            presentation={presentation}
+            onOpenPullRequest={onOpenPullRequest}
+          />
+        </ul>
+      ) : null}
+    </ThreadLinkBadge>
+  );
+}
+
+export function ThreadLinkBadge({
+  control,
+  Icon,
+  toneClassName,
+  text,
+  children,
+}: {
+  control: ReactElement;
+  Icon: ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
+  toneClassName: string;
+  text: string | number;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip>
       <TooltipTrigger render={control}>
-        <span
-          className={cn("contents font-normal text-xs tabular-nums", presentation.toneClassName)}
-        >
-          <presentation.Icon aria-hidden className="size-3 shrink-0" />
-          <span className="text-secondary-label">{presentation.text}</span>
+        <span className={cn("contents font-normal text-xs tabular-nums", toneClassName)}>
+          <Icon aria-hidden className="size-3 shrink-0" />
+          <span className="max-w-16 truncate">{text}</span>
         </span>
       </TooltipTrigger>
       <TooltipPopup
@@ -490,24 +535,10 @@ function PullRequestBadge({
         sideOffset={0}
         variant="glass"
         className="pointer-events-auto w-80 max-w-[calc(100vw-2rem)] text-left whitespace-normal"
+        onContextMenu={(event) => event.stopPropagation()}
       >
         <div className="-mx-1 max-h-[calc(var(--available-height)-0.5rem-2px)] overflow-y-auto overscroll-contain">
-          {visibleThreadPullRequests(pullRequests).length > 0 ? (
-            <ThreadPullRequestsMiniList
-              pullRequests={pullRequests}
-              onOpenPullRequest={onOpenPullRequest}
-            />
-          ) : number !== undefined && url !== undefined ? (
-            <ul className="flex flex-col gap-1">
-              <ThreadPullRequestMiniListItem
-                number={number}
-                url={url}
-                title={status?.tooltipTitle ?? presentation.label}
-                presentation={presentation}
-                onOpenPullRequest={onOpenPullRequest}
-              />
-            </ul>
-          ) : null}
+          {children}
         </div>
       </TooltipPopup>
     </Tooltip>

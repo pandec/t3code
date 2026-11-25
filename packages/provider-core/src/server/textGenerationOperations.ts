@@ -33,7 +33,13 @@ export interface Request<S extends Schema.Top> {
   readonly modelSelection: ModelSelection;
   readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
   /** Investigate cwd with read-only tools across turns; fail if the runner cannot guarantee read-only access. */
-  readonly investigate?: { readonly timeoutMs: number } | undefined;
+  readonly investigate?:
+    | {
+        readonly timeoutMs: number;
+        /** cwd holds the content under review; paths the user configured resolve here instead. */
+        readonly projectCwd: string;
+      }
+    | undefined;
 }
 
 const INVESTIGATION_TIMEOUT_MS = 15 * 60_000;
@@ -54,6 +60,19 @@ export type Runner = <S extends Schema.Top>(
  */
 export const isSourceRewriteOperation = (operation: Operation) =>
   operation === "generateSpeechScript" || operation === "generateMessageSummary";
+
+/** For runners that cannot guarantee a tool-free session. */
+export const withoutSourceRewrite =
+  (provider: string, run: Runner): Runner =>
+  (request) =>
+    isSourceRewriteOperation(request.operation)
+      ? Effect.fail(
+          new TextGenerationError({
+            operation: request.operation,
+            detail: `${provider} cannot run this rewrite without tools.`,
+          }),
+        )
+      : run(request);
 
 export const withoutInvestigation =
   (provider: string, run: Runner): Runner =>
@@ -134,6 +153,7 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
         policy: input.policy,
         changeRequestTemplate: input.changeRequestTemplate,
         threadContext: input.threadContext,
+        producedBy: input.producedBy,
       }),
     });
     return { title: sanitizePrTitle(generated.title), body: generated.body.trim() };
@@ -228,7 +248,7 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
       operation: "generateReviewGuide",
       cwd: input.cwd,
       modelSelection: input.modelSelection,
-      investigate: { timeoutMs: INVESTIGATION_TIMEOUT_MS },
+      investigate: { timeoutMs: INVESTIGATION_TIMEOUT_MS, projectCwd: input.projectCwd },
       ...buildReviewGuidePrompt(input),
     });
   });

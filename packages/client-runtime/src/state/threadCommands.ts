@@ -7,9 +7,12 @@ import {
   WS_METHODS,
   type EnvironmentId,
   type OrchestrationV2ShellSnapshot,
+  type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 
 import { createOptimisticThreadLifecycle } from "./threadLifecycle.ts";
+import type { EnvironmentShellStatus } from "./shell.ts";
+import { createThreadTriageOutbox } from "./threadTriageOutbox.ts";
 import * as DateTime from "effect/DateTime";
 
 import {
@@ -80,9 +83,71 @@ export type LoadEarlierThreadHistoryInput = {
   readonly workAnchorId?: string;
 };
 
+function applySettle(
+  thread: OrchestrationV2ThreadShell,
+  now: DateTime.Utc,
+  accepted: boolean,
+): OrchestrationV2ThreadShell {
+  return !accepted &&
+    (thread.pendingRuntimeRequest !== null ||
+      ["preparing", "queued", "starting", "running", "waiting"].includes(thread.status))
+    ? thread
+    : {
+        ...thread,
+        pendingRuntimeRequest: null,
+        settledOverride: "settled",
+        settledAt: thread.settledOverride === "settled" ? (thread.settledAt ?? now) : now,
+        unsettledAt: null,
+        activeOrderKey: null,
+        activeMarkedAt: null,
+        pinnedAt: null,
+        pinOrderKey: null,
+        snoozedAt: null,
+        snoozedUntil: null,
+        ...(thread.snoozedUntilRunId == null ? {} : { snoozedUntilRunId: null }),
+      };
+}
+
+function applySnooze(
+  thread: OrchestrationV2ThreadShell,
+  input: { readonly snoozedUntil: string | null; readonly untilDone?: boolean },
+  now: DateTime.Utc,
+  accepted: boolean,
+): OrchestrationV2ThreadShell {
+  return (!accepted &&
+    ((thread.pendingRuntimeRequest !== null &&
+      thread.pendingRuntimeRequest.kind !== "user_input") ||
+      ["preparing", "queued", "starting"].includes(thread.status))) ||
+    // Fork: a null wake time is the "until it's done" snooze.
+    (input.snoozedUntil !== null &&
+      !(Date.parse(input.snoozedUntil) > DateTime.toEpochMillis(now))) ||
+    // Fork: "until it's done" waits on the latest run; none, nothing to wait on.
+    (input.untilDone === true && thread.latestRunId === null)
+    ? thread
+    : {
+        ...thread,
+        snoozedUntil: input.snoozedUntil === null ? null : DateTime.makeUnsafe(input.snoozedUntil),
+        ...(input.untilDone === true
+          ? { snoozedUntilRunId: thread.latestRunId }
+          : thread.snoozedUntilRunId == null
+            ? {}
+            : { snoozedUntilRunId: null }),
+        // A timed re-snooze always restamps, even to the same wake time.
+        // Fork: an until-done snooze on the run it already waits on is a duplicate.
+        snoozedAt:
+          input.untilDone === true &&
+          thread.snoozedUntilRunId != null &&
+          thread.snoozedUntilRunId === thread.latestRunId
+            ? (thread.snoozedAt ?? now)
+            : now,
+      };
+}
+
 export function createThreadEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | SecureRandom.SecureRandom | R, E>,
   snapshotAtom: (environmentId: EnvironmentId) => Atom.Atom<OrchestrationV2ShellSnapshot | null>,
+  /** Offline settle and snooze are sent once this reports a synchronized shell. */
+  shellStatusAtom: (environmentId: EnvironmentId) => Atom.Atom<EnvironmentShellStatus>,
 ) {
   const scheduler = createAtomCommandScheduler();
   const concurrency = {
@@ -531,7 +596,42 @@ export function createThreadEnvironmentAtoms<R, E>(
     pin: rowAction(sent.pin),
     unpin: rowAction(sent.unpin),
   };
-  const optimistic = createOptimisticThreadLifecycle(snapshotAtom);
+  const triage = createThreadTriageOutbox({
+    runtime,
+    sourceSnapshotAtom: snapshotAtom,
+    shellStatusAtom,
+    apply: (thread, action, queuedAt) =>
+      action.type === "settle"
+        ? applySettle(thread, queuedAt, false)
+        : applySnooze(thread, action, queuedAt, false),
+    send: (registry, { environmentId, threadId, commandId, action }) =>
+      action.type === "settle"
+        ? settle.run(registry, { environmentId, input: { threadId, commandId } })
+        : snooze.run(registry, {
+            environmentId,
+            input: { threadId, commandId, snoozedUntil: action.snoozedUntil },
+          }),
+  });
+  const optimistic = createOptimisticThreadLifecycle(triage.snapshotAtom);
+  const settle = optimistic.wrap(commands.settle, (thread, _input, now, accepted) =>
+    applySettle(thread, now, accepted),
+  );
+  const snooze = optimistic.wrap(commands.snooze, (thread, input, now, accepted) =>
+    applySnooze(thread, input, now, accepted),
+  );
+  const queuedTimedSnooze = triage.queueWhenOffline(commands.snooze, (input) => ({
+    type: "snooze" as const,
+    snoozedUntil: input.snoozedUntil ?? "",
+  }));
+  const routedSnooze: typeof commands.snooze = {
+    label: commands.snooze.label,
+    // Fork: an until-done snooze waits on live run state, so it is never queued offline.
+    run: (registry, target) =>
+      (target.input.snoozedUntil === null ? commands.snooze : queuedTimedSnooze).run(
+        registry,
+        target,
+      ),
+  };
   const disconnectedAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => {
       const connection = AsyncResult.getOrElse(
@@ -567,75 +667,40 @@ export function createThreadEnvironmentAtoms<R, E>(
     mcpSignedInAtom,
     snapshotAtom: optimistic.snapshotAtom,
     pendingThreadIdsAtom: optimistic.pendingThreadIdsAtom,
-    settle: optimistic.wrap(commands.settle, (thread, _input, now, accepted) =>
-      !accepted &&
-      (thread.pendingRuntimeRequest !== null ||
-        ["preparing", "queued", "starting", "running", "waiting"].includes(thread.status))
-        ? thread
-        : {
-            ...thread,
-            pendingRuntimeRequest: null,
-            settledOverride: "settled",
-            settledAt: thread.settledOverride === "settled" ? (thread.settledAt ?? now) : now,
-            unsettledAt: null,
-            activeOrderKey: null,
-            activeMarkedAt: null,
-            pinnedAt: null,
-            pinOrderKey: null,
-            snoozedAt: null,
-            snoozedUntil: null,
-            ...(thread.snoozedUntilRunId == null ? {} : { snoozedUntilRunId: null }),
-          },
+    pendingSyncAtom: triage.pendingSyncAtom,
+    // Queued inside the optimistic update, so it stays shown until the queued entry replaces it.
+    settle: optimistic.wrap(
+      triage.queueWhenOffline(commands.settle, () => ({ type: "settle" as const })),
+      (thread, _input, now, accepted) => applySettle(thread, now, accepted),
     ),
-    unsettle: optimistic.wrap(commands.unsettle, (thread, input, now) => ({
-      ...thread,
-      settledOverride: input.reason === "user" ? "active" : null,
-      settledAt: null,
-      unsettledAt:
-        thread.settledOverride === "active"
-          ? (thread.unsettledAt ?? null)
-          : input.restoreUnsettledAt === undefined
-            ? now
-            : input.restoreUnsettledAt === null
-              ? null
-              : DateTime.makeUnsafe(input.restoreUnsettledAt),
-    })),
-    snooze: optimistic.wrap(commands.snooze, (thread, input, now, accepted) =>
-      (!accepted &&
-        ((thread.pendingRuntimeRequest !== null &&
-          thread.pendingRuntimeRequest.kind !== "user_input") ||
-          ["preparing", "queued", "starting"].includes(thread.status))) ||
-      // Fork: a null wake time is the "until it's done" snooze.
-      (input.snoozedUntil !== null &&
-        !(Date.parse(input.snoozedUntil) > DateTime.toEpochMillis(now))) ||
-      // Fork: "until it's done" waits on the latest run; none, nothing to wait on.
-      (input.untilDone === true && thread.latestRunId === null)
-        ? thread
-        : {
-            ...thread,
-            snoozedUntil:
-              input.snoozedUntil === null ? null : DateTime.makeUnsafe(input.snoozedUntil),
-            ...(input.untilDone === true
-              ? { snoozedUntilRunId: thread.latestRunId }
-              : thread.snoozedUntilRunId == null
-                ? {}
-                : { snoozedUntilRunId: null }),
-            // A timed re-snooze always restamps, even to the same wake time.
-            // Fork: an until-done snooze on the run it already waits on is a duplicate.
-            snoozedAt:
-              input.untilDone === true &&
-              thread.snoozedUntilRunId != null &&
-              thread.snoozedUntilRunId === thread.latestRunId
-                ? (thread.snoozedAt ?? now)
-                : now,
-          },
+    unsettle: triage.cancelQueued(
+      optimistic.wrap(commands.unsettle, (thread, input, now) => ({
+        ...thread,
+        settledOverride: input.reason === "user" ? "active" : null,
+        settledAt: null,
+        unsettledAt:
+          thread.settledOverride === "active"
+            ? (thread.unsettledAt ?? null)
+            : input.restoreUnsettledAt === undefined
+              ? now
+              : input.restoreUnsettledAt === null
+                ? null
+                : DateTime.makeUnsafe(input.restoreUnsettledAt),
+      })),
+      "settle",
     ),
-    unsnooze: optimistic.wrap(commands.unsnooze, (thread) => ({
-      ...thread,
-      snoozedUntil: null,
-      snoozedAt: null,
-      ...(thread.snoozedUntilRunId == null ? {} : { snoozedUntilRunId: null }),
-    })),
+    snooze: optimistic.wrap(routedSnooze, (thread, input, now, accepted) =>
+      applySnooze(thread, input, now, accepted),
+    ),
+    unsnooze: triage.cancelQueued(
+      optimistic.wrap(commands.unsnooze, (thread) => ({
+        ...thread,
+        snoozedUntil: null,
+        snoozedAt: null,
+        ...(thread.snoozedUntilRunId == null ? {} : { snoozedUntilRunId: null }),
+      })),
+      "snooze",
+    ),
     setAutoSettle: optimistic.wrap(commands.setAutoSettle, (thread, input, now) => ({
       ...thread,
       autoSettleDisabledAt: input.enabled ? null : (thread.autoSettleDisabledAt ?? now),

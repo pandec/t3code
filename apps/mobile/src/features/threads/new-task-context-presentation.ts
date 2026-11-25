@@ -23,13 +23,24 @@ export function resolveNewTaskWorkspaceSelection(input: {
   readonly selection: ComposerDraftWorkspaceSelection | undefined;
   readonly fallback: ResolvedWorkspaceSelection;
   readonly isGitRepo: boolean;
+  /** A project folder that is no repository can still take a worktree of one it tracks. */
+  readonly tracksGitRepositories?: boolean | undefined;
 }): ResolvedWorkspaceSelection {
   const selection = input.selection ?? input.fallback;
   // A draft without an explicit mode follows the resolved project default.
   const requestedEnvMode = selection.mode ?? input.fallback.mode;
   if (!input.isGitRepo) {
-    const mode = resolveSendEnvMode({ requestedEnvMode, isGitRepo: false });
-    return { mode, branch: null, worktreePath: null };
+    const mode = resolveSendEnvMode({
+      requestedEnvMode,
+      isGitRepo: false,
+      tracksGitRepositories: input.tracksGitRepositories === true,
+    });
+    return {
+      mode,
+      branch: null,
+      worktreePath: null,
+      ...(selection.repositories !== undefined ? { repositories: selection.repositories } : {}),
+    };
   }
   return hasWorkspaceMode(selection) ? selection : { ...selection, mode: requestedEnvMode };
 }
@@ -200,6 +211,7 @@ export function resolveNewTaskDraftWorkspace(input: {
   readonly defaultMode: WorkspaceMode;
   readonly defaultModeSettled: boolean;
   readonly isGitRepo: boolean;
+  readonly tracksGitRepositories?: boolean | undefined;
   readonly branches: Parameters<typeof fillNewTaskWorkspaceBranch>[0]["branches"];
   readonly projectCwd: string | null;
 }): ResolvedWorkspaceSelection {
@@ -209,6 +221,7 @@ export function resolveNewTaskDraftWorkspace(input: {
       selection,
       fallback: { mode: input.defaultMode, branch: null, worktreePath: null },
       isGitRepo: input.isGitRepo,
+      tracksGitRepositories: input.tracksGitRepositories,
     }),
     branches: input.branches,
     projectCwd: input.projectCwd,

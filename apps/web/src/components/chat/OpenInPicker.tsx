@@ -10,6 +10,7 @@ import { T, useGT, useMessages, Var } from "gt-react";
 import { memo, use, useRef } from "react";
 import { BackgroundThreadContext } from "./backgroundThread";
 import { shortcutLabelForCommand } from "../../keybindings";
+import type { FileManagerAction } from "./OpenInPicker.logic";
 import { OPEN_FAVORITE_EDITOR_ATTRIBUTE } from "./OpenInPickerShortcut";
 import { usePreferredEditor } from "../../editorPreferences";
 import { editorLabelForPlatform } from "../../editorLabels";
@@ -43,33 +44,8 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import {
-  AntigravityIcon,
-  CursorIcon,
-  FileExplorerIcon,
-  FinderIcon,
-  Icon,
-  KiroIcon,
-  TraeIcon,
-  VisualStudioCode,
-  VisualStudioCodeInsiders,
-  VSCodium,
-  Zed,
-} from "../Icons";
-import {
-  AquaIcon,
-  CLionIcon,
-  DataGripIcon,
-  DataSpellIcon,
-  GoLandIcon,
-  IntelliJIdeaIcon,
-  PhpStormIcon,
-  PyCharmIcon,
-  RiderIcon,
-  RubyMineIcon,
-  RustRoverIcon,
-  WebStormIcon,
-} from "../JetBrainsIcons";
+import { FileExplorerIcon, FinderIcon } from "../Icons";
+import { type EditorIconOption, editorIconOptions } from "../editorIcons";
 import {
   type FileContextMenuAction,
   type FileContextMenuTarget,
@@ -90,12 +66,7 @@ import {
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { useComposerMenuState } from "./useComposerMenuState";
 
-type OpenInOption = {
-  label: string;
-  Icon: Icon;
-  value: EditorId;
-  kind: "brand" | "generic";
-};
+type OpenInOption = EditorIconOption & { label: string };
 
 /** The file context menu's actions the picker shows; open and open-with are the editor list. */
 const FILE_PICKER_ACTIONS: ReadonlySet<FileContextMenuAction> = new Set<FileContextMenuAction>([
@@ -103,13 +74,6 @@ const FILE_PICKER_ACTIONS: ReadonlySet<FileContextMenuAction> = new Set<FileCont
   "copy-relative-path",
   "copy-full-path",
 ]);
-
-const fileManagerIconForPlatform = (platform: string) =>
-  isMacPlatform(platform)
-    ? FinderIcon
-    : isWindowsPlatform(platform)
-      ? FileExplorerIcon
-      : FolderClosedIcon;
 
 /**
  * The file-manager editor opens its target with the OS: a folder lands in
@@ -121,121 +85,15 @@ export const resolveOpenInOptions = (
   availableEditors: ReadonlyArray<EditorId>,
   target: "directory" | "file" = "directory",
   resolve: MessageResolver = m,
-) => {
-  const baseOptions: ReadonlyArray<Omit<OpenInOption, "label">> = [
-    {
-      Icon: CursorIcon,
-      value: "cursor",
-      kind: "brand",
-    },
-    {
-      Icon: TraeIcon,
-      value: "trae",
-      kind: "brand",
-    },
-    {
-      Icon: KiroIcon,
-      value: "kiro",
-      kind: "brand",
-    },
-    {
-      Icon: VisualStudioCode,
-      value: "vscode",
-      kind: "brand",
-    },
-    {
-      Icon: VisualStudioCodeInsiders,
-      value: "vscode-insiders",
-      kind: "brand",
-    },
-    {
-      Icon: VSCodium,
-      value: "vscodium",
-      kind: "brand",
-    },
-    {
-      Icon: Zed,
-      value: "zed",
-      kind: "brand",
-    },
-    {
-      Icon: AntigravityIcon,
-      value: "antigravity",
-      kind: "brand",
-    },
-    {
-      Icon: IntelliJIdeaIcon,
-      value: "idea",
-      kind: "brand",
-    },
-    {
-      Icon: AquaIcon,
-      value: "aqua",
-      kind: "brand",
-    },
-    {
-      Icon: CLionIcon,
-      value: "clion",
-      kind: "brand",
-    },
-    {
-      Icon: DataGripIcon,
-      value: "datagrip",
-      kind: "brand",
-    },
-    {
-      Icon: DataSpellIcon,
-      value: "dataspell",
-      kind: "brand",
-    },
-    {
-      Icon: GoLandIcon,
-      value: "goland",
-      kind: "brand",
-    },
-    {
-      Icon: PhpStormIcon,
-      value: "phpstorm",
-      kind: "brand",
-    },
-    {
-      Icon: PyCharmIcon,
-      value: "pycharm",
-      kind: "brand",
-    },
-    {
-      Icon: RiderIcon,
-      value: "rider",
-      kind: "brand",
-    },
-    {
-      Icon: RubyMineIcon,
-      value: "rubymine",
-      kind: "brand",
-    },
-    {
-      Icon: RustRoverIcon,
-      value: "rustrover",
-      kind: "brand",
-    },
-    {
-      Icon: WebStormIcon,
-      value: "webstorm",
-      kind: "brand",
-    },
-    target === "file"
-      ? { Icon: AppWindowIcon, value: "file-manager", kind: "generic" }
-      : {
-          Icon: fileManagerIconForPlatform(platform),
-          value: "file-manager",
-          kind: isMacPlatform(platform) || isWindowsPlatform(platform) ? "brand" : "generic",
-        },
-  ];
+): ReadonlyArray<OpenInOption> => {
   const availableEditorSet = new Set(availableEditors);
-  return baseOptions
+  return editorIconOptions(platform)
     .filter((option) => availableEditorSet.has(option.value))
     .map((option) => ({
       ...option,
+      ...(target === "file" && option.value === "file-manager"
+        ? { Icon: AppWindowIcon, kind: "generic" as const }
+        : {}),
       label:
         target === "file" && option.value === "file-manager"
           ? "Default app"
@@ -270,7 +128,7 @@ export const OpenInPicker = memo(function OpenInPicker({
   compact = false,
   enableShortcut = true,
   displayMode = "toolbar",
-  revealFileManager = false,
+  fileManagerAction = "open",
 }: {
   environmentId: EnvironmentId;
   keybindings: ResolvedKeybindingsConfig;
@@ -288,7 +146,7 @@ export const OpenInPicker = memo(function OpenInPicker({
   compact?: boolean;
   enableShortcut?: boolean;
   displayMode?: "toolbar" | "panel";
-  revealFileManager?: boolean;
+  fileManagerAction?: FileManagerAction;
 }) {
   const gt = useGT();
   const messages = useMessages();
@@ -320,11 +178,13 @@ export const OpenInPicker = memo(function OpenInPicker({
           absolutePath: openInCwd,
         }
       : null;
+  const isEditorUnavailable = (editor: EditorId | null) =>
+    editor === "file-manager" && fileManagerAction === "unavailable";
 
   const openInEditor = async (editorId: EditorId | null): Promise<boolean> => {
     if (!openInCwd) return false;
     const editor = editorId ?? preferredEditor;
-    if (!editor) return false;
+    if (!editor || isEditorUnavailable(editor)) return false;
     if (remote.mode === "remote-unavailable") return false;
     if (remote.mode === "remote-links") {
       const url = buildRemoteOpenUrl({
@@ -348,7 +208,7 @@ export const OpenInPicker = memo(function OpenInPicker({
       input: {
         cwd: openInCwd,
         editor,
-        ...(revealFileManager && editor === "file-manager" ? { reveal: true } : {}),
+        ...(fileManagerAction === "reveal" && editor === "file-manager" ? { reveal: true } : {}),
       },
     });
     setPreferredEditor(editor);
@@ -402,7 +262,11 @@ export const OpenInPicker = memo(function OpenInPicker({
           {options.map(({ label, Icon, value, kind }) => (
             <MenuItem
               density={presentation === "menu" ? "touch" : "default"}
-              disabled={!openInCwd || !canOpenEditor}
+              disabled={
+                !openInCwd ||
+                !canOpenEditor ||
+                (presentation === "menu" && isEditorUnavailable(value))
+              }
               key={value}
               onClick={() => {
                 if (presentation === "menu") {
@@ -465,8 +329,7 @@ export const OpenInPicker = memo(function OpenInPicker({
         {primaryOption && (
           <MenuItem
             density={presentation === "menu" ? "touch" : "default"}
-
-            disabled={!openInCwd || !canOpenEditor}
+            disabled={!openInCwd || !canOpenEditor || isEditorUnavailable(preferredEditor)}
             onClick={() => openInEditor(preferredEditor)}
           >
             <primaryOption.Icon className={cn("size-4", getOpenInIconClass(primaryOption.kind))} />
@@ -504,7 +367,9 @@ export const OpenInPicker = memo(function OpenInPicker({
       variant={isPanel ? "ghost" : "outline"}
       part="primary"
       panel={isPanel}
-      disabled={!preferredEditor || !openInCwd || !canOpenEditor}
+      disabled={
+        !preferredEditor || !openInCwd || !canOpenEditor || isEditorUnavailable(preferredEditor)
+      }
       {...(enableShortcut && !backgroundThread
         ? { [OPEN_FAVORITE_EDITOR_ATTRIBUTE]: threadPaneId }
         : {})}

@@ -131,12 +131,19 @@ const LOGIN_SHELL_PASSTHROUGH_ENV_NAMES = [
   "NODE_EXTRA_CA_CERTS",
   // The telemetry opt-out is documented as a shell variable; GUI launches never see it.
   "T3CODE_TELEMETRY_ENABLED",
-  "T3CODE_GITHUB_APP_CLIENT_ID",
+  "DO_NOT_TRACK",
+  "T3CODE_FEATURE_FLAGS",
   "T3CODE_RELEASE_BASE_URL",
   "JAVA_HOME",
   "PNPM_HOME",
 ] as const;
-const WINDOWS_PROFILE_ENV_NAMES = ["PATH", "FNM_DIR", "FNM_MULTISHELL_PATH"] as const;
+const WINDOWS_PROFILE_ENV_NAMES = [
+  "PATH",
+  "FNM_DIR",
+  "FNM_MULTISHELL_PATH",
+  "T3CODE_TELEMETRY_ENABLED",
+  "DO_NOT_TRACK",
+] as const;
 /**
  * Hydrated as one precedence group rather than per-variable, so they are
  * deliberately absent from the passthrough list above.
@@ -253,6 +260,8 @@ const logShellEnvironmentCommandError = (
 const captureWindowsEnvironmentCommand = (names: ReadonlyArray<string>) =>
   [
     "$ErrorActionPreference = 'Stop'",
+    // Redirected PowerShell output uses the console code page, which mangles non-ASCII paths.
+    "try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false) } catch {}",
     ...names.flatMap((name) => {
       return [
         `Write-Output '${startMarker(name)}'`,
@@ -471,6 +480,11 @@ const installWindowsEnvironment = Effect.fn("desktop.shellEnvironment.installWin
     if (!config.env.FNM_MULTISHELL_PATH && profile.FNM_MULTISHELL_PATH) {
       config.env.FNM_MULTISHELL_PATH = profile.FNM_MULTISHELL_PATH;
     }
+    for (const name of ["T3CODE_TELEMETRY_ENABLED", "DO_NOT_TRACK"] as const) {
+      if (!config.env[name] && profile[name]) {
+        config.env[name] = profile[name];
+      }
+    }
     return Boolean(noProfile.PATH && profile.PATH);
   },
 );
@@ -652,6 +666,9 @@ const CACHED_ENV_NAMES = [
   "SSL_CERT_DIR",
   "NODE_EXTRA_CA_CERTS",
   "T3CODE_TELEMETRY_ENABLED",
+  "DO_NOT_TRACK",
+  // The server reads its flags once at start, before discovery can finish.
+  "T3CODE_FEATURE_FLAGS",
 ] as const;
 
 /** @public */

@@ -65,4 +65,4 @@ Use these pointers instead of relying on this skill for mutable details:
 - Trace diagnostics reader: `apps/server/src/diagnostics/TraceDiagnostics.ts`
 - Provider log ownership and rotation: `apps/server/src/provider/Layers/ProviderEventLoggers.ts` and `apps/server/src/provider/Layers/EventNdjsonLogger.ts`
 - Diagnostics UI: `apps/web/src/components/settings/DiagnosticsSettings.tsx`
-- Operational documentation: `docs/operations/observability.md`
+- Operational documentation: `docs/operations/04_observability.md`

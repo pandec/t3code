@@ -257,7 +257,7 @@ it.effect("carries voice origin through send, steer, queue and queued edits, and
               (event) =>
                 event.type === "run.updated" &&
                 event.payload.id === turnInput.runId &&
-                event.payload.status === "waiting",
+                event.payload.status === "completed",
             );
             const projection = yield* orchestrator.getThreadProjection(threadId);
             const turn = projection.providerTurns.find(

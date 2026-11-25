@@ -31,6 +31,8 @@ export function ComposerInlineControl(props: {
   readonly accessibilityValue?: ComponentProps<typeof Pressable>["accessibilityValue"];
   readonly disabled?: boolean;
   readonly emphasized?: boolean;
+  /** The control asks for a decision; it stays usable. */
+  readonly tone?: "warning";
   readonly icon?: ComponentProps<typeof SymbolView>["name"];
   readonly renderIcon?: (size: number) => ReactNode;
   readonly label: string;
@@ -83,7 +85,11 @@ export function ComposerInlineControl(props: {
             name={props.icon}
             size={iconSize}
             tintColorClassName={
-              props.emphasized || props.selected ? "accent-icon" : "accent-icon-muted"
+              props.tone === "warning"
+                ? "accent-warning-foreground"
+                : props.emphasized || props.selected
+                  ? "accent-icon"
+                  : "accent-icon-muted"
             }
             type="monochrome"
           />
@@ -96,7 +102,11 @@ export function ComposerInlineControl(props: {
             <Text
               className={cn(
                 props.size === "large" ? "text-base font-t3-medium" : "text-sm font-t3-medium",
-                props.emphasized || props.selected ? "text-foreground" : "text-foreground-muted",
+                props.tone === "warning"
+                  ? "text-warning-foreground"
+                  : props.emphasized || props.selected
+                    ? "text-foreground"
+                    : "text-foreground-muted",
               )}
               numberOfLines={1}
               ellipsizeMode={props.labelEllipsizeMode}
@@ -389,6 +399,7 @@ export function ComposerToolbarButton(props: {
       accessibilityActions={props.accessibilityActions}
       accessibilityValue={props.accessibilityValue}
       onAccessibilityAction={props.onAccessibilityAction}
+      accessibilityState={props.active === undefined ? undefined : { selected: props.active }}
       disabled={props.disabled}
       onPress={props.onPress}
       onLongPress={props.onLongPress}

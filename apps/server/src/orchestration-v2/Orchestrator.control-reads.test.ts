@@ -7,6 +7,9 @@ import {
   EventId,
   NodeId,
   type OrchestrationV2DomainEvent,
+  type OrchestrationV2ProviderTurn,
+  type OrchestrationV2Run,
+  type OrchestrationV2RunAttempt,
   PlanId,
   ProjectId,
   ProviderDriverKind,
@@ -2474,6 +2477,85 @@ it.effect("explicit settle clears snooze atomically and stays idempotent after r
   }).pipe(Effect.provide(layerTest)),
 );
 
+// Fork: the settle script must not run before a completed run's turn-end checkpoint.
+it.effect("automatic settlement waits for a completed run's checkpoint capture", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const sql = yield* SqlClient.SqlClient;
+    const threadId = ThreadId.make("thread:auto-settle-capture");
+    const runId = RunId.make("run:auto-settle-capture");
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create-auto-settle-capture"),
+      threadId,
+      projectId: ProjectId.make("project:auto-settle-capture"),
+      title: "Capturing thread",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const now = yield* DateTime.now;
+    yield* projections.apply({
+      id: EventId.make("auto-settle-capture:run"),
+      type: "run.created",
+      threadId,
+      occurredAt: now,
+      payload: {
+        id: runId,
+        threadId,
+        ordinal: 1,
+        providerInstanceId: instanceId,
+        modelSelection,
+        providerThreadId: null,
+        userMessageId: MessageId.make("message:auto-settle-capture"),
+        rootNodeId: null,
+        activeAttemptId: null,
+        status: "completed",
+        requestedAt: now,
+        startedAt: now,
+        completedAt: now,
+        checkpointId: null,
+        contextHandoffId: null,
+      },
+    });
+    const setCapture = (status: string) => sql`
+      INSERT INTO orchestration_v2_effect_outbox (
+        effect_id, command_id, thread_id, effect_type, payload_json, status,
+        available_at, created_at, updated_at
+      ) VALUES (
+        ${`effect:checkpoint.capture:${runId}`}, 'command:capture', ${threadId},
+        'checkpoint.capture', ${JSON.stringify({ type: "checkpoint.capture", runId, scopeId: "scope:capture" })},
+        ${status}, ${DateTime.formatIso(now)},
+        ${DateTime.formatIso(now)}, ${DateTime.formatIso(now)}
+      )
+      ON CONFLICT(effect_id) DO UPDATE SET status = excluded.status
+    `;
+    const autoSettle = Effect.fn(function* (id: string) {
+      const { updatedAt } = yield* projections.getThread(threadId);
+      return yield* orchestrator.dispatch({
+        type: "thread.auto-settle",
+        commandId: CommandId.make(id),
+        threadId,
+        snapshotAt: updatedAt,
+      });
+    });
+
+    yield* setCapture("pending");
+    const refused = yield* Effect.flip(autoSettle("auto-settle-capturing"));
+    assert.include(String(refused.cause), "is capturing its final checkpoint");
+    assert.isNull((yield* projections.getThread(threadId)).settledOverride);
+
+    yield* setCapture("succeeded");
+    yield* autoSettle("auto-settle-captured");
+    assert.equal((yield* projections.getThread(threadId)).settledOverride, "settled");
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("active mark toggles idempotently and clears on settle and archive", () =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -3270,4 +3352,101 @@ it.effect(
       }
       assert.equal(yield* captureReads, quietParent);
     }).pipe(Effect.provide(layerTest)),
+);
+
+/** A copy of `value` whose `id` getter counts its reads. */
+const countingIdReads = <T extends { readonly id: string }>(
+  value: T,
+  reads: { count: number },
+): T =>
+  Object.defineProperty({ ...value }, "id", {
+    enumerable: true,
+    get: () => {
+      reads.count += 1;
+      return value.id;
+    },
+  });
+
+// The owner's active attempt is the newest and no provider turn is tagged with it, so the lookup
+// falls back to the turn the attempt names. The last two turns are untagged and share one id.
+it.each([
+  { ownerAttempt: "names no provider turn", providerTurnId: null, findsFirstLegacy: false },
+  {
+    ownerAttempt: "names a provider turn listed twice",
+    providerTurnId: "legacy",
+    findsFirstLegacy: true,
+  },
+  { ownerAttempt: "is missing", providerTurnId: null, findsFirstLegacy: false },
+] as const)(
+  "finds a run's provider turn in at most 2·(T + A) id reads when its attempt $ownerAttempt",
+  ({ ownerAttempt, providerTurnId, findsFirstLegacy }) => {
+    const size = 2_000;
+    const reads = { count: 0 };
+    const providerThreadId = ProviderThreadId.make("provider-thread:lookup");
+    const attempts = Array.from({ length: size }, (_, index) =>
+      countingIdReads<OrchestrationV2RunAttempt>(
+        {
+          id: RunAttemptId.make(`attempt:lookup:${index}`),
+          runId: RunId.make(`run:lookup:${index}`),
+          attemptOrdinal: 1,
+          rootNodeId: NodeId.make(`node:lookup:${index}`),
+          providerInstanceId: instanceId,
+          providerThreadId,
+          providerTurnId:
+            index < size - 1
+              ? ProviderTurnId.make(`provider-turn:lookup:${index}`)
+              : providerTurnId === null
+                ? null
+                : ProviderTurnId.make(`provider-turn:lookup:${providerTurnId}`),
+          reason: "initial",
+          status: index < size - 1 ? "completed" : "pending",
+          startedAt: null,
+          completedAt: null,
+        },
+        reads,
+      ),
+    );
+    const providerTurns = Array.from({ length: size }, (_, index) => {
+      const untagged = index >= size - 2;
+      return countingIdReads<OrchestrationV2ProviderTurn>(
+        {
+          id: ProviderTurnId.make(`provider-turn:lookup:${untagged ? "legacy" : index}`),
+          providerThreadId,
+          nodeId: NodeId.make(`node:lookup:${index}`),
+          runAttemptId: untagged ? null : RunAttemptId.make(`attempt:lookup:${index}`),
+          nativeTurnRef: null,
+          ordinal: index + 1,
+          status: "completed",
+          startedAt: null,
+          completedAt: null,
+        },
+        reads,
+      );
+    });
+    const owner: OrchestrationV2Run = {
+      id: RunId.make(`run:lookup:${size - 1}`),
+      threadId: ThreadId.make("thread:lookup"),
+      ordinal: size,
+      providerInstanceId: instanceId,
+      modelSelection,
+      providerThreadId,
+      userMessageId: MessageId.make("message:lookup"),
+      rootNodeId: NodeId.make(`node:lookup:${size - 1}`),
+      activeAttemptId:
+        ownerAttempt === "is missing"
+          ? RunAttemptId.make("attempt:lookup:missing")
+          : RunAttemptId.make(`attempt:lookup:${size - 1}`),
+      status: "starting",
+      requestedAt: DateTime.makeUnsafe(0),
+      startedAt: null,
+      completedAt: null,
+      checkpointId: null,
+      contextHandoffId: null,
+    };
+
+    const turn = Orchestrator.providerTurnForRun({ attempts, providerTurns }, owner);
+
+    assert.strictEqual(turn, findsFirstLegacy ? providerTurns[size - 2] : undefined);
+    assert.isAtMost(reads.count, 2 * (size + size));
+  },
 );

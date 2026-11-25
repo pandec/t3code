@@ -12,8 +12,10 @@ import * as Dialog from "../components/ui/Dialog";
 import { msg } from "gt-react-native";
 import { m } from "../i18n/messages";
 import { appAtomRegistry } from "./atom-registry";
+import { activeComposerDraftKey, getQueuedRunEdit, isQueuedRunEditSaving } from "./queued-run-edit";
 import { readEnvironmentScope } from "./session";
 import { threadEnvironment } from "./threads";
+import { updateComposerDraftSettings } from "./use-composer-drafts";
 import {
   releaseStagedModelSelection,
   stageThreadSettings,
@@ -22,13 +24,28 @@ import {
 
 /** Sets an existing thread's pick on the thread, so any next turn runs on it. */
 export function selectThreadModel(
-  ref: { readonly environmentId: EnvironmentId; readonly threadId: ThreadId },
+  ref: {
+    readonly environmentId: EnvironmentId;
+    readonly threadId: ThreadId;
+    readonly draftKey?: string;
+  },
   value: ModelSelection,
   thread: ThreadSettings,
 ): void {
   const threadKey = scopedThreadKey(ref.environmentId, ref.threadId);
   // Its own object, so an older reply for an equal pick cannot release this one.
   const modelSelection = { ...value };
+  const draftKey = activeComposerDraftKey(
+    threadKey,
+    ref.draftKey ?? threadKey,
+    getQueuedRunEdit(threadKey),
+  );
+  if (draftKey !== threadKey) {
+    // A queued edit's pick belongs to that edit's draft; the edit save sends it.
+    if (!isQueuedRunEditSaving(threadKey))
+      updateComposerDraftSettings(draftKey, { modelSelection });
+    return;
+  }
   // Fork: existing-thread content drafts never carry a model; the pick shows through staged settings.
   stageThreadSettings(threadKey, { modelSelection }, thread);
   // Another instance replaces the live session, which may hold an open question; that pick

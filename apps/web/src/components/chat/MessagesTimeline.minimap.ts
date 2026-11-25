@@ -1,4 +1,7 @@
-import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
+import {
+  assistantCitationsToPlainText,
+  splitsSurrogatePair,
+} from "@t3tools/shared/assistantCitations";
 import {
   isAttachmentOnlyBootstrapPrompt,
   replaceComposerContextReferences,
@@ -13,6 +16,9 @@ import {
 } from "./MessagesTimeline.logic";
 
 const TIMELINE_MINIMAP_ARIA_EXCERPT_MAX_LENGTH = 120;
+
+const sliceWholeCharacters = (text: string, max: number) =>
+  text.slice(0, splitsSurrogatePair(text, max) ? max - 1 : max);
 export const TIMELINE_MINIMAP_PREVIEW_MAX_LENGTH = 240;
 
 export interface TimelineMinimapItem {
@@ -58,7 +64,9 @@ function compactMinimapPreview(text: string | null | undefined) {
       )
       .replace(/\s+/g, " ")
       .trim() ?? "";
-  return compact.length > 0 ? compact.slice(0, TIMELINE_MINIMAP_PREVIEW_MAX_LENGTH) : null;
+  return compact.length > 0
+    ? sliceWholeCharacters(compact, TIMELINE_MINIMAP_PREVIEW_MAX_LENGTH)
+    : null;
 }
 
 function textEndsWithWhitespace(text: string | null | undefined) {
@@ -72,8 +80,13 @@ function appendCompactMinimapPreview(
   cached: TimelineMinimapPreviewCacheEntry,
   contentVersion: string,
 ): string | null {
-  if ((cached.compactText?.length ?? 0) >= TIMELINE_MINIMAP_PREVIEW_MAX_LENGTH) {
+  const cachedLength = cached.compactText?.length ?? 0;
+  if (cachedLength >= TIMELINE_MINIMAP_PREVIEW_MAX_LENGTH) {
     return cached.compactText;
+  }
+  // One short of the cap can mean an emoji was cut off: appending would skip it.
+  if (cachedLength === TIMELINE_MINIMAP_PREVIEW_MAX_LENGTH - 1) {
+    return compactMinimapPreview(contentVersion);
   }
 
   const previousText = cached.contentVersion;
@@ -89,8 +102,8 @@ function appendCompactMinimapPreview(
     return compactAppend;
   }
   const needsSpace = cached.endsWithWhitespace || /^\s/u.test(appendedText);
-  return `${cached.compactText}${needsSpace ? " " : ""}${compactAppend}`.slice(
-    0,
+  return sliceWholeCharacters(
+    `${cached.compactText}${needsSpace ? " " : ""}${compactAppend}`,
     TIMELINE_MINIMAP_PREVIEW_MAX_LENGTH,
   );
 }
@@ -321,6 +334,8 @@ export function resolveTimelineMinimapAriaLabel(input: {
 
   const role = input.side === "left" ? "user message" : "agent response";
   const position = `${input.activeIndex + 1} of ${input.itemCount}`;
-  const excerpt = input.primaryText?.slice(0, TIMELINE_MINIMAP_ARIA_EXCERPT_MAX_LENGTH) ?? null;
+  const excerpt = input.primaryText
+    ? sliceWholeCharacters(input.primaryText, TIMELINE_MINIMAP_ARIA_EXCERPT_MAX_LENGTH)
+    : null;
   return excerpt ? `Jump to ${role} ${position}: ${excerpt}` : `Jump to ${role} ${position}`;
 }

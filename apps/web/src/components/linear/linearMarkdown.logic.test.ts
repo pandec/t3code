@@ -1,41 +1,32 @@
+import type { ElementContent, Properties, Root, RootContent } from "hast";
 import { describe, expect, it } from "vite-plus/test";
 
-import type { MarkdownNode } from "~/vendor/mdast-find-and-replace";
-import { remarkLinearAutolinks } from "./linearMarkdown.logic";
+import { wordsHast } from "~/markdown/wordsHast";
+import { linearAutolinkText } from "./linearMarkdown.logic";
 
-function paragraph(...children: MarkdownNode[]): MarkdownNode {
-  return { type: "root", children: [{ type: "paragraph", children }] };
+const text = (value: string): ElementContent => ({ type: "text", value });
+
+function linkUrls(nodes: ReadonlyArray<ElementContent> | null) {
+  return (nodes ?? []).flatMap((node) =>
+    node.type === "element" && node.tagName === "a" ? [node.properties.href] : [],
+  );
 }
 
-function text(value: string): MarkdownNode {
-  return { type: "text", value };
-}
-
-function run(tree: MarkdownNode, teamKeys: ReadonlyArray<string>) {
-  remarkLinearAutolinks({ teamKeys })(tree);
-  return tree.children![0]!.children!;
-}
-
-function linkUrls(nodes: ReadonlyArray<MarkdownNode>) {
-  return nodes.filter((node) => node.type === "link").map((node) => node.url);
-}
-
-describe("remarkLinearAutolinks", () => {
+describe("linearAutolinkText", () => {
   it("links identifiers for configured team keys only", () => {
-    const nodes = run(paragraph(text("See SP-123 and ISO-8601, also OP-7.")), ["SP", "OP"]);
-    expect(nodes).toEqual([
+    expect(linearAutolinkText("See SP-123 and ISO-8601, also OP-7.", ["SP", "OP"])).toEqual([
       text("See "),
       {
-        type: "link",
-        url: "https://linear.app/issue/SP-123",
-        data: { hProperties: { dataLinearAutolink: "reference" } },
+        type: "element",
+        tagName: "a",
+        properties: { href: "https://linear.app/issue/SP-123", dataLinearAutolink: "reference" },
         children: [text("SP-123")],
       },
       text(" and ISO-8601, also "),
       {
-        type: "link",
-        url: "https://linear.app/issue/OP-7",
-        data: { hProperties: { dataLinearAutolink: "reference" } },
+        type: "element",
+        tagName: "a",
+        properties: { href: "https://linear.app/issue/OP-7", dataLinearAutolink: "reference" },
         children: [text("OP-7")],
       },
       text("."),
@@ -43,12 +34,8 @@ describe("remarkLinearAutolinks", () => {
   });
 
   it("is word-boundary safe on both sides", () => {
-    const nodes = run(
-      paragraph(
-        text(
-          "feat/SP-12-slug #SP-12 SP-12a XSP-12 SP-0 SP-12345678 SP-13-fix-login SP-14/notes (SP-9) SP-15.",
-        ),
-      ),
+    const nodes = linearAutolinkText(
+      "feat/SP-12-slug #SP-12 SP-12a XSP-12 SP-0 SP-12345678 SP-13-fix-login SP-14/notes (SP-9) SP-15.",
       ["SP"],
     );
     expect(linkUrls(nodes)).toEqual([
@@ -58,26 +45,37 @@ describe("remarkLinearAutolinks", () => {
   });
 
   it("matches the longer of two keys that share a prefix", () => {
-    const nodes = run(paragraph(text("SPX-1 and SP-2")), ["SP", "SPX"]);
-    expect(linkUrls(nodes)).toEqual([
+    expect(linkUrls(linearAutolinkText("SPX-1 and SP-2", ["SP", "SPX"]))).toEqual([
       "https://linear.app/issue/SPX-1",
       "https://linear.app/issue/SP-2",
     ]);
   });
 
-  it("skips code and authored links", () => {
-    const tree = paragraph(
-      { type: "inlineCode", value: "SP-1" },
-      { type: "link", url: "https://example.com", children: [text("SP-2")] },
-      text(" SP-3"),
-    );
-    const nodes = run(tree, ["SP"]);
-    expect(nodes[0]).toEqual({ type: "inlineCode", value: "SP-1" });
-    expect(nodes[1]!.children).toEqual([text("SP-2")]);
-    expect(nodes[3]!.type).toBe("link");
+  it("does nothing without team keys or matches", () => {
+    expect(linearAutolinkText("SP-1", [])).toBeNull();
+    expect(linearAutolinkText("ISO-8601", ["SP"])).toBeNull();
   });
 
-  it("does nothing without team keys", () => {
-    expect(run(paragraph(text("SP-1")), [])).toEqual([text("SP-1")]);
+  it("links prose in chat Markdown but skips code and authored links", () => {
+    const tree = wordsHast("`SP-1` [SP-2](https://example.com) SP-3", {
+      math: false,
+      breaks: false,
+      escapeHtml: false,
+      insights: false,
+      extensions: { linearTeamKeys: ["SP"] },
+    });
+    const anchors: Properties[] = [];
+    const visit = (node: Root | RootContent) => {
+      if (node.type === "element" && node.tagName === "a") anchors.push(node.properties);
+      if ("children" in node) node.children.forEach(visit);
+    };
+    visit(tree);
+    expect(anchors).toEqual([
+      expect.objectContaining({ href: "https://example.com" }),
+      expect.objectContaining({
+        href: "https://linear.app/issue/SP-3",
+        dataLinearAutolink: "reference",
+      }),
+    ]);
   });
 });

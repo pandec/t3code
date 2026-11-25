@@ -61,7 +61,10 @@ export type ArchiveRun = Pick<
       | "delegatedCompletion"
       | "restartContinuationOfRunId"
     >
-  >;
+  > & {
+    /** Set by `holdRunsAwaitingCapture`: the turn-end capture failed before writing a checkpoint. */
+    readonly checkpointCaptureFailed?: true;
+  };
 export type ArchiveCheckpoint = Pick<OrchestrationV2Checkpoint, "id" | "status">;
 
 /** Whether `run`'s final checkpoint capture failed; `missing` (no Git) still counts as captured. */
@@ -70,10 +73,11 @@ export function finalCheckpointFailed(
   checkpoints: ReadonlyArray<ArchiveCheckpoint>,
 ): boolean {
   return (
-    run.checkpointId !== null &&
-    checkpoints.some(
-      (checkpoint) => checkpoint.id === run.checkpointId && checkpoint.status === "error",
-    )
+    run.checkpointCaptureFailed === true ||
+    (run.checkpointId !== null &&
+      checkpoints.some(
+        (checkpoint) => checkpoint.id === run.checkpointId && checkpoint.status === "error",
+      ))
   );
 }
 
@@ -124,6 +128,31 @@ export function restartContinuationPending(
         Option.exists((effect) => effect.status === "pending" || effect.status === "running"),
       ),
     );
+}
+
+/**
+ * Runs complete before their turn-end checkpoint capture commits. Until it does they read as
+ * `waiting`, as orchestrator commands see them, so a failed capture can still veto the action.
+ * A capture that exhausted its retries without a checkpoint marks the run as failed to capture.
+ */
+export function holdRunsAwaitingCapture<R extends ArchiveRun>(
+  outbox: Pick<EffectOutboxV2Shape, "get">,
+  runs: ReadonlyArray<R>,
+) {
+  return Effect.forEach(runs, (run): Effect.Effect<R> =>
+    run.status !== "completed" || run.checkpointId !== null
+      ? Effect.succeed(run)
+      : outbox.get(`effect:checkpoint.capture:${run.id}`).pipe(
+          Effect.map((effect) => {
+            const status = Option.getOrUndefined(effect)?.status;
+            if (status === "pending" || status === "running") {
+              return { ...run, status: "waiting" as const, completedAt: null };
+            }
+            return status === "failed" ? { ...run, checkpointCaptureFailed: true as const } : run;
+          }),
+          Effect.orElseSucceed(() => run),
+        ),
+  );
 }
 
 /** Statuses of a run that is still working toward completion (waiting = capturing its checkpoint). */

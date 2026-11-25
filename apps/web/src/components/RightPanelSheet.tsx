@@ -15,10 +15,13 @@ export function RightPanelSheet(props: {
     <Sheet
       open={props.open}
       modal={!props.nonModal}
-      onOpenChange={(open) => {
-        if (!open) {
-          props.onClose();
+      onOpenChange={(open, eventDetails) => {
+        if (open) return;
+        // Base UI's dismiss handler fires on held Esc repeats after a nested popup closes.
+        if (eventDetails.reason === "escape-key" && eventDetails.event.repeat) {
+          return eventDetails.cancel();
         }
+        props.onClose();
       }}
     >
       <SheetPopup

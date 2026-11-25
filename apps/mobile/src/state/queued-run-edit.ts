@@ -2,11 +2,13 @@ import type {
   ChatAttachment,
   MessageId,
   MessageInputOrigin,
+  ModelSelection,
   OrchestrationMessageContext,
   RunId,
   UploadChatAttachment,
 } from "@t3tools/contracts";
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
+import * as Equal from "effect/Equal";
 import { useAtomValue } from "@effect/atom-react";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { stripAttachmentOnlyBootstrapPrompt } from "@t3tools/shared/composerContextReferences";
@@ -32,10 +34,13 @@ import {
   setComposerContextImporting,
   setComposerDraftContext,
   setComposerDraftText,
+  updateComposerDraftSettings,
 } from "./use-composer-drafts";
 import { stageThreadSettings } from "./use-thread-staged-settings";
 
 export interface QueuedRunEdit {
+  readonly modelSelection?: ModelSelection;
+  readonly followsThreadSelection?: boolean;
   readonly runId: RunId;
   readonly messageId: MessageId;
   readonly originalText: string;
@@ -56,6 +61,9 @@ export const queuedRunEditsAtom = queuedRunEdits.atom;
 export { queuedEditDraftKey } from "./queued-edit-draft-key";
 
 export const getQueuedRunEdit = queuedRunEdits.get;
+
+export const isQueuedRunEditSaving = (threadKey: string): boolean =>
+  appAtomRegistry.get(queuedRunEdits.savingAtom)[threadKey] === true;
 
 /**
  * The draft a sheet opened for `requestedKey` should edit now: a queued edit's
@@ -98,7 +106,7 @@ export function rebindQueuedEditContext(
 /**
  * Fork: a changed edit is appended to the thread's draft even when that draft
  * has other work, with its saved attachments downloaded back, its context and
- * input origin kept, and its run's model staged on the thread.
+ * input origin kept, and its edited or run model staged on the thread.
  */
 function restoreQueuedRunEdit(
   threadKey: string,
@@ -176,11 +184,13 @@ function restoreQueuedRunEdit(
     });
   if (ref === null) return;
   const thread = appAtomRegistry.get(environmentThreadShells.quietThreadShellAtom(ref));
-  const run = appAtomRegistry
-    .get(environmentThreadDetails.quietThreadAtom(ref))
-    ?.projection.runs.find((candidate) => candidate.id === edit.runId);
-  if (thread !== null && run !== undefined) {
-    stageThreadSettings(threadKey, { modelSelection: run.modelSelection }, thread);
+  const modelSelection =
+    editDraft.modelSelection ??
+    appAtomRegistry
+      .get(environmentThreadDetails.quietThreadAtom(ref))
+      ?.projection.runs.find((candidate) => candidate.id === edit.runId)?.modelSelection;
+  if (thread !== null && modelSelection !== undefined) {
+    stageThreadSettings(threadKey, { modelSelection }, thread);
   }
 }
 
@@ -192,7 +202,11 @@ function restoreQueuedRunEdit(
 function exitQueuedRunEdit(threadKey: string, edit: QueuedRunEdit): void {
   const editDraftKey = queuedEditDraftKey(threadKey, edit.runId);
   const editDraft = getComposerDraftSnapshot(editDraftKey);
+  const modelChanged =
+    editDraft.modelSelection !== undefined &&
+    !Equal.equals(editDraft.modelSelection, edit.modelSelection);
   const changed =
+    modelChanged ||
     editDraft.text !== edit.originalText ||
     editDraft.attachments.length > 0 ||
     edit.removedExistingAttachment === true;
@@ -227,6 +241,8 @@ export function beginQueuedRunEdit(
   const originalText = stripAttachmentOnlyBootstrapPrompt(edit.originalText);
   clearComposerDraft(draftKey);
   setComposerDraftText(draftKey, originalText, edit.inputOrigin);
+  if (edit.modelSelection && !edit.followsThreadSelection)
+    updateComposerDraftSettings(draftKey, { modelSelection: edit.modelSelection });
   setComposerDraftContext(draftKey, edit.context);
   queuedRunEdits.begin(
     threadKey,

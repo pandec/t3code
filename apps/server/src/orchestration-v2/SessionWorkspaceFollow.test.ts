@@ -539,6 +539,7 @@ it.live("the follow worker moves the thread for the live process only", () =>
                   title: name,
                   hasCustomTitle: false,
                   workspaceRoot: root,
+                  trackedFolders: [],
                   defaultModelSelection: modelSelection,
                   defaultThreadEnvMode: null,
                   autoPull: false,

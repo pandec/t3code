@@ -51,6 +51,8 @@ model, such as Haiku for Claude or Luna for Codex.
 
 Treat the overall testing or implementation loop—not an assistant turn or one verification pass—as the environment lifecycle boundary.
 
+Exercise the affected flow and capture the state that proves it works. Actually look at the rendered result and think as a user using the feature—check layout, visual hierarchy, alignment, and end-to-end flow—and iterate on anything that feels awkward or unfinished until you are satisfied before handing back.
+
 - Keep the dev process, base directory, selected ports, authenticated browser tab, registered projects, and seeded fixtures alive while the user may inspect the result or request follow-up changes.
 - Do not stop the server merely because one verification pass completed or because you are yielding a response to the user.
 - Before starting another environment, check whether the existing process and browser tab still serve the task. Reuse them when healthy instead of discarding useful state.

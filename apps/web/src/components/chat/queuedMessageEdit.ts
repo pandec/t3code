@@ -1,11 +1,15 @@
 import type {
   ChatAttachment,
+  ChatFileAttachment,
+  ChatImageAttachment,
   ComposerContextId,
+  ComposerContextRecord,
   EnvironmentId,
   ModelSelection,
   OrchestrationMessageContext,
   ThreadId,
 } from "@t3tools/contracts";
+import * as Equal from "effect/Equal";
 import {
   composerDraftHasUserContent,
   composerFileDedupKey,
@@ -20,6 +24,67 @@ import { m } from "../../i18n/messages";
 import { randomUUID } from "~/lib/utils";
 import { applyMessageContextRestore, planMessageContextRestore } from "./messageContextRestore";
 import { releaseDraftAttachments } from "../../lib/attachmentUploadQueue";
+import {
+  attachmentContextRecord,
+  isSameComposerContextPayload,
+} from "../../lib/composerContextRecords";
+
+export function isQueuedImageAttachment(
+  attachment: ChatAttachment,
+): attachment is ChatImageAttachment {
+  return attachment.type === "image";
+}
+
+export function isQueuedFileAttachment(
+  attachment: ChatAttachment,
+): attachment is ChatFileAttachment {
+  return attachment.type === "file";
+}
+
+export function attachmentContextIdsForRecord(
+  context: OrchestrationMessageContext | undefined,
+  attachment: Pick<ChatAttachment, "id" | "type">,
+): ComposerContextId[] {
+  return (context?.records ?? []).flatMap((record) =>
+    record.kind === attachment.type &&
+    "attachmentId" in record &&
+    record.attachmentId === attachment.id
+      ? [record.contextId]
+      : [],
+  );
+}
+
+export function matchRestorableQueuedAttachment(input: {
+  readonly environmentId: EnvironmentId;
+  readonly sourceEnvironmentId: EnvironmentId | null;
+  readonly record: Extract<ComposerContextRecord, { kind: "image" | "file" }>;
+  readonly removedQueuedAttachments: ReadonlyArray<{
+    readonly attachment: ChatAttachment;
+    readonly contextIds: ReadonlyArray<ComposerContextId>;
+  }>;
+}): { readonly attachment: ChatAttachment; readonly contextId: ComposerContextId } | null {
+  if (input.sourceEnvironmentId !== input.environmentId) return null;
+  const match = input.removedQueuedAttachments.find(
+    ({ attachment, contextIds }) =>
+      (isQueuedImageAttachment(attachment) || isQueuedFileAttachment(attachment)) &&
+      attachment.type === input.record.kind &&
+      contextIds.some((contextId) =>
+        isSameComposerContextPayload(
+          attachmentContextRecord({
+            attachment,
+            attachmentId: attachment.id,
+            contextId,
+          }),
+          input.record,
+        ),
+      ),
+  );
+  if (!match || match.contextIds.length === 0) return null;
+  const contextId =
+    match.contextIds.find((candidate) => candidate === input.record.contextId) ??
+    match.contextIds[0]!;
+  return { attachment: match.attachment, contextId };
+}
 
 /** Staged attachments upload as soon as they are added, so a dropped edit must release them. */
 export function discardQueuedEditDraft(target: ComposerThreadTarget): void {
@@ -32,6 +97,7 @@ export function discardQueuedEditDraft(target: ComposerThreadTarget): void {
     }
   }
   store.clearComposerContent(target);
+  store.clearDraftThread(target);
 }
 
 /**
@@ -49,6 +115,8 @@ export function recoverQueuedMessageEdit(input: {
   readonly removedSavedAttachments?: boolean;
   /** The queued message's model, staged so a resend uses it. */
   readonly modelSelection?: ModelSelection;
+  /** The model the edit opened with; a different pick in the edit draft wins. */
+  readonly originalModelSelection?: ModelSelection;
   /** The queued message's own context, which the edit's original chips still point at. */
   readonly original?: {
     readonly context: OrchestrationMessageContext | undefined;
@@ -60,6 +128,12 @@ export function recoverQueuedMessageEdit(input: {
 }): { readonly outcome: "kept" | "clean"; readonly skippedAttachmentCount: number } {
   const store = useComposerDraftStore.getState();
   const edit = store.getComposerDraft(input.editTarget);
+  const editModelSelection = edit?.activeProvider
+    ? edit.modelSelectionByProvider[edit.activeProvider]
+    : undefined;
+  const modelChanged =
+    editModelSelection !== undefined &&
+    !Equal.equals(editModelSelection, input.originalModelSelection);
   const dirty =
     edit !== null &&
     (edit.prompt !== input.originalText ||
@@ -69,6 +143,7 @@ export function recoverQueuedMessageEdit(input: {
       edit.terminalContexts.length > 0 ||
       edit.previewAnnotations.length > 0 ||
       edit.reviewComments.length > 0 ||
+      modelChanged ||
       input.removedSavedAttachments === true);
   // An edit emptied to nothing has nothing to append, so it leaves like an unchanged one.
   const hasContent =
@@ -142,7 +217,12 @@ export function recoverQueuedMessageEdit(input: {
     });
   }
   if (restoredContext !== null) applyMessageContextRestore(input.threadTarget, restoredContext);
-  if (input.modelSelection !== undefined) {
+  if (modelChanged) {
+    store.setModelSelection(input.threadTarget, editModelSelection, {
+      explicit: true,
+      replaceOptions: true,
+    });
+  } else if (input.modelSelection !== undefined) {
     store.setModelSelection(input.threadTarget, input.modelSelection, { replaceOptions: true });
   }
   // Files the thread draft already holds stay behind as duplicates; anything

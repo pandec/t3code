@@ -396,7 +396,7 @@ it.effect("starts a held steer as its own turn when the turn ends inside the win
           (event) =>
             event.type === "run.updated" &&
             event.payload.id === started[0]!.runId &&
-            event.payload.status === "waiting",
+            event.payload.status === "completed",
         );
         yield* Queue.offer(events, {
           type: "provider_turn.updated",
@@ -469,11 +469,18 @@ it.effect("lets the next queued turn start ahead of a held steer, then steers in
             event.payload.status === "running" &&
             event.payload.runAttemptId === queued!.activeAttemptId,
         );
+        // The queue starts the run in a run-update reaction, which can land after the turn-end drain.
+        const queuedStarting = yield* watch(
+          (event) =>
+            event.type === "run.updated" &&
+            event.payload.id === queued!.id &&
+            event.payload.status === "starting",
+        );
         const activeEnded = yield* watch(
           (event) =>
             event.type === "run.updated" &&
             event.payload.id === started[0]!.runId &&
-            event.payload.status === "waiting",
+            event.payload.status === "completed",
         );
         yield* Queue.offer(events, {
           type: "provider_turn.updated",
@@ -491,6 +498,8 @@ it.effect("lets the next queued turn start ahead of a held steer, then steers in
           threadDisposition: "reusable",
         });
         yield* Fiber.join(activeEnded);
+        yield* worker.drain();
+        yield* Fiber.join(queuedStarting);
         yield* worker.drain();
         const runningEvent = yield* Fiber.join(queuedRunning);
         const deadline = DateTime.add(submittedAt, { milliseconds: GRACE_MS });
@@ -559,7 +568,7 @@ it.effect(
             (event) =>
               event.type === "run.updated" &&
               event.payload.id === started[0]!.runId &&
-              event.payload.status === "waiting",
+              event.payload.status === "completed",
           );
           const activeTurn = (yield* orchestrator.getThreadProjection(threadId)).providerTurns[0]!;
           yield* Queue.offer(events, {
@@ -759,7 +768,7 @@ it.effect("an edit that outlasts the turn starts the steer as soon as it ends", 
           (event) =>
             event.type === "run.updated" &&
             event.payload.id === started[0]!.runId &&
-            event.payload.status === "waiting",
+            event.payload.status === "completed",
         );
         yield* Queue.offer(events, {
           type: "provider_turn.updated",
