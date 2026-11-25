@@ -475,6 +475,12 @@ describe("EnvironmentProviderSettings routing", () => {
       driver: ProviderDriverKind.make("codex"),
       displayName: "Fresh",
     });
+
+    // The reset's echo lands first; the later rename must stay pending.
+    state.settings = DEFAULT_UNIFIED_SETTINGS;
+    await screen.rerender(panel({ targetInstanceId: codexId }));
+    await userEvent.click(page.getByRole("switch", { name: "Enable Fresh" }).first());
+    expect(lastUpsertedInstance()).toMatchObject({ displayName: "Fresh", enabled: false });
   });
 
   it("drops a reset's pending envelope once its row is gone", async () => {

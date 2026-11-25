@@ -19,13 +19,17 @@ export type ProviderInstanceSaves = ReadonlyMap<
 const storedSnapshot = (instance: ProviderInstanceConfig | undefined) =>
   stableStringify(instance ?? null);
 
-/** Env values and usage-source keys can echo redacted, so a write and its echo share a key without them. */
+/** Sensitive env values and usage-source keys echo redacted, so a write and its echo share a key without them. */
 export function providerInstanceKey(instance: ProviderInstanceConfig | undefined): string {
   if (instance === undefined) return "";
   const { environment, usageSource } = instance;
   return stableStringify({
     ...instance,
-    environment: environment?.map(({ name, sensitive }) => ({ name, sensitive })),
+    environment: environment?.map((variable) =>
+      variable.sensitive && typeof variable.value === "string"
+        ? { name: variable.name, sensitive: true }
+        : variable,
+    ),
     usageSource: usageSource && {
       kind: usageSource.kind,
       managementUrl: usageSource.managementUrl,
@@ -77,18 +81,29 @@ export function addProviderInstanceSave(
   ]);
 }
 
+/** `returned` is the instance in the server's reply to a successful write. */
 export function settleProviderInstanceSave(
   saves: ProviderInstanceSaves,
   instanceId: ProviderInstanceId,
   sent: ProviderInstanceSave,
   saved: boolean,
+  returned?: ProviderInstanceConfig,
 ): ProviderInstanceSaves {
   const entry = saves.get(instanceId);
   if (entry === undefined) return saves;
+  // A write that changed only redacted fields reads back as the stored envelope, so no echo comes.
+  const sentIndex = entry.saves.findIndex((save) => save.models === sent.models);
+  const unobservable =
+    saved &&
+    sentIndex >= 0 &&
+    storedSnapshot(returned) === entry.stored &&
+    storedSnapshot(sent.models) !== entry.stored;
   return withInstanceSaves(
     saves,
     instanceId,
     entry.stored,
-    settleCustomModelSave(entry.saves, sent, saved),
+    unobservable
+      ? entry.saves.slice(sentIndex + 1)
+      : settleCustomModelSave(entry.saves, sent, saved),
   );
 }

@@ -831,17 +831,25 @@ export function EnvironmentProviderSettings({
     settings.providerInstances,
   );
   if (instanceSaves !== storedInstanceSaves) setInstanceSaves(instanceSaves);
-  const trackInstanceSave = async <R extends { readonly _tag: string }>(
+  const trackInstanceSave = async (
     instanceId: ProviderInstanceId,
     next: ProviderInstanceConfig,
-    write: () => Promise<R>,
+    write: () => ReturnType<typeof persistProviderInstance>,
+    // A reset echoes as an absent instance.
+    echoKey = providerInstanceKey(next),
   ) => {
-    const sent = { models: next, key: providerInstanceKey(next) };
+    const sent = { models: next, key: echoKey };
     const stored = settings.providerInstances?.[instanceId];
     setInstanceSaves((saves) => addProviderInstanceSave(saves, instanceId, sent, stored));
     const result = await write();
     setInstanceSaves((saves) =>
-      settleProviderInstanceSave(saves, instanceId, sent, result._tag !== "Failure"),
+      settleProviderInstanceSave(
+        saves,
+        instanceId,
+        sent,
+        result._tag === "Success",
+        result._tag === "Success" ? result.value.providerInstances?.[instanceId] : undefined,
+      ),
     );
     return result;
   };
@@ -963,8 +971,11 @@ export function EnvironmentProviderSettings({
     );
     if (!confirmed) return;
     // Until it echoes, the card shows and builds on the defaults the unconfigured slot falls back to.
-    const result = await trackInstanceSave(instanceId, { driver: driverKind }, () =>
-      persistProviderInstance({ operation: "remove", instanceId }),
+    const result = await trackInstanceSave(
+      instanceId,
+      { driver: driverKind },
+      () => persistProviderInstance({ operation: "remove", instanceId }),
+      providerInstanceKey(undefined),
     );
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);
