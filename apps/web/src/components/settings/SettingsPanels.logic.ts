@@ -270,27 +270,6 @@ export function buildProviderInstanceUpdatePatch(input: {
   };
 }
 
-/**
- * The instance a Codex setup-mode switch writes. Enables the instance and
- * keeps the rest of its config. Callers pass the pending (overlay) instance
- * when one exists so a switch following an unacknowledged write does not
- * revert that write.
- */
-export function buildCodexSetupModeInstance(
-  instance: ProviderInstanceConfig,
-  setupMode: "managed" | "existing",
-): ProviderInstanceConfig {
-  return {
-    ...instance,
-    enabled: true,
-    config: {
-      ...(instance.config !== null && typeof instance.config === "object" ? instance.config : {}),
-      enabled: true,
-      setupMode,
-    },
-  };
-}
-
 export const PROVIDER_HEALTH_INTERVAL_STEP_SECONDS = 30;
 
 type BackgroundActivityOverridePatch = Partial<{

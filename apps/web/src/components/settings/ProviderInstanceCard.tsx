@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
-import { Fragment, useEffect, useState, type ReactElement, type ReactNode } from "react";
+import { Fragment, useState, type ReactElement, type ReactNode } from "react";
 import { T, useGT, useMessages, Var } from "gt-react";
 import {
   isProviderDriverKind,
@@ -34,6 +34,7 @@ import {
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
+
 import {
   type CustomModelDefinition,
   readCustomModelEntries,
@@ -72,6 +73,12 @@ import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayo
 import { AcpSessionManagementSection } from "./AcpSessionManagementSection";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { readCodexSetupMode } from "./CodexSetupSection.logic";
+import {
+  type CustomModelSave,
+  customModelsKey,
+  pendingCustomModelSaves,
+  settleCustomModelSave,
+} from "./customModelSaves.logic";
 import { getProviderRestartNotice } from "../ProviderUpdateLaunchNotification.logic";
 import {
   getProviderVersionAdvisoryPresentation,
@@ -158,11 +165,6 @@ function providerEnvironmentsEqual(
   );
 }
 
-function readConfigCustomModels(config: unknown): ReadonlyArray<CustomModelDefinition> {
-  if (config === null || typeof config !== "object") return [];
-  return readCustomModelEntries((config as Record<string, unknown>).customModels);
-}
-
 function readConfigString(config: unknown, key: string): string | null {
   if (config === null || typeof config !== "object") return null;
   const value = (config as Record<string, unknown>)[key];
@@ -189,53 +191,6 @@ function readConfigStringRecord(config: unknown, key: string): Readonly<Record<s
     }
   }
   return record;
-}
-
-/** Key-order-insensitive equality for JSON-shaped config blobs. */
-function configsEqual(a: unknown, b: unknown): boolean {
-  if (Object.is(a, b)) return true;
-  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
-  if (Array.isArray(a) || Array.isArray(b)) {
-    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
-    return a.every((entry, index) => configsEqual(entry, b[index]));
-  }
-  const aKeys = Object.keys(a).sort();
-  const bKeys = Object.keys(b).sort();
-  if (aKeys.length !== bKeys.length) return false;
-  return aKeys.every(
-    (key, index) =>
-      key === bKeys[index] &&
-      configsEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]),
-  );
-}
-
-/** The server stores secret env values and usage-source management keys out of band and echoes
- * them redacted, so mask those fields on both sides or a pending write never matches its echo.
- * A foreign edit differing only in masked fields can acknowledge early; that only reverts the
- * card to prop-based behavior. */
-function withComparableSecrets(envelope: ProviderInstanceConfig): unknown {
-  if (envelope.environment === undefined && envelope.usageSource === undefined) return envelope;
-  return {
-    ...envelope,
-    ...(envelope.environment !== undefined
-      ? {
-          environment: envelope.environment.map((variable) => ({
-            name: variable.name,
-            sensitive: variable.sensitive,
-          })),
-        }
-      : {}),
-    ...(envelope.usageSource !== undefined
-      ? {
-          usageSource: {
-            kind: envelope.usageSource.kind,
-            ...(envelope.usageSource.managementUrl !== undefined
-              ? { managementUrl: envelope.usageSource.managementUrl }
-              : {}),
-          },
-        }
-      : {}),
-  };
 }
 
 /** Preserve explicit empty arrays/objects; clearing a custom list differs from selecting driver defaults. */
@@ -681,10 +636,8 @@ export function ProviderEnvironmentSection(props: {
 }
 
 /**
- * Emits field-level intent rather than a whole `usageSource`: the card owns
- * merging against the last written envelope, so an edit made while an
- * earlier write is still in flight cannot resurrect a stale sibling field
- * from this section's props.
+ * Emits field-level intent rather than a whole `usageSource`; the card merges
+ * it into the latest written envelope, which keeps the redacted key flag.
  */
 type ProviderUsageSourcePatch =
   | { readonly enabled: false }
@@ -847,10 +800,6 @@ interface ProviderInstanceCardProps {
   readonly instance: ProviderInstanceConfig;
   readonly driverOption: ProviderClientDefinition | undefined;
   readonly liveProvider: ServerProvider | undefined;
-  /** Shared by the list row and editor mount for this environment. */
-  readonly pendingInstancesRef: {
-    current: Map<ProviderInstanceId, ProviderInstanceConfig>;
-  };
   readonly mode: "list" | "editor";
   readonly selected?: boolean | undefined;
   readonly onSelect?: (() => void) | undefined;
@@ -891,6 +840,33 @@ const EMPTY_ACP_PROJECTS: NonNullable<ProviderInstanceCardProps["acpProjects"]> 
 const NO_SECRET_SOURCES: ReadonlyArray<SecretSource> = [];
 const NO_CUSTOM_MODELS: ReadonlyArray<CustomModelDefinition> = [];
 
+/**
+ * Every custom model save writes the whole list, so the next edit starts from the last list sent
+ * until the config stream echoes it, which can land before or after the save's reply.
+ */
+function useCustomModelSaves(
+  stored: ReadonlyArray<CustomModelDefinition>,
+  save: (next: ReadonlyArray<CustomModelDefinition>) => Promise<boolean>,
+) {
+  const [saves, setSaves] = useState<ReadonlyArray<CustomModelSave>>([]);
+  const storedKey = customModelsKey(stored);
+  const [previousStoredKey, setPreviousStoredKey] = useState(storedKey);
+  if (previousStoredKey !== storedKey) {
+    setPreviousStoredKey(storedKey);
+    // Unchanged contents can match a queued restore, so only a stream change can be an echo.
+    setSaves((list) => pendingCustomModelSaves(list, storedKey));
+  }
+  const current = saves.at(-1)?.models ?? stored;
+  const update = useStableCallback(async (next: ReadonlyArray<CustomModelDefinition>) => {
+    const sent: CustomModelSave = { models: next, key: customModelsKey(next) };
+    setSaves((list) => [...list, sent]);
+    const saved = await save(next);
+    setSaves((list) => settleCustomModelSave(list, sent, saved));
+    return saved;
+  });
+  return [current, update] as const;
+}
+
 /** Unknown drivers stay read-only to preserve fork config. projectOverride switches affect only the
  * project, not instance.enabled. */
 export function ProviderInstanceCard({
@@ -898,7 +874,6 @@ export function ProviderInstanceCard({
   instance,
   driverOption,
   liveProvider,
-  pendingInstancesRef,
   mode,
   selected = false,
   onSelect,
@@ -1005,25 +980,47 @@ export function ProviderInstanceCard({
   const driverKind: ProviderDriverKind | null = isProviderDriverKind(instance.driver)
     ? instance.driver
     : null;
-  // Writes have no optimistic patch and replace the whole envelope, so every mutator bases on the
-  // last *written* envelope (panel-owned, shared by list and editor mounts) instead of the stale
-  // prop. Clear an entry only when an echo structurally matches it, so an intermediate echo cannot
-  // hide a newer in-flight write; secrets compare in the server-normalized shape.
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- acknowledges a pending write once the server echoes it
-  useEffect(() => {
-    const pendingInstance = pendingInstancesRef.current.get(instanceId);
-    if (
-      pendingInstance !== undefined &&
-      configsEqual(withComparableSecrets(pendingInstance), withComparableSecrets(instance))
-    ) {
-      pendingInstancesRef.current.delete(instanceId);
-    }
-  }, [instance, instanceId, pendingInstancesRef]);
-  const baseInstance = () => pendingInstancesRef.current.get(instanceId) ?? instance;
-  const baseConfig = () => baseInstance().config;
-  const commitInstance = (next: ProviderInstanceConfig) => {
-    pendingInstancesRef.current.set(instanceId, next);
-    return onUpdate(next);
+  const storedCustomModels =
+    instance.config !== null && typeof instance.config === "object"
+      ? (instance.config as Record<string, unknown>).customModels
+      : undefined;
+  const customModelIcons =
+    instance.driver === "antigravity"
+      ? EMPTY_STRING_RECORD
+      : readConfigStringRecord(instance.config, "customModelIcons");
+  const [customModels, updateCustomModels] = useCustomModelSaves(
+    instance.driver === "antigravity"
+      ? NO_CUSTOM_MODELS
+      : readCustomModelEntries(storedCustomModels),
+    (next) => {
+      const nextConfig = nextConfigBlobWithValue(
+        instance.config,
+        "customModels",
+        next.map(toCustomModelSetting),
+      );
+      // Fork: model removal and icon pruning share one write so a deleted slug's icon cannot return.
+      const remainingSlugs = new Set(next.map((entry) => entry.slug));
+      const keptIcons = Object.entries(customModelIcons).filter(([slug]) =>
+        remainingSlugs.has(slug),
+      );
+      if (keptIcons.length > 0) nextConfig.customModelIcons = Object.fromEntries(keptIcons);
+      else delete nextConfig.customModelIcons;
+      const { config: _omit, ...rest } = instance;
+      return onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
+    },
+  );
+  const modelsForDisplay = deriveProviderModelsForDisplay({
+    liveModels: liveProvider?.models,
+    customModels,
+  });
+  const updateDisplayName = (value: string) => {
+    const trimmed = value.trim();
+    const { displayName: _omit, ...rest } = instance;
+    onUpdate(
+      trimmed.length > 0
+        ? ({ ...rest, displayName: trimmed } as ProviderInstanceConfig)
+        : (rest as ProviderInstanceConfig),
+    );
   };
 
   const updateEnabled = (value: boolean) => {
@@ -1031,9 +1028,178 @@ export function ProviderInstanceCard({
       projectOverride.onChange(value);
       return;
     }
-    commitInstance({ ...baseInstance(), enabled: value });
+    onUpdate({ ...instance, enabled: value });
   };
 
+  const updateAccentColor = (value: string) => {
+    const normalized = normalizeProviderAccentColor(value);
+    const { accentColor: _omit, ...rest } = instance;
+    onUpdate(
+      normalized
+        ? ({ ...rest, accentColor: normalized } as ProviderInstanceConfig)
+        : (rest as ProviderInstanceConfig),
+    );
+  };
+
+  const updateConfig = (nextConfig: Record<string, unknown> | undefined) => {
+    const { config: _omit, ...rest } = instance;
+    onUpdate(
+      nextConfig !== undefined
+        ? ({ ...rest, config: nextConfig } as ProviderInstanceConfig)
+        : (rest as ProviderInstanceConfig),
+    );
+  };
+
+  const updateCustomModelIcon = (slug: string, icon: string | null) => {
+    // Null prototype so a slug like "__proto__" becomes an own data
+    // property instead of silently vanishing into the inherited setter.
+    const icons: Record<string, string> = Object.assign(Object.create(null), customModelIcons);
+    if (icon === null) {
+      delete icons[slug];
+    } else {
+      icons[slug] = icon;
+    }
+    const nextConfig = nextConfigBlobWithValue(instance.config, "customModelIcons", icons);
+    if (Object.keys(icons).length === 0) {
+      delete nextConfig.customModelIcons;
+    }
+    updateConfig(nextConfig);
+  };
+
+  const updateEnvironment = (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => {
+    const cleaned = environment.filter((variable) => variable.name.trim().length > 0);
+    const { environment: _omit, ...rest } = instance;
+    onUpdate(
+      cleaned.length > 0
+        ? ({ ...rest, environment: cleaned } as ProviderInstanceConfig)
+        : (rest as ProviderInstanceConfig),
+    );
+  };
+  const environmentFields = driverOption?.environmentFields ?? [];
+  const environmentFieldNames = new Set(environmentFields.map((field) => field.name));
+  const genericEnvironment = providerEnvironmentWithoutNames(
+    instance.environment,
+    environmentFieldNames,
+  );
+  const updateGenericEnvironment = (
+    environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>,
+  ) => {
+    const dedicatedEnvironment = (instance.environment ?? []).filter((variable) =>
+      environmentFieldNames.has(variable.name),
+    );
+    updateEnvironment([...dedicatedEnvironment, ...environment]);
+  };
+  const updateEnvironmentField = (field: ProviderEnvironmentField, value: string) => {
+    updateEnvironment(nextProviderEnvironmentWithFieldValue(instance.environment, field, value));
+  };
+  const updateEnvironmentFieldSecret = (
+    field: ProviderEnvironmentField,
+    secret: SecretReference | undefined,
+  ) => {
+    updateEnvironment(nextProviderEnvironmentWithFieldSecret(instance.environment, field, secret));
+  };
+  const removeEnvironmentField = (field: ProviderEnvironmentField) => {
+    updateEnvironment(providerEnvironmentWithoutNames(instance.environment, new Set([field.name])));
+  };
+
+  const updateUsageSource = (patch: ProviderUsageSourcePatch) => {
+    const { usageSource: current, ...rest } = instance;
+    if (!patch.enabled) {
+      onUpdate(rest as ProviderInstanceConfig);
+      return;
+    }
+    const base: ProviderInstanceUsageSource = current ?? {
+      kind: PROVIDER_USAGE_SOURCE_CLIPROXYAPI,
+      managementKey: "",
+    };
+    const managementUrl = "managementUrl" in patch ? patch.managementUrl : base.managementUrl;
+    // A newly entered key is unredacted; the server redacts it on echo.
+    const keyFields =
+      patch.managementKey !== undefined
+        ? { managementKey: patch.managementKey }
+        : {
+            managementKey: base.managementKey,
+            ...(base.managementKeyRedacted ? { managementKeyRedacted: true } : {}),
+          };
+    onUpdate({
+      ...rest,
+      usageSource: {
+        kind: PROVIDER_USAGE_SOURCE_CLIPROXYAPI,
+        ...(managementUrl !== undefined ? { managementUrl } : {}),
+        ...keyFields,
+      },
+    } as ProviderInstanceConfig);
+  };
+
+  const titleIconNode = (
+    <ProviderInstanceIcon
+      driverKind={driverKind ?? instance.driver}
+      displayName={displayName}
+      accentColor={accentColor}
+      acpRegistryAgentId={
+        readConfigString(instance.config, "source") === "local"
+          ? undefined
+          : (readConfigString(instance.config, "agentId") ?? undefined)
+      }
+      acpRegistryIconUrl={
+        readConfigString(instance.config, "source") === "local"
+          ? undefined
+          : (readConfigString(instance.config, "registryIconUrl") ?? undefined)
+      }
+      showBadge={Boolean(accentColor)}
+      className="size-5"
+      iconClassName="size-4 text-foreground/80"
+      badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-5xs"
+    />
+  );
+
+  const titleTailNode = headerAction ? (
+    <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">{headerAction}</span>
+  ) : null;
+
+  const versionCodeNode = versionLabel ? (
+    <code className="text-xs text-muted-foreground">{versionLabel}</code>
+  ) : null;
+
+  const statusDotNode =
+    statusKey === "warning" || statusKey === "error" ? (
+      <span className={cn("size-1.5 shrink-0 rounded-full", statusStyle.dot)} aria-hidden />
+    ) : null;
+  const needsAttention = statusKey === "warning" || statusKey === "error";
+  const statusDiagnostic = hasCompatibilityWarning && needsAttention ? summary.detail : null;
+  const inlineStatusDetail = hasCompatibilityWarning
+    ? compatibility?.status === "broken"
+      ? gt("Incompatible")
+      : compatibility?.status === "unsupported"
+        ? gt("Unsupported")
+        : gt("Limited support")
+    : summary.detail;
+  const editorStatusNode =
+    isAuthenticated && authEmail ? (
+      <>
+        {needsAttention ? statusDotNode : null}
+        <span className="min-w-0 max-w-full">
+          <T>
+            Authenticated as{" "}
+            <Var>
+              <ProviderAuthEmail email={authEmail} />
+            </Var>
+          </T>
+        </span>
+        {authLabel ? <span>· {authLabel}</span> : null}
+        {inlineStatusDetail ? (
+          <span className="min-w-0 [overflow-wrap:anywhere]">· {inlineStatusDetail}</span>
+        ) : null}
+      </>
+    ) : (
+      <>
+        {statusDotNode}
+        <span>{summary.headline}</span>
+        {inlineStatusDetail ? (
+          <span className="min-w-0 [overflow-wrap:anywhere]">· {inlineStatusDetail}</span>
+        ) : null}
+      </>
+    );
   const versionAdvisoryNode = versionAdvisory ? (
     <Popover>
       <Tooltip>
@@ -1152,183 +1318,7 @@ export function ProviderInstanceCard({
     </Popover>
   ) : null;
 
-  // Render reads the echoed `instance`; only mutators read the pending
-  // envelope. Keyed on the stored list, not the whole instance, so writing
-  // another field leaves the models list (often ~50 rows) with the same props.
-  const storedCustomModels =
-    instance.config !== null && typeof instance.config === "object"
-      ? (instance.config as Record<string, unknown>).customModels
-      : undefined;
-  const customModels =
-    instance.driver === "antigravity"
-      ? NO_CUSTOM_MODELS
-      : readCustomModelEntries(storedCustomModels);
-  const customModelIcons =
-    instance.driver === "antigravity"
-      ? EMPTY_STRING_RECORD
-      : readConfigStringRecord(instance.config, "customModelIcons");
-  // Server-returned models may lag behind settings writes. Treat server
-  // models as the source for built-ins only; custom rows come directly
-  // from the current instance config so add/remove reflects immediately.
-  const modelsForDisplay = deriveProviderModelsForDisplay({
-    liveModels: liveProvider?.models,
-    customModels,
-  });
-
-  const updateDisplayName = (value: string) => {
-    const trimmed = value.trim();
-    const { displayName: _omit, ...rest } = baseInstance();
-    commitInstance(
-      trimmed.length > 0
-        ? ({ ...rest, displayName: trimmed } as ProviderInstanceConfig)
-        : (rest as ProviderInstanceConfig),
-    );
-  };
-
-  const updateAccentColor = (value: string) => {
-    const normalized = normalizeProviderAccentColor(value);
-    const { accentColor: _omit, ...rest } = baseInstance();
-    commitInstance(
-      normalized
-        ? ({ ...rest, accentColor: normalized } as ProviderInstanceConfig)
-        : (rest as ProviderInstanceConfig),
-    );
-  };
-
-  const commitConfig = (nextConfig: Record<string, unknown> | undefined) => {
-    const { config: _omit, ...rest } = baseInstance();
-    return commitInstance(
-      nextConfig !== undefined
-        ? ({ ...rest, config: nextConfig } as ProviderInstanceConfig)
-        : (rest as ProviderInstanceConfig),
-    );
-  };
-
-  // Keys owned by the models section below, not by ProviderSettingsForm.
-  const MODEL_SECTION_CONFIG_KEYS = ["customModels", "customModelIcons"] as const;
-
-  const updateConfig = (formConfig: Record<string, unknown> | undefined) => {
-    // The form's replacement blob comes from a `value` prop that may predate an in-flight
-    // models/icons write. It never edits those keys, so re-overlay them from the latest base
-    // instead of letting the stale snapshot clobber or resurrect them.
-    const base = baseConfig();
-    const baseObject =
-      base !== null && typeof base === "object" ? (base as Record<string, unknown>) : undefined;
-    const overlaid: Record<string, unknown> = { ...formConfig };
-    for (const key of MODEL_SECTION_CONFIG_KEYS) {
-      const baseValue = baseObject?.[key];
-      if (baseValue !== undefined) overlaid[key] = baseValue;
-      else delete overlaid[key];
-    }
-    commitConfig(
-      formConfig === undefined && Object.keys(overlaid).length === 0 ? undefined : overlaid,
-    );
-  };
-
-  const updateCustomModels = useStableCallback((next: ReadonlyArray<CustomModelDefinition>) => {
-    const base = baseConfig();
-    // `onChange` describes one edit relative to this render. Replay that
-    // delta onto the latest pending list so a second add/edit/remove cannot
-    // overwrite an earlier write that the server has not echoed yet.
-    const nextSlugs = new Set(next.map((entry) => entry.slug));
-    const removedSlugs = new Set(
-      customModels.filter((entry) => !nextSlugs.has(entry.slug)).map((entry) => entry.slug),
-    );
-    const merged = readConfigCustomModels(base).filter((entry) => !removedSlugs.has(entry.slug));
-    for (const nextEntry of next) {
-      const renderedEntry = customModels.find((entry) => entry.slug === nextEntry.slug);
-      const currentIndex = merged.findIndex((entry) => entry.slug === nextEntry.slug);
-      if (renderedEntry === undefined) {
-        if (currentIndex === -1) merged.push(nextEntry);
-      } else if (!configsEqual(renderedEntry, nextEntry) && currentIndex !== -1) {
-        // The rendered row is the echoed definition, which can predate a
-        // pending edit of the same model; carry over only the fields this
-        // edit changed so an unechoed rename or option change survives.
-        const pending = merged[currentIndex]!;
-        const edited: CustomModelDefinition = {
-          slug: nextEntry.slug,
-          name: renderedEntry.name === nextEntry.name ? pending.name : nextEntry.name,
-          capabilities: configsEqual(renderedEntry.capabilities, nextEntry.capabilities)
-            ? pending.capabilities
-            : nextEntry.capabilities,
-        };
-        merged[currentIndex] = edited;
-      }
-    }
-    const nextConfig = nextConfigBlobWithValue(
-      base,
-      "customModels",
-      merged.map(toCustomModelSetting),
-    );
-    // Model removal and icon pruning belong to one config write so a stale
-    // icon map cannot resurrect an override for a deleted slug.
-    const remainingSlugs = new Set(merged.map((entry) => entry.slug));
-    const keptIcons = Object.fromEntries(
-      Object.entries(readConfigStringRecord(base, "customModelIcons")).filter(([slug]) =>
-        remainingSlugs.has(slug),
-      ),
-    );
-    if (Object.keys(keptIcons).length > 0) {
-      nextConfig.customModelIcons = keptIcons;
-    } else {
-      delete nextConfig.customModelIcons;
-    }
-    return commitConfig(nextConfig);
-  });
-
-  const updateCustomModelIcon = (slug: string, icon: string | null) => {
-    const base = baseConfig();
-    // Null prototype so a slug like "__proto__" becomes an own data
-    // property instead of silently vanishing into the inherited setter.
-    const icons: Record<string, string> = Object.assign(
-      Object.create(null),
-      readConfigStringRecord(base, "customModelIcons"),
-    );
-    if (icon === null) {
-      delete icons[slug];
-    } else {
-      icons[slug] = icon;
-    }
-    const nextConfig = nextConfigBlobWithValue(base, "customModelIcons", icons);
-    if (Object.keys(icons).length === 0) {
-      delete nextConfig.customModelIcons;
-    }
-    commitConfig(nextConfig);
-  };
-
   if (mode === "list") {
-    const listTitleIconNode = (
-      <ProviderInstanceIcon
-        driverKind={driverKind ?? instance.driver}
-        displayName={displayName}
-        accentColor={accentColor}
-        acpRegistryAgentId={
-          readConfigString(instance.config, "source") === "local"
-            ? undefined
-            : (readConfigString(instance.config, "agentId") ?? undefined)
-        }
-        acpRegistryIconUrl={
-          readConfigString(instance.config, "source") === "local"
-            ? undefined
-            : (readConfigString(instance.config, "registryIconUrl") ?? undefined)
-        }
-        showBadge={Boolean(accentColor)}
-        className="size-5"
-        iconClassName="size-4 text-foreground/80"
-        badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-3xs"
-      />
-    );
-    const listVersionCodeNode = versionLabel ? (
-      <code className="max-w-24 shrink-0 truncate text-xs text-muted-foreground">
-        {versionLabel}
-      </code>
-    ) : null;
-    const listStatusDotNode =
-      statusKey === "warning" || statusKey === "error" ? (
-        <span className={cn("size-1.5 shrink-0 rounded-full", statusStyle.dot)} aria-hidden />
-      ) : null;
-    const listNeedsAttention = statusKey === "warning" || statusKey === "error";
-
     return (
       <div
         data-slot="settings-row"
@@ -1350,7 +1340,7 @@ export function ProviderInstanceCard({
             aria-label={gt("Select {provider}", { provider: displayName })}
             aria-pressed={selected}
           />
-          {listTitleIconNode}
+          {titleIconNode}
           <span className="min-w-0 flex-1">
             <span className="flex min-w-0 items-center gap-2">
               <span className="truncate text-sm font-medium text-foreground">{displayName}</span>
@@ -1359,23 +1349,33 @@ export function ProviderInstanceCard({
                   {instanceId}
                 </code>
               ) : null}
-              {listVersionCodeNode}
+              {versionLabel ? (
+                <code className="max-w-24 shrink-0 truncate text-xs text-muted-foreground">
+                  {versionLabel}
+                </code>
+              ) : null}
               {versionAdvisoryNode}
             </span>
             <span className="mt-0.5 flex items-start gap-1.5 text-xs leading-normal text-muted-foreground/80">
-              {listStatusDotNode && !updateProgress ? (
-                <span className="flex h-[1.45em] shrink-0 items-center">{listStatusDotNode}</span>
+              {statusDotNode && !updateProgress ? (
+                <span className="flex h-[1.45em] shrink-0 items-center">{statusDotNode}</span>
               ) : null}
-              <span aria-live="polite" className="line-clamp-2 [overflow-wrap:anywhere]">
-                {updateProgress ? (
-                  gt("Updating · {progress}", { progress: updateProgress })
-                ) : (
-                  <>
-                    {summary.headline}
-                    {listNeedsAttention && summary.detail ? ` · ${summary.detail}` : null}
-                  </>
-                )}
-              </span>
+              <ProviderStatusDiagnostic detail={statusDiagnostic}>
+                <span
+                  tabIndex={statusDiagnostic ? 0 : undefined}
+                  aria-live="polite"
+                  className="pointer-events-auto line-clamp-2 [overflow-wrap:anywhere]"
+                >
+                  {updateProgress ? (
+                    gt("Updating · {progress}", { progress: updateProgress })
+                  ) : (
+                    <>
+                      {summary.headline}
+                      {needsAttention && inlineStatusDetail ? ` · ${inlineStatusDetail}` : null}
+                    </>
+                  )}
+                </span>
+              </ProviderStatusDiagnostic>
             </span>
           </span>
         </div>
@@ -1408,150 +1408,6 @@ export function ProviderInstanceCard({
     );
   }
 
-  const updateEnvironment = (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => {
-    const cleaned = environment.filter((variable) => variable.name.trim().length > 0);
-    const { environment: _omit, ...rest } = baseInstance();
-    commitInstance(
-      cleaned.length > 0
-        ? ({ ...rest, environment: cleaned } as ProviderInstanceConfig)
-        : (rest as ProviderInstanceConfig),
-    );
-  };
-  // Drivers that need a named secret (Cursor's API key) get a dedicated field;
-  // the generic editor only shows the remaining variables.
-  const environmentFields = driverOption?.environmentFields ?? [];
-  const environmentFieldNames = new Set(environmentFields.map((field) => field.name));
-  const genericEnvironment = providerEnvironmentWithoutNames(
-    instance.environment,
-    environmentFieldNames,
-  );
-  const updateGenericEnvironment = (
-    environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>,
-  ) => {
-    const dedicatedEnvironment = (baseInstance().environment ?? []).filter((variable) =>
-      environmentFieldNames.has(variable.name),
-    );
-    updateEnvironment([...dedicatedEnvironment, ...environment]);
-  };
-  const updateEnvironmentField = (field: ProviderEnvironmentField, value: string) => {
-    updateEnvironment(
-      nextProviderEnvironmentWithFieldValue(baseInstance().environment, field, value),
-    );
-  };
-  const updateEnvironmentFieldSecret = (
-    field: ProviderEnvironmentField,
-    secret: SecretReference | undefined,
-  ) => {
-    updateEnvironment(
-      nextProviderEnvironmentWithFieldSecret(baseInstance().environment, field, secret),
-    );
-  };
-  const removeEnvironmentField = (field: ProviderEnvironmentField) => {
-    updateEnvironment(
-      providerEnvironmentWithoutNames(baseInstance().environment, new Set([field.name])),
-    );
-  };
-
-  const updateUsageSource = (patch: ProviderUsageSourcePatch) => {
-    const { usageSource: current, ...rest } = baseInstance();
-    if (!patch.enabled) {
-      commitInstance(rest as ProviderInstanceConfig);
-      return;
-    }
-    const base: ProviderInstanceUsageSource = current ?? {
-      kind: PROVIDER_USAGE_SOURCE_CLIPROXYAPI,
-      managementKey: "",
-    };
-    const managementUrl = "managementUrl" in patch ? patch.managementUrl : base.managementUrl;
-    // A newly entered key is unredacted; the server redacts it on echo.
-    const keyFields =
-      patch.managementKey !== undefined
-        ? { managementKey: patch.managementKey }
-        : {
-            managementKey: base.managementKey,
-            ...(base.managementKeyRedacted ? { managementKeyRedacted: true } : {}),
-          };
-    commitInstance({
-      ...rest,
-      usageSource: {
-        kind: PROVIDER_USAGE_SOURCE_CLIPROXYAPI,
-        ...(managementUrl !== undefined ? { managementUrl } : {}),
-        ...keyFields,
-      },
-    } as ProviderInstanceConfig);
-  };
-
-  const titleIconNode = (
-    <ProviderInstanceIcon
-      driverKind={driverKind ?? instance.driver}
-      displayName={displayName}
-      accentColor={accentColor}
-      acpRegistryAgentId={
-        readConfigString(instance.config, "source") === "local"
-          ? undefined
-          : (readConfigString(instance.config, "agentId") ?? undefined)
-      }
-      acpRegistryIconUrl={
-        readConfigString(instance.config, "source") === "local"
-          ? undefined
-          : (readConfigString(instance.config, "registryIconUrl") ?? undefined)
-      }
-      showBadge={Boolean(accentColor)}
-      className="size-5"
-      iconClassName="size-4 text-foreground/80"
-      badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-5xs"
-    />
-  );
-
-  const titleTailNode = headerAction ? (
-    <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">{headerAction}</span>
-  ) : null;
-
-  const versionCodeNode = versionLabel ? (
-    <code className="text-xs text-muted-foreground">{versionLabel}</code>
-  ) : null;
-
-  // Healthy and disabled rows read fine from their text; only trouble gets a dot.
-  const statusDotNode =
-    statusKey === "warning" || statusKey === "error" ? (
-      <span className={cn("size-1.5 shrink-0 rounded-full", statusStyle.dot)} aria-hidden />
-    ) : null;
-  const needsAttention = statusKey === "warning" || statusKey === "error";
-  const statusDiagnostic = hasCompatibilityWarning && needsAttention ? summary.detail : null;
-  // Keep compatibility copy compact; the version popover carries the explanation.
-  const inlineStatusDetail = hasCompatibilityWarning
-    ? compatibility?.status === "broken"
-      ? gt("Incompatible")
-      : compatibility?.status === "unsupported"
-        ? gt("Unsupported")
-        : gt("Limited support")
-    : summary.detail;
-  const editorStatusNode =
-    isAuthenticated && authEmail ? (
-      <>
-        {needsAttention ? statusDotNode : null}
-        <span className="min-w-0 max-w-full">
-          <T>
-            Authenticated as{" "}
-            <Var>
-              <ProviderAuthEmail email={authEmail} />
-            </Var>
-          </T>
-        </span>
-        {authLabel ? <span>· {authLabel}</span> : null}
-        {inlineStatusDetail ? (
-          <span className="min-w-0 [overflow-wrap:anywhere]">· {inlineStatusDetail}</span>
-        ) : null}
-      </>
-    ) : (
-      <>
-        {statusDotNode}
-        <span>{summary.headline}</span>
-        {inlineStatusDetail ? (
-          <span className="min-w-0 [overflow-wrap:anywhere]">· {inlineStatusDetail}</span>
-        ) : null}
-      </>
-    );
   const editorHeaderAction = (
     <div className="flex shrink-0 items-center gap-1.5">
       {driverOption?.badgeLabel ? (
@@ -1806,6 +1662,7 @@ export function ProviderInstanceCard({
             </p>
             <ProviderModelsSection
               canManageCustomModels={!readOnly}
+              canWritePreferences={canWriteSettings}
               instanceId={instanceId}
               driverKind={driverKind}
               models={modelsForDisplay}

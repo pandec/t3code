@@ -351,7 +351,8 @@ describe("EnvironmentProviderSettings routing", () => {
     await using screen = await render(panel());
 
     await commitDisplayName(screen.container, codexId, "Work");
-    await userEvent.click(page.getByRole("switch", { name: "Enable Codex" }).first());
+    // The list row already shows the unechoed name.
+    await userEvent.click(page.getByRole("switch", { name: "Enable Work" }).first());
 
     expect(lastUpsertedInstance()).toEqual({
       driver: ProviderDriverKind.make("codex"),
@@ -419,6 +420,34 @@ describe("EnvironmentProviderSettings routing", () => {
     });
   });
 
+  it("retires an unechoed save once another writer changes the instance", async () => {
+    await setup();
+    const codex = ProviderDriverKind.make("codex");
+    state.settings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: { [customId]: { driver: codex, enabled: true, displayName: "Work" } },
+    };
+    await using screen = await render(panel({ targetInstanceId: customId }));
+    await commitDisplayName(screen.container, customId, "Mine");
+
+    // Another device's edit arrives instead of this save's echo.
+    state.settings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [customId]: { driver: codex, enabled: true, displayName: "Theirs", accentColor: "#ff0000" },
+      },
+    };
+    await screen.rerender(panel({ targetInstanceId: customId }));
+    await userEvent.click(page.getByRole("switch", { name: "Enable Theirs" }).first());
+
+    expect(lastUpsertedInstance()).toEqual({
+      driver: codex,
+      enabled: false,
+      displayName: "Theirs",
+      accentColor: "#ff0000",
+    });
+  });
+
   it("bases an edit made right after a reset on the provider defaults", async () => {
     await setup();
     state.confirm.mockResolvedValue(true);
@@ -440,8 +469,7 @@ describe("EnvironmentProviderSettings routing", () => {
       instanceId: codexId,
     });
 
-    // The reset has not echoed, so the card still shows the old envelope; the
-    // edit must not resurrect it.
+    // The reset has not echoed; the edit must not resurrect the old envelope.
     await commitDisplayName(screen.container, codexId, "Fresh");
     expect(lastUpsertedInstance()).toEqual({
       driver: ProviderDriverKind.make("codex"),

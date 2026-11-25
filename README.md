@@ -99,7 +99,7 @@ This is a personal fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3cod
 - Pull request writes (merge, review, comment) first confirm that the checkout still points at the target repository, fall back to another checkout of the same repository when the original is gone, and refuse otherwise.
 - Automatic worktree cleanup also spares checkouts with background work, a queued message held by Stop, a pending archive or worktree move, or another thread reaching them through a symlinked path (a thread's own subagents don't count), and a turn never starts in a checkout that is being removed. SP Labs lab worktrees are never removed. **Keep worktrees with local changes** defaults to **Any local files**, so ignored files such as `.env` keep a worktree unless you choose a looser policy.
 - A turn cut off by a server restart is reported to the next turn as stranded, not as a user stop, so the agent continues instead of halting and apologising.
-- Unsaved edits on a provider settings card survive resets, rejected writes, and saves from other cards.
+- Unsaved edits on a provider settings card survive resets, rejected writes, and saves from other cards, and never revert a newer change made on another device.
 - Escalating desktop process termination and an interactive sidebar resize rail.
 
 ### Fork infrastructure
