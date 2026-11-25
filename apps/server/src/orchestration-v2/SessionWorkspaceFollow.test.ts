@@ -29,7 +29,9 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+import * as ServerConfig from "../config.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
@@ -383,6 +385,11 @@ it.live("a followed move keeps the session; a T3 move restarts it in the new wor
   ),
 );
 
+const platformLayer = GitVcsDriver.layer.pipe(
+  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-follow-config-" })),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+);
+
 const makeRepository = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -402,29 +409,47 @@ const makeRepository = Effect.gen(function* () {
       .pipe(Effect.flatMap((code) => (Number(code) === 0 ? Effect.void : Effect.die(args))));
   const root = path.join(scratch, "repo");
   const worktree = path.join(scratch, "repo-feature");
+  const detached = path.join(scratch, "repo-detached");
+  const annexed = path.join(scratch, "repo-annexed");
   const other = path.join(scratch, "other");
   yield* fileSystem.makeDirectory(path.join(root, "src"), { recursive: true });
   yield* fileSystem.makeDirectory(other);
   yield* git(root, "init", "--quiet");
   yield* git(root, "commit", "--allow-empty", "--quiet", "-m", "init");
   yield* git(root, "worktree", "add", "--quiet", "-b", "feature", worktree);
+  yield* git(root, "worktree", "add", "--quiet", "--detach", detached);
+  yield* git(root, "worktree", "add", "--quiet", "-b", "annexed", annexed);
+  // git-annex replaces a linked worktree's `.git` file with a symlink to its admin directory.
+  yield* fileSystem.remove(path.join(annexed, ".git"));
+  yield* fileSystem.symlink(
+    path.join(root, ".git", "worktrees", "repo-annexed"),
+    path.join(annexed, ".git"),
+  );
   yield* git(other, "init", "--quiet");
-  return { scratch, root, worktree, other, path };
+  return { scratch, root, worktree, detached, annexed, other, path };
 });
 
 it.effect("follows only into existing checkouts of the project's repository", () =>
   Effect.gen(function* () {
-    const { scratch, root, worktree, other, path } = yield* makeRepository;
+    const { scratch, root, worktree, detached, annexed, other, path } = yield* makeRepository;
     const follow = (cwd: string) => resolveFollowedWorkspace({ workspaceRoot: root, cwd });
     assert.deepEqual(
       yield* follow(worktree),
       Option.some({ worktreePath: worktree, branch: "feature" }),
     );
+    assert.deepEqual(
+      yield* follow(detached),
+      Option.some({ worktreePath: detached, branch: null }),
+    );
+    assert.deepEqual(
+      yield* follow(annexed),
+      Option.some({ worktreePath: annexed, branch: "annexed" }),
+    );
     assert.deepEqual(yield* follow(root), Option.some({ worktreePath: null, branch: null }));
     assert.isTrue(Option.isNone(yield* follow(path.join(root, "src"))));
     assert.isTrue(Option.isNone(yield* follow(other)));
     assert.isTrue(Option.isNone(yield* follow(path.join(scratch, "removed"))));
-  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  }).pipe(Effect.scoped, Effect.provide(platformLayer)),
 );
 
 it.effect("follows only for the process that moved, while the thread is open", () =>
@@ -489,7 +514,7 @@ it.effect("follows only for the process that moved, while the thread is open", (
         yield* plan({ thread: { ...thread, worktreePath: worktree, branch: "feature" } }),
       ),
     );
-  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  }).pipe(Effect.scoped, Effect.provide(platformLayer)),
 );
 
 it.live("the follow worker moves the thread for the live process only", () =>
@@ -633,7 +658,7 @@ it.live("the follow worker moves the thread for the live process only", () =>
 
       assert.deepEqual((yield* Ref.get(state)).openedCwds, [root]);
     }),
-  ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  ).pipe(Effect.provide(platformLayer)),
 );
 
 // Fork (DECISIONS 2.5 x 5.8): a completed agent-requested switch is a T3 move,
@@ -807,5 +832,5 @@ it.live("a completed worktree switch restarts the session in the new worktree", 
       assert.deepEqual(captured.openedCwds, [root, worktree]);
       assert.deepEqual(captured.startedCwds, [root, worktree]);
     }),
-  ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  ).pipe(Effect.provide(platformLayer)),
 );

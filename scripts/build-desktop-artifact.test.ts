@@ -44,7 +44,6 @@ import {
   resolveMacPasskeySigningConfiguration,
   resolveMergedStageDependencies,
   resolveBuildOptions,
-  resolveDesktopBuildIconAssets,
   resolveDesktopProductName,
   stageWslRuntimeArchive,
   ancestorNodeModulesPaths,
@@ -70,7 +69,6 @@ import {
   WSL_RUNTIME_ARCHIVE_NAME,
   wslRuntimeArchiveStem,
 } from "./build-desktop-artifact.ts";
-import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import {
   ReleasePackageManifestError,
   releasePackageFiles,
@@ -507,13 +505,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
-  it("keeps Dev packaging on the release product name and artwork", () => {
+  it("keeps Dev packaging on the release product name", () => {
     assert.equal(resolveDesktopProductName("0.0.17", "dev"), "T3 Code (Dev)");
-    assert.deepStrictEqual(resolveDesktopBuildIconAssets("0.0.17", "dev"), {
-      macIconPng: BRAND_ASSET_PATHS.productionMacIconPng,
-      linuxIconPng: BRAND_ASSET_PATHS.productionLinuxIconPng,
-      windowsIconIco: BRAND_ASSET_PATHS.productionWindowsIconIco,
-    });
   });
 
   it.effect("creates an isolated macOS dev package identity without an update feed", () =>

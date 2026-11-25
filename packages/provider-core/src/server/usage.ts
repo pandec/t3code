@@ -106,15 +106,10 @@ export interface ProviderUsageScan {
   readonly hostId?: string;
   readonly status?: UsageSource["status"];
   readonly message?: string;
-  readonly files: readonly ProviderUsageScanFile[] | null;
+  readonly files:
+    | readonly { readonly path: string; readonly records: readonly UsageRecord[] }[]
+    | null;
   readonly refreshing?: true;
-}
-
-export interface ProviderUsageScanFile {
-  readonly path: string;
-  readonly records: readonly UsageRecord[];
-  /** Keys of earlier records the reader now identifies as copies of another record. */
-  readonly supersededKeys?: readonly string[];
 }
 
 export interface ProviderUsageScanInput<Config> {
