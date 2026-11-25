@@ -16,15 +16,30 @@ import {
 import { Atom } from "effect/reactivity";
 
 import { connectionAtomRuntime } from "../connection/runtime";
-import { orchestrationEnvironment } from "../state/orchestration";
 import { serverEnvironment } from "../state/server";
 import { environmentThreadShells } from "../state/threads";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentServerConfigsAtom } from "../state/server";
 import { environmentShell } from "../state/shell";
 
-function archivedSnapshotAtom(environmentId: EnvironmentId) {
-  return orchestrationEnvironment.archivedShellSnapshot({
+// Fork: Settings, SP Labs, desktop links, and the recent-shelf fallback share this archive
+// query. It refetches on archive changes, unarchives included, and on snapshots that may hide
+// changes made meanwhile.
+const archiveRefreshAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make((get) => {
+    const state = get(environmentShell.stateValueAtom(environmentId));
+    return `${state.archiveInvalidationSequence ?? 0}:${state.generation}`;
+  }),
+);
+
+const archivedShellSnapshot = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "web:archived-shell-snapshot",
+  tag: ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot,
+  refreshTrigger: ({ environmentId }) => archiveRefreshAtom(environmentId),
+});
+
+export function archivedSnapshotAtom(environmentId: EnvironmentId) {
+  return archivedShellSnapshot({
     environmentId,
     input: {},
   });
@@ -42,24 +57,6 @@ const archivedSnapshotsAtom = createArchivedThreadSnapshotsAtomFamily({
 export function refreshArchivedThreadsForEnvironment(environmentId: EnvironmentId): void {
   appAtomRegistry.refresh(archivedSnapshotAtom(environmentId));
 }
-
-// Fork (SP Labs): the full archive for owner lookups, refetched after an archive change even one
-// that happened while nothing read it, so a lab owner archived by an agent or another client
-// resolves without a manual refresh.
-const archiveInvalidationAtom = Atom.family((environmentId: EnvironmentId) =>
-  Atom.make(
-    (get) => get(environmentShell.stateValueAtom(environmentId)).archiveInvalidationSequence ?? 0,
-  ),
-);
-
-const liveArchivedShellSnapshot = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
-  label: "web:live-archived-shell-snapshot",
-  tag: ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot,
-  refreshTrigger: ({ environmentId }) => archiveInvalidationAtom(environmentId),
-});
-
-export const liveArchivedShellSnapshotAtom = (environmentId: EnvironmentId) =>
-  liveArchivedShellSnapshot({ environmentId, input: {} });
 
 export function useArchivedThreadSnapshots(environmentIds: ReadonlyArray<EnvironmentId>): {
   readonly snapshots: ReadonlyArray<ArchivedSnapshotEntry>;

@@ -125,19 +125,6 @@ export function detectComposerTrigger(
   };
 }
 
-/**
- * Matches standalone archive commands so ordinary prompts remain provider input.
- * The bare command toggles a pending archive; `cancel` is kept as an explicit alias.
- */
-export function parseComposerArchiveCommand(
-  text: string,
-): { action: "toggle" | "cancel" | null } | null {
-  const match = /^\/t3-archive(?:\s+([\s\S]*))?$/i.exec(text.trim());
-  if (!match) return null;
-  const argument = match[1]?.trim().toLowerCase() ?? "";
-  return { action: argument === "" ? "toggle" : argument === "cancel" ? "cancel" : null };
-}
-
 // The three RGI subdivision flags: England, Scotland, and Wales.
 const SUBDIVISION_FLAG_PATTERN =
   "\\u{1F3F4}\\u{E0067}\\u{E0062}(?:\\u{E0065}\\u{E006E}\\u{E0067}|\\u{E0073}\\u{E0063}\\u{E0074}|\\u{E0077}\\u{E006C}\\u{E0073})\\u{E007F}";

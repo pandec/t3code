@@ -21,6 +21,7 @@ import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopUserData from "./DesktopUserData.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import * as DesktopThreadLinks from "./DesktopThreadLinks.ts";
 import { openClerkTokenStorage } from "./ClerkTokenStore.ts";
 import * as DesktopWebLinks from "./DesktopWebLinks.ts";
 
@@ -63,6 +64,8 @@ export class DesktopClerk extends Context.Service<
       | DesktopWebLinks.DesktopWebLinks
       | Scope.Scope
     >;
+    /** Fork: opens this build's `app/` thread link from a previewed page; false before configure. */
+    readonly openThreadLink: (url: string) => boolean;
   }
 >()("@t3tools/desktop/app/DesktopClerk") {}
 
@@ -138,6 +141,8 @@ export const make = Effect.gen(function* () {
   yield* electronApp.on("open-url", (event: { preventDefault: () => void }, url: string) => {
     if (handleOpenUrl(url)) event.preventDefault();
   });
+  const scheme = ElectronProtocol.getDesktopScheme(environment.usesDevelopmentIdentity);
+  let openThreadLink = (_url: string) => false;
 
   yield* Effect.acquireRelease(
     Effect.try({
@@ -204,7 +209,6 @@ export const make = Effect.gen(function* () {
       };
       const resumeProviderAuth = (value: string | undefined) => {
         const destination = providerAuthReturnUrl(value);
-        const scheme = ElectronProtocol.getDesktopScheme(environment.usesDevelopmentIdentity);
         if (!destination?.startsWith(`${scheme}://app/`)) return false;
         void runPromise(
           Effect.gen(function* () {
@@ -220,13 +224,14 @@ export const make = Effect.gen(function* () {
         );
         return true;
       };
-      const openAppLink = (value: string | undefined) => {
-        if (!value) return false;
+      const openAppLink = (link: string | undefined) => {
+        if (!link) return false;
+        // Fork: the documented `app/<environmentId>/<threadId>` form rides upstream's thread links.
+        const value = DesktopThreadLinks.appThreadLinkAsThreadsLink(link, scheme) ?? link;
         const promptLink = promptLinkAppPath(value) !== null;
         if (!promptLink && readPairingAppLink(value) === null) return false;
         // Fork: prompt and thread links open only in this build's scheme (t3code:// vs
         // t3code-dev://); pairing links are scheme-agnostic upstream.
-        const scheme = ElectronProtocol.getDesktopScheme(environment.usesDevelopmentIdentity);
         if (
           promptLink &&
           /^t3code(?:-[a-z]+)?:/i.test(value) &&
@@ -237,6 +242,8 @@ export const make = Effect.gen(function* () {
         void runPromise(webLinks.receive(value));
         return true;
       };
+      openThreadLink = (url) =>
+        DesktopThreadLinks.appThreadLinkAsThreadsLink(url, scheme) !== null && openAppLink(url);
       const args = yield* HostProcess.Arguments;
       args.some((value) => startProviderAuthHandoff(value) || openAppLink(value));
       const openWebLink = (url: string) => {
@@ -272,6 +279,7 @@ export const make = Effect.gen(function* () {
       };
       for (const argv of pendingSecondInstances.splice(0)) handleSecondInstance(argv);
     }).pipe(Effect.withSpan("desktop.clerk.configure")),
+    openThreadLink: (url) => openThreadLink(url),
   });
 });
 

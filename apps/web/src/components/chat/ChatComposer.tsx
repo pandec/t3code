@@ -417,8 +417,6 @@ export interface ChatComposerProps {
   activeThreadShell: ThreadShell | null;
   activeThreadRuns: ReadonlyArray<OrchestrationV2Run>;
   promptHistoryEntries: ReadonlyArray<TimelineEntry>;
-  /** Fork: the thread exists on the server (offers /t3-archive). */
-  isServerThread: boolean;
   forceExpandedOnMobile: boolean;
   projectSelectionRequired: boolean;
 
@@ -567,7 +565,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeThread,
     activeThreadRuns,
     promptHistoryEntries,
-    isServerThread,
     forceExpandedOnMobile,
     projectSelectionRequired,
     phase,
@@ -1299,7 +1296,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     freshSessionAvailable: props.onFreshSession !== undefined,
     compactSlashCommandAvailable,
     savedPromptsAvailable: savedPrompts.length > 0,
-    isServerThread,
     selectedProvider,
     selectedProviderSkills,
     selectedProviderSlashCommands,
@@ -2146,24 +2142,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return;
     }
     if (item.type === "slash-command") {
-      if (item.command === "t3-archive") {
-        const replacement = `/${item.command} `;
-        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-          snapshot.value,
-          trigger.rangeEnd,
-          replacement,
-        );
-        const applied = applyPromptReplacement(
-          trigger.rangeStart,
-          replacementRangeEnd,
-          replacement,
-          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
-        );
-        if (applied) {
-          setComposerHighlightedItemId(null);
-        }
-        return;
-      }
       if (item.command === "prompt") {
         const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
           expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),

@@ -4,7 +4,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   detectComposerTrigger,
-  parseComposerArchiveCommand,
   formatForkedThreadTitle,
   parseSideChatCommand,
   serializeComposerFileLink,
@@ -186,23 +185,6 @@ describe("formatForkedThreadTitle", () => {
     expect(formatForkedThreadTitle("🔱 Source")).toBe("(🔱) Source");
     expect(formatForkedThreadTitle("💡 🔱 Source")).toBe("💡 (🔱) Source");
   });
-});
-
-describe("parseComposerArchiveCommand", () => {
-  it.each(["/t3-archive", "  /T3-ARCHIVE \n"])("toggles %s", (text) => {
-    expect(parseComposerArchiveCommand(text)).toEqual({ action: "toggle" });
-  });
-
-  it("accepts cancellation and rejects unsupported arguments", () => {
-    expect(parseComposerArchiveCommand(" /t3-archive CANCEL ")).toEqual({ action: "cancel" });
-    expect(parseComposerArchiveCommand("/t3-archive now")).toEqual({ action: null });
-    expect(parseComposerArchiveCommand("/t3-archive cancel extra")).toEqual({ action: null });
-  });
-
-  it.each(["Discuss /t3-archive", "/t3-archivex", "/archive", "/t3-archive/cancel"])(
-    "leaves ordinary prompt %s alone",
-    (text) => expect(parseComposerArchiveCommand(text)).toBeNull(),
-  );
 });
 
 describe("parseSideChatCommand", () => {

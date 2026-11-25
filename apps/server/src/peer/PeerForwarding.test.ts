@@ -9,6 +9,7 @@ import {
   type SourceControlCloneRepositoryInput,
   ProjectId,
   OrchestratorMcpFailure,
+  OrchestratorMcpThreadListResult,
   ProviderInstanceId,
   RunId,
   ThreadId,
@@ -20,6 +21,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { McpSchema, McpServer } from "effect/ai";
 
@@ -44,10 +46,12 @@ import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import * as ThreadGroupsMcpService from "../mcp/ThreadGroupsMcpService.ts";
 import * as ThreadArchiveScheduler from "../orchestration-v2/ThreadArchiveScheduler.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
+import { OrchestratorToolkit } from "../mcp/toolkits/orchestrator/tools.ts";
 import { liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
 import * as PeerForwarding from "./PeerForwarding.ts";
 import * as PeerLinks from "./PeerLinks.ts";
 import * as PeerLinkRequests from "./PeerLinkRequests.ts";
+import * as PeerMcpClient from "./PeerMcpClient.ts";
 import { descriptorOf, layerLinkingEnvironment, linkTo, servePeer } from "./PeerLinks.testkit.ts";
 
 const laptop = descriptorOf("environment-laptop", "Laptop");
@@ -849,4 +853,80 @@ it.effect("retries a newest-page read without its cursor when the peer refuses t
     expect(page).toBe("forward page");
     expect(sent).toEqual([newest, params]);
   }),
+);
+
+const decodeThreadListPage = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(OrchestratorMcpThreadListResult),
+);
+
+it.effect("lists an upstream peer's threads, but refuses the worktreePath filter it ignores", () =>
+  Effect.gen(function* () {
+    // An upstream peer has no worktreePath, in the item or as a filter.
+    const upstreamPage = JSON.stringify({
+      projectId: boxProject,
+      currentThreadId: null,
+      threads: [
+        {
+          threadId: boxThread,
+          projectId: boxProject,
+          title: "Box thread",
+          createdBy: "user",
+          creationSource: "web",
+          status: "idle",
+          latestRunId: null,
+          providerInstanceId: "codex",
+          model: "gpt-6-luna",
+          runtimeMode: "auto",
+          interactionMode: "default",
+          linkedPullRequest: null,
+          settled: false,
+          settledAt: null,
+          snoozed: false,
+          snoozedUntil: null,
+          parentThreadId: null,
+          relationshipToParent: null,
+          itemCount: 0,
+          createdAt: "2026-10-18T00:00:00.000Z",
+          updatedAt: "2026-10-18T00:00:00.000Z",
+        },
+      ],
+      nextCursor: null,
+      total: 1,
+    });
+    const context = yield* Layer.build(
+      PeerForwarding.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(PeerMcpClient.PeerMcpClient)({
+              call: () => decodeThreadListPage(upstreamPage).pipe(Effect.orDie) as never,
+            }),
+            Layer.mock(PeerLinks.PeerLinks)({ enabled: Effect.succeed(true) }),
+            Layer.mock(ThreadManagement.ThreadManagementService)({}),
+            NodeCrypto.layer,
+          ),
+        ),
+      ),
+    );
+    const forwarding = Context.get(context, PeerForwarding.PeerForwarding);
+    const scope: McpInvocationContext.McpInvocationScope = {
+      environmentId: laptop.environmentId,
+      requestNamespace: "client:upstream-list",
+      thread: undefined,
+      client: undefined,
+      capabilities: new Set(["orchestration"]),
+      issuedAt: 1,
+    };
+    const list = (worktreePath?: string) =>
+      forwarding.call(scope, OrchestratorToolkit.tools.t3_thread_list, box.environmentId, {
+        environmentId: box.environmentId,
+        projectId: boxProject,
+        ...(worktreePath === undefined ? {} : { worktreePath }),
+      });
+
+    expect((yield* list()).threads.map((thread) => thread.threadId)).toEqual([boxThread]);
+    expect(yield* Effect.flip(list("/work/trees/feature"))).toMatchObject({
+      code: "invalid_request",
+      message: expect.stringContaining("does not support the worktreePath filter"),
+    });
+  }).pipe(Effect.scoped),
 );

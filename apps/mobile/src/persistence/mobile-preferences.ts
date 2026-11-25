@@ -181,14 +181,6 @@ export interface Preferences {
   readonly sidebarSnoozedShelfExpanded?: boolean;
   readonly sidebarSettledShelfExpanded?: boolean;
   readonly sidebarArchivedShelfExpanded?: boolean;
-  /**
-   * Upstream's shelf keys. The fork's `sidebar*ShelfExpanded` keys above own
-   * settled/snoozed fold state; these stay decoded for upstream compatibility.
-   * Only the Working shelf reads its own key.
-   */
-  readonly threadListSettledShelfExpanded?: boolean;
-  readonly threadListSnoozedShelfExpanded?: boolean;
-  readonly threadListWorkingShelfExpanded?: boolean;
   readonly toolCallVisibility?: ToolCallVisibility;
   readonly workingShelfEnabled?: boolean;
   readonly useLastProjectForNewThreads?: boolean;
@@ -197,6 +189,9 @@ export interface Preferences {
     readonly provider: ProviderInstanceId;
     readonly model: string;
   }>;
+  readonly threadListSettledShelfExpanded?: boolean;
+  readonly threadListSnoozedShelfExpanded?: boolean;
+  readonly threadListWorkingShelfExpanded?: boolean;
   /**
    * Device-local mirror of the web fork's Extras settings. Numbers are stored
    * raw and clamped on read (see `state/use-mobile-preferences`), because the
@@ -291,6 +286,8 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     microphones?: ReadonlyArray<MicrophoneEntry>;
     projectGroupingEnabled?: boolean;
     projectGroupingMode?: SidebarProjectGroupingMode;
+    toolCallVisibility?: ToolCallVisibility;
+    workingShelfEnabled?: boolean;
     sidebarPinnedShelfExpanded?: boolean;
     sidebarActiveShelfExpanded?: boolean;
     sidebarSnoozedShelfExpanded?: boolean;
@@ -298,12 +295,10 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     sidebarArchivedShelfExpanded?: boolean;
     useLastProjectForNewThreads?: boolean;
     lastThreadProject?: typeof ThreadProject.Type;
+    modelFavorites?: Preferences["modelFavorites"];
     threadListSettledShelfExpanded?: boolean;
     threadListSnoozedShelfExpanded?: boolean;
     threadListWorkingShelfExpanded?: boolean;
-    toolCallVisibility?: ToolCallVisibility;
-    workingShelfEnabled?: boolean;
-    modelFavorites?: Preferences["modelFavorites"];
     steerGraceWindowMs?: number;
     accentTintsEnabled?: boolean;
     accentTintIntensityPercent?: number;
@@ -455,12 +450,6 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
   if (typeof parsed.sidebarArchivedShelfExpanded === "boolean") {
     preferences.sidebarArchivedShelfExpanded = parsed.sidebarArchivedShelfExpanded;
   }
-  if (typeof parsed.threadListSettledShelfExpanded === "boolean") {
-    preferences.threadListSettledShelfExpanded = parsed.threadListSettledShelfExpanded;
-  }
-  if (typeof parsed.threadListSnoozedShelfExpanded === "boolean") {
-    preferences.threadListSnoozedShelfExpanded = parsed.threadListSnoozedShelfExpanded;
-  }
   if (isToolCallVisibility(parsed.toolCallVisibility)) {
     preferences.toolCallVisibility = parsed.toolCallVisibility;
   }
@@ -483,6 +472,12 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
         typeof favorite.model === "string" &&
         favorite.model.trim().length > 0,
     );
+  }
+  if (typeof parsed.threadListSettledShelfExpanded === "boolean") {
+    preferences.threadListSettledShelfExpanded = parsed.threadListSettledShelfExpanded;
+  }
+  if (typeof parsed.threadListSnoozedShelfExpanded === "boolean") {
+    preferences.threadListSnoozedShelfExpanded = parsed.threadListSnoozedShelfExpanded;
   }
   if (typeof parsed.steerGraceWindowMs === "number") {
     preferences.steerGraceWindowMs = parsed.steerGraceWindowMs;

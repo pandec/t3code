@@ -1,13 +1,19 @@
 import {
   CommandId,
+  EnvironmentId,
   type OrchestrationV2PendingBackgroundTask,
   ProviderInstanceId,
   RunId,
+  ThreadId,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { ThreadRuntimeSummary } from "./models.ts";
-import { archiveDiscardedQueuedMessageCount, resolveArchiveToggleAction } from "./threadSettled.ts";
+import {
+  archiveDiscardedQueuedMessages,
+  discardExceedsConfirmed,
+  resolveArchiveToggleAction,
+} from "./threadSettled.ts";
 
 function runtime(status: ThreadRuntimeSummary["status"]): ThreadRuntimeSummary {
   return {
@@ -73,14 +79,68 @@ describe("resolveArchiveToggleAction", () => {
   });
 });
 
-describe("archiveDiscardedQueuedMessageCount", () => {
+describe("archiveDiscardedQueuedMessages", () => {
+  const environmentId = EnvironmentId.make("env");
+  const parent = { ...idle, environmentId, id: ThreadId.make("parent") };
+  const sideChat = (queuedMessageCount: number, overrides: object = {}) => ({
+    environmentId,
+    lineage: {
+      parentThreadId: parent.id,
+      relationshipToParent: "fork" as const,
+      rootThreadId: parent.id,
+      sideChat: true,
+    },
+    archivedAt: null,
+    queuedMessageCount,
+    ...overrides,
+  });
+
   it("counts queued messages, held ones included, only when archiving now", () => {
     // A Stop-held queue presents the interrupted run, so the runtime alone would hide it.
-    const held = { ...idle, runtime: runtime("interrupted"), queuedMessageCount: 2 };
-    expect(archiveDiscardedQueuedMessageCount(held)).toBe(2);
-    expect(archiveDiscardedQueuedMessageCount({ ...idle, queuedMessageCount: 0 })).toBe(0);
-    expect(archiveDiscardedQueuedMessageCount(idle)).toBe(0);
-    // Archive-when-done on a working thread discards nothing.
-    expect(archiveDiscardedQueuedMessageCount({ ...held, runtime: runtime("running") })).toBe(0);
+    const held = { ...parent, runtime: runtime("interrupted"), queuedMessageCount: 2 };
+    expect(archiveDiscardedQueuedMessages(held)).toEqual({ total: 2, inSideChats: 0 });
+    expect(archiveDiscardedQueuedMessages({ ...parent, queuedMessageCount: 0 }).total).toBe(0);
+    expect(archiveDiscardedQueuedMessages(parent).total).toBe(0);
+    // Archive-when-done on a working thread discards nothing of its own.
+    expect(archiveDiscardedQueuedMessages({ ...held, runtime: runtime("running") }).total).toBe(0);
+  });
+
+  it("adds the queues of the side chats the archive takes, now or when done", () => {
+    const threads = [
+      sideChat(1),
+      sideChat(2),
+      sideChat(4, { archivedAt: "2026-10-04T10:00:00.000Z" }),
+      sideChat(8, { environmentId: EnvironmentId.make("other") }),
+      sideChat(16, { lineage: { ...sideChat(0).lineage, sideChat: undefined } }),
+    ];
+    const withQueue = { ...parent, queuedMessageCount: 1 };
+    expect(archiveDiscardedQueuedMessages(withQueue, threads)).toEqual({
+      total: 4,
+      inSideChats: 3,
+    });
+    expect(
+      archiveDiscardedQueuedMessages({ ...withQueue, runtime: runtime("running") }, threads),
+    ).toEqual({ total: 3, inSideChats: 3 });
+    const pendingArchive = {
+      requestId: CommandId.make("archive-1"),
+      runId: null,
+      worktreePath: null,
+      requestedAt: "2026-10-04T10:00:00.000Z",
+      status: "pending" as const,
+    };
+    expect(
+      archiveDiscardedQueuedMessages({ ...withQueue, archiveRequest: pendingArchive }, threads),
+    ).toEqual({ total: 0, inSideChats: 0 });
+  });
+
+  it("asks again when the side chat or the thread's own queue grew past what was confirmed", () => {
+    const confirmed = { total: 3, inSideChats: 2 };
+    expect(discardExceedsConfirmed({ total: 3, inSideChats: 2 }, confirmed)).toBe(false);
+    expect(discardExceedsConfirmed({ total: 1, inSideChats: 0 }, confirmed)).toBe(false);
+    // The same total moved to the side chats: the prompt named fewer there.
+    expect(discardExceedsConfirmed({ total: 3, inSideChats: 3 }, confirmed)).toBe(true);
+    expect(discardExceedsConfirmed({ total: 4, inSideChats: 3 }, confirmed)).toBe(true);
+    // The same total moved from a side chat to the thread itself.
+    expect(discardExceedsConfirmed({ total: 3, inSideChats: 1 }, confirmed)).toBe(true);
   });
 });

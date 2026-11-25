@@ -159,11 +159,6 @@ position, so using **Un-settle** returns it to the top. Pinning and snoozing pre
 position until you move it again. Thread activity does not change the order. The settled shelf
 continues to use settlement time.
 
-On web and desktop, **Move current thread to top** in the command palette moves the open thread to
-the top of Pinned, Active, or its custom group without dragging. It counts group members hidden by
-a filter or a collapsed group, so the thread lands above all of them. The action is unavailable for
-drafts and for archived, snoozed, or settled threads.
-
 If dragging is unavailable for one environment, update the T3 Code server running in that
 environment. Pinned and active reordering require server support. Threads from older servers keep
 their default order until the server is updated.
@@ -302,16 +297,17 @@ already settled threads.
 
 Archiving a thread that is still working schedules the archive for when it is done. The thread
 menus (and swipe-right on mobile), plus the row's hover archive button, the command palette and
-the archive keybinding on web and desktop, offer **Archive when done** while a turn runs. On any client, send
-[`/t3-archive`](./composer.md#commands-and-skills) in the thread. An agent can also schedule
+the archive keybinding on web and desktop, offer **Archive when done** while a turn runs. An agent can also schedule
 its own thread, for example when you ask it to "archive this thread when you're done", or
 another thread, such as one whose results it has just read. The
 archive waits for the turn and its checkpoint, for subagents, and for commands or monitors the
 agent waits on. Other background commands, such as dev servers, do not hold it and keep running
-after the thread archives. An idle thread archives right away.
+after the thread archives. An idle thread archives right away. Archiving discards queued
+messages: the thread's own when it archives right away, and those of its side chats either way.
+It asks first and names the count.
 
 A thread with a pending archive shows an archive icon in its row. Choose **Cancel pending
-archive** from its menu or hover archive button, use the archive keybinding again, or send `/t3-archive` again to keep
+archive** from its menu or hover archive button, or use the archive keybinding again, to keep
 it. Sending a new message, stopping the turn it waits on, a
 failed turn, or a workspace change also cancels it. Automatic follow-ups, such as subagent results
 or background notifications that wake the thread, don't: the archive waits for them too. If the turn's final checkpoint fails, the

@@ -64,7 +64,7 @@ import * as DesktopPreReadyPlatform from "./app/DesktopPreReadyPlatform.ts";
 import * as DesktopShellEnvironment from "./shell/DesktopShellEnvironment.ts";
 import * as DesktopSshEnvironment from "./ssh/DesktopSshEnvironment.ts";
 import * as DesktopSshPasswordPrompts from "./ssh/DesktopSshPasswordPrompts.ts";
-import * as DesktopThreadLinks from "./app/DesktopThreadLinks.ts";
+import { DesktopThreadLinkReceiver } from "./app/DesktopThreadLinkReceiver.ts";
 import * as DesktopState from "./app/DesktopState.ts";
 import * as DesktopLegacyLocalStorage from "./app/DesktopLegacyLocalStorage.ts";
 import * as DesktopTelemetryPublisher from "./telemetry/DesktopTelemetryPublisher.ts";
@@ -93,10 +93,6 @@ if (process.argv.includes("--version")) {
   }
   Electron.app.exit(0);
 }
-
-// Listens synchronously, before the runtime builds any layer, so a macOS
-// cold-start `open-url` cannot fire ahead of its listener.
-const threadLinkInbox = new DesktopThreadLinks.DesktopThreadLinkInbox(Electron.app, process.argv);
 
 const layerDesktopEnvironment = Layer.unwrap(
   Effect.gen(function* () {
@@ -183,7 +179,15 @@ const layerDesktopPreview = PreviewManager.layer.pipe(
   // IPC needs both services on the same BrowserSession.
   Layer.provideMerge(BrowserImport.layer.pipe(Layer.provide(LinuxBrowserSecret.layer))),
   Layer.provideMerge(BrowserSession.layer),
-  Layer.provideMerge(DesktopThreadLinks.receiverLayer(threadLinkInbox)),
+  // Fork: a thread link clicked in a previewed page opens as one from another app.
+  Layer.provideMerge(
+    Layer.effect(
+      DesktopThreadLinkReceiver,
+      Effect.map(Effect.service(DesktopClerk.DesktopClerk), (clerk) => ({
+        receive: clerk.openThreadLink,
+      })),
+    ),
+  ),
   Layer.provideMerge(PreviewPasskeys.layer),
   Layer.provideMerge(PreviewDashlane.layer),
   Layer.provideMerge(layerDesktopFoundation),
@@ -199,9 +203,6 @@ const layerDesktopSnapShot = DesktopSnapShot.layer.pipe(
   Layer.provideMerge(layerDesktopFoundation),
 );
 const layerDesktopAppActivation = DesktopAppActivation.layer.pipe(
-  Layer.provide(layerDesktopWindow),
-);
-const layerDesktopThreadLinks = DesktopThreadLinks.layer(threadLinkInbox).pipe(
   Layer.provide(layerDesktopWindow),
 );
 
@@ -227,7 +228,6 @@ const layerDesktopApplication = Layer.mergeAll(
   DesktopLifecycle.layer,
   layerDesktopAppActivation,
   DesktopWebLinks.layer,
-  layerDesktopThreadLinks,
   DesktopApplicationMenu.layer,
   DesktopLinuxUrlHandler.layer,
   DesktopCliCommand.layer,

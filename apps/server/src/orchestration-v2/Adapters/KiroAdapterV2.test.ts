@@ -1,6 +1,6 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, it, vi } from "@effect/vitest";
 import {
   MessageId,
   type ModelSelection,
@@ -1474,9 +1474,17 @@ describe("Kiro permission policy", () => {
 // Fork (DECISIONS 5.9): commands the agent runs know their thread and T3 install.
 it.effect("launches kiro with the thread's self-addressing environment", () =>
   Effect.gen(function* () {
+    // An agent shell's identity on the server process itself never reaches the agent.
+    yield* Effect.acquireRelease(
+      Effect.sync(() => vi.stubEnv("T3CODE_TURN_ID", "server-stale")),
+      () => Effect.sync(() => vi.unstubAllEnvs()),
+    );
     const launches: Array<Record<string, unknown> | undefined> = [];
     const childProcessSpawner = ChildProcessSpawner.make((command) => {
-      if (command._tag === "StandardCommand") launches.push(command.options.env);
+      // Without extendEnv the child receives exactly this environment.
+      if (command._tag === "StandardCommand" && command.options.extendEnv !== true) {
+        launches.push(command.options.env);
+      }
       return Effect.fail(
         PlatformError.systemError({ _tag: "NotFound", module: "kiro-env-test", method: "spawn" }),
       );
@@ -1509,5 +1517,5 @@ it.effect("launches kiro with the thread's self-addressing environment", () =>
       T3CODE_WORKTREE_PATH: process.cwd(),
     });
     assert.notProperty(agent, "T3CODE_TURN_ID");
-  }).pipe(Effect.provide(testLayer)),
+  }).pipe(Effect.scoped, Effect.provide(testLayer)),
 );

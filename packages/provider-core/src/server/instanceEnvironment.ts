@@ -3,6 +3,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 
 import { expandHomeVariable } from "./pathExpansion.ts";
+import { withoutThreadEnvironment } from "./threadEnvironment.ts";
 
 export const mergeProviderInstanceEnvironment = Effect.fn(function* (
   environment: ProviderInstanceEnvironment | undefined,
@@ -11,7 +12,8 @@ export const mergeProviderInstanceEnvironment = Effect.fn(function* (
   // Drivers retain a stable environment snapshot for the instance lifetime.
   const home = yield* HostProcess.HomeDirectory;
   const windows = (yield* HostProcess.Platform) === "win32";
-  const next: NodeJS.ProcessEnv = { ...baseEnv };
+  // Fork: the server's own thread identity is never part of a provider instance's environment.
+  const next = withoutThreadEnvironment(baseEnv);
   for (const variable of environment ?? []) {
     // An unresolved secret reference carries no value; the registry resolves it for the provider.
     if (typeof variable.value !== "string") continue;

@@ -89,13 +89,6 @@ export type ProjectActionsError =
   | ProjectService.ProjectOperationError
   | ServerSettingsError;
 
-export interface ProjectActionsList {
-  readonly projectId: ProjectId;
-  readonly title: string;
-  readonly workspaceRoot: string;
-  readonly actions: ReadonlyArray<ProjectScript>;
-}
-
 /** No `actionId` creates an action (name and command required); an `actionId` updates it. */
 export interface ProjectActionUpsertInput {
   readonly projectId: ProjectId;
@@ -127,7 +120,6 @@ export interface ProjectActionRemoveResult {
 export class ProjectActions extends Context.Service<
   ProjectActions,
   {
-    readonly list: (projectId: ProjectId) => Effect.Effect<ProjectActionsList, ProjectActionsError>;
     readonly upsert: (
       input: ProjectActionUpsertInput,
     ) => Effect.Effect<ProjectActionUpsertResult, ProjectActionsError>;
@@ -277,15 +269,6 @@ const make = Effect.gen(function* () {
       );
 
   return ProjectActions.of({
-    list: Effect.fn("ProjectActions.list")(function* (projectId) {
-      const { project, scripts } = yield* read(projectId);
-      return {
-        projectId: project.id,
-        title: project.title,
-        workspaceRoot: project.workspaceRoot,
-        actions: scripts,
-      };
-    }),
     upsert: Effect.fn("ProjectActions.upsert")(function* (input) {
       const { project, scripts } = yield* read(input.projectId);
       const result = yield* applyUpsert(scripts, input);

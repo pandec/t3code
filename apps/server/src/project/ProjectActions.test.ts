@@ -5,6 +5,7 @@ import {
   type ProjectScript,
   type ServerSettingsError,
 } from "@t3tools/contracts";
+import { resolveProjectScripts } from "@t3tools/shared/projectScripts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -32,19 +33,21 @@ const dev: ProjectScript = {
   autoOpenPreview: true,
 };
 
+const project = {
+  id: projectId,
+  title: "Actions",
+  workspaceRoot: "/repo",
+  scripts: [],
+} as unknown as Project;
 const projectLayer = Layer.mock(ProjectService.ProjectService)({
-  getById: (id) =>
-    Effect.succeed(
-      id === projectId
-        ? Option.some({
-            id: projectId,
-            title: "Actions",
-            workspaceRoot: "/repo",
-            scripts: [],
-          } as unknown as Project)
-        : Option.none(),
-    ),
+  getById: (id) => Effect.succeed(id === projectId ? Option.some(project) : Option.none()),
 });
+
+/** The actions the app shows, as `t3_project_read` returns them. */
+const effectiveActions = ServerSettings.ServerSettingsService.pipe(
+  Effect.flatMap((settings) => settings.getSettings),
+  Effect.map((settings) => resolveProjectScripts(settings, project)),
+);
 
 /** Environment defaults hold the actions, so the project starts out inheriting them. */
 const settingsLayer = ServerSettings.layerTest({
@@ -74,11 +77,7 @@ it.effect("creates an action with a collision-safe id as a project override", ()
       },
       clearedRunOnWorktreeCreate: [],
     });
-    expect((yield* actions.list(projectId)).actions.map((action) => action.id)).toEqual([
-      "setup",
-      "dev",
-      "dev-2",
-    ]);
+    expect((yield* effectiveActions).map((action) => action.id)).toEqual(["setup", "dev", "dev-2"]);
     // The environment defaults stay as they were.
     const settings = yield* (yield* ServerSettings.ServerSettingsService).getSettings;
     expect(settings.defaultProjectScripts).toEqual([setup, dev]);
@@ -119,7 +118,7 @@ it.effect("an edit keeps the action's settle role", () =>
     yield* actions.upsert({ projectId, name: clean.name, command: clean.command });
     const settingsService = yield* ServerSettings.ServerSettingsService;
     // Give the new action the settle role, as the project settings editor does.
-    const listed = (yield* actions.list(projectId)).actions;
+    const listed = yield* effectiveActions;
     yield* settingsService.updateSettings({
       projectScriptUpdate: {
         projectId,
@@ -138,7 +137,7 @@ it.effect("an edit keeps automatic stopping on settle", () =>
   Effect.gen(function* () {
     const actions = yield* service;
     const settingsService = yield* ServerSettings.ServerSettingsService;
-    const listed = (yield* actions.list(projectId)).actions;
+    const listed = yield* effectiveActions;
     yield* settingsService.updateSettings({
       projectScriptUpdate: {
         projectId,
@@ -160,7 +159,7 @@ it.effect("keeps a single worktree setup action and reports the cleared one", ()
     const actions = yield* service;
     const result = yield* actions.upsert({ projectId, actionId: "dev", runOnWorktreeCreate: true });
     expect(result.clearedRunOnWorktreeCreate).toEqual(["setup"]);
-    const listed = (yield* actions.list(projectId)).actions;
+    const listed = yield* effectiveActions;
     expect(
       listed.filter((action) => action.runOnWorktreeCreate).map((action) => action.id),
     ).toEqual(["dev"]);
@@ -175,7 +174,7 @@ it.effect("removes an action and reports unknown ids", () =>
       action: "removed",
       actionId: "dev",
     });
-    expect((yield* actions.list(projectId)).actions).toEqual([setup]);
+    expect(yield* effectiveActions).toEqual([setup]);
     const missing = yield* actions.remove({ projectId, actionId: "dev" }).pipe(Effect.flip);
     expect(missing).toBeInstanceOf(ProjectActions.ProjectActionNotFoundError);
   }).pipe(Effect.provide(makeLayer())),

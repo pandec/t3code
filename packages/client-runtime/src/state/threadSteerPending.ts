@@ -1,8 +1,8 @@
-import type {
+import {
   MessageId,
-  OrchestrationV2Run,
-  OrchestrationV2TurnItem,
-  RunId,
+  type OrchestrationV2Run,
+  type OrchestrationV2TurnItem,
+  type RunId,
 } from "@t3tools/contracts";
 import type { ThreadStructureTurnItem } from "./models.ts";
 
@@ -103,4 +103,48 @@ export function unreadSteerMessageIds(
       .sort((left, right) => left.ordinal - right.ordinal)
       .map((steer) => steer.messageId)
   );
+}
+
+const NO_STEER_MESSAGE_IDS: ReadonlySet<MessageId> = new Set();
+const UNREAD_KEY_SEPARATOR = "\u0000";
+
+/**
+ * The unread steers as a content key. Client hooks cache the set on it, so projection updates
+ * that leave the unread set unchanged neither restart the reveal timer nor change its identity.
+ */
+export function unreadSteerKey(snapshot: SteerPendingThreadSnapshot | null): string {
+  return snapshot === null ? "" : unreadSteerMessageIds(snapshot).join(UNREAD_KEY_SEPARATOR);
+}
+
+export function unreadSteerSet(key: string): ReadonlySet<MessageId> {
+  return key === ""
+    ? NO_STEER_MESSAGE_IDS
+    : new Set(key.split(UNREAD_KEY_SEPARATOR).map((id) => MessageId.make(id)));
+}
+
+/**
+ * Whether the reveal timer should run: some unread steer is not revealed yet. A steer arriving
+ * before the first is revealed delays both; one arriving after does not hide the first.
+ */
+export function steerRevealPending(
+  unread: ReadonlySet<MessageId>,
+  revealed: ReadonlySet<MessageId>,
+): boolean {
+  for (const messageId of unread) {
+    if (!revealed.has(messageId)) return true;
+  }
+  return false;
+}
+
+/** The steers that show a marker: still unread and revealed. A resolved steer drops out at once. */
+export function revealedSteerMessageIds(
+  unread: ReadonlySet<MessageId>,
+  revealed: ReadonlySet<MessageId>,
+): ReadonlySet<MessageId> {
+  if (unread.size === 0 || revealed.size === 0) return NO_STEER_MESSAGE_IDS;
+  const visible = new Set<MessageId>();
+  for (const messageId of unread) {
+    if (revealed.has(messageId)) visible.add(messageId);
+  }
+  return visible.size === 0 ? NO_STEER_MESSAGE_IDS : visible;
 }

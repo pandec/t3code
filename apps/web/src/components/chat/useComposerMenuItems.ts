@@ -77,7 +77,6 @@ export function useComposerMenuItems({
   freshSessionAvailable,
   compactSlashCommandAvailable,
   savedPromptsAvailable,
-  isServerThread,
   selectedProvider,
   selectedProviderSkills,
   selectedProviderSlashCommands,
@@ -100,8 +99,6 @@ export function useComposerMenuItems({
   readonly compactSlashCommandAvailable: boolean;
   /** Fork: /prompt shows only when there is a saved prompt to insert. */
   readonly savedPromptsAvailable: boolean;
-  /** Fork: /t3-archive needs a thread that exists on the server. */
-  readonly isServerThread: boolean;
   readonly selectedProvider: ProviderDriverKind;
   readonly selectedProviderSkills: ServerProvider["skills"];
   readonly selectedProviderSlashCommands: ServerProvider["slashCommands"];
@@ -275,17 +272,6 @@ export function useComposerMenuItems({
                 command: "prompt",
                 label: "/prompt",
                 description: "Insert a saved prompt",
-              },
-            ] as const)
-          : []),
-        ...(isServerThread
-          ? ([
-              {
-                id: "slash:t3-archive",
-                type: "slash-command",
-                command: "t3-archive",
-                label: "/t3-archive",
-                description: "Archive now or when done; send again to cancel",
               },
             ] as const)
           : []),

@@ -31,6 +31,7 @@ import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { resolveThreadRouteRef, resolveThreadRouteTarget } from "../../threadRoutes";
 import { placeLinkedPrompt } from "../promptLinks/linkedPrompt";
 import { openThreadInActivePane } from "../thread-split/threadOpenTarget";
+import { resolveLinkedThread } from "./resolveLinkedThread";
 import { useThreadSplitStore } from "../thread-split/threadSplitStore";
 import { assetEnvironment } from "../../state/assets";
 import { readProject, readThreadShell } from "../../state/entities";
@@ -182,27 +183,33 @@ export function DesktopWebLinkCoordinator() {
     return threadRef;
   };
 
-  // Fork: a thread link opens in the active split pane. A primary-pane landing keeps the
-  // `?prompt=` in the route for ThreadLinkPrompt; any other landing places the prompt here.
-  const openAppPath = (appPath: string) => {
+  // Fork: a thread link resolves `primary` and must name a known thread, active or archived, and
+  // opens in the active split pane. A primary-pane landing keeps the `?prompt=` in the route for
+  // ThreadLinkPrompt; any other landing places the prompt here.
+  const openAppPath = async (appPath: string) => {
     const threadPath = THREAD_APP_PATH.exec(appPath);
-    const targetRef = threadPath
-      ? resolveThreadRouteRef({
-          environmentId: decodeURIComponent(threadPath[1]!),
-          threadId: decodeURIComponent(threadPath[2]!),
-        })
-      : null;
-    if (targetRef === null) {
+    if (!threadPath) {
       void router.navigate({ href: appPath });
       return;
     }
+    const linkEnvironmentId = decodeURIComponent(threadPath[1]!);
+    const targetRef = await resolveLinkedThread(
+      linkEnvironmentId,
+      decodeURIComponent(threadPath[2]!),
+    );
+    if (targetRef === null) return;
+    // `primary` names the resolved environment in the route.
+    const href =
+      targetRef.environmentId === linkEnvironmentId
+        ? appPath
+        : `/${encodeURIComponent(targetRef.environmentId)}/${threadPath[2]}${threadPath[3] ?? ""}`;
     const opened = openThreadInActivePane({
       targetRef,
       routeThreadRef: resolveThreadRouteRef(router.state.matches.at(-1)?.params ?? {}),
-      navigateToPrimary: () => router.navigate({ href: appPath }),
+      navigateToPrimary: () => router.navigate({ href }),
     });
     if (opened.plan.kind === "navigate-primary") return;
-    const parsed = parseThreadLinkPrompt(threadPath?.[3] ?? "");
+    const parsed = parseThreadLinkPrompt(threadPath[3] ?? "");
     if (!parsed.ok) {
       reportFailure(appPath, parsed.error);
     } else if (parsed.value !== null) {
@@ -254,7 +261,7 @@ export function DesktopWebLinkCoordinator() {
     }
     const appPath = promptLinkAppPath(url);
     if (appPath !== null) {
-      openAppPath(appPath);
+      await openAppPath(appPath);
       return;
     }
     const activeThreadRef =
