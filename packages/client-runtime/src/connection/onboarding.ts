@@ -242,21 +242,19 @@ const reachesEnvironment = Effect.fn("clientRuntime.connection.onboarding.reache
 
 const isBearerProfile = Schema.is(BearerConnectionProfile);
 
+// Fork: the route `updateBearer` edits; learned routes borrow another route's credential.
+export const updatableBearerRoute = (entry: ConnectionCatalogEntry) =>
+  connectionRoutes(entry).find(
+    (candidate) => candidate.target._tag === "BearerConnectionTarget" && !isLearned(candidate),
+  );
+
 const updateBearerConnection = Effect.fn(
   "clientRuntime.connection.onboarding.updateBearerConnection",
 )(function* (input: BearerConnectionUpdateInput) {
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
   const credentials = yield* ConnectionCredentialStore.ConnectionCredentialStore;
   const saved = (yield* SubscriptionRef.get(registry.entries)).get(input.environmentId);
-  // Editing changes the environment's first paired direct route; others stay as
-  // saved. Fork: learned routes borrow another route's credential, so skip them.
-  const route =
-    saved === undefined
-      ? undefined
-      : connectionRoutes(saved).find(
-          (candidate) =>
-            candidate.target._tag === "BearerConnectionTarget" && !isLearned(candidate),
-        );
+  const route = saved === undefined ? undefined : updatableBearerRoute(saved);
   const entry = saved === undefined || route === undefined ? saved : routeEntry(saved, route);
   const credential =
     entry?.target._tag === "BearerConnectionTarget"
