@@ -275,7 +275,10 @@ const makeImporter = Effect.fn(function* (
           }),
           Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
             ...(getAdapter === undefined ? {} : { get: getAdapter }),
-            list: () => Effect.succeed(Object.keys(continuationKeys).map(ProviderInstanceId.make)),
+            list: () =>
+              Effect.succeed(
+                Object.keys(continuationKeys).map((id) => ProviderInstanceId.make(id)),
+              ),
             getMetadata: (instanceId) =>
               Effect.succeed({
                 driver: ProviderDriverKind.make("claudeAgent"),

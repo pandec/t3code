@@ -1,6 +1,6 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, it, vi } from "@effect/vitest";
 import {
   MessageId,
   type ModelSelection,
@@ -1476,26 +1476,14 @@ it.effect("launches kiro with the thread's self-addressing environment", () =>
   Effect.gen(function* () {
     // An agent shell's identity on the server process itself never reaches the agent.
     yield* Effect.acquireRelease(
-      Effect.sync(() => {
-        const previous = process.env.T3CODE_TURN_ID;
-        process.env.T3CODE_TURN_ID = "server-stale";
-        return previous;
-      }),
-      (previous) =>
-        Effect.sync(() => {
-          if (previous === undefined) delete process.env.T3CODE_TURN_ID;
-          else process.env.T3CODE_TURN_ID = previous;
-        }),
+      Effect.sync(() => vi.stubEnv("T3CODE_TURN_ID", "server-stale")),
+      () => Effect.sync(() => vi.unstubAllEnvs()),
     );
     const launches: Array<Record<string, unknown> | undefined> = [];
     const childProcessSpawner = ChildProcessSpawner.make((command) => {
-      if (command._tag === "StandardCommand") {
-        // What the child receives, as the Node spawner resolves it.
-        launches.push(
-          command.options.extendEnv === true
-            ? { ...process.env, ...command.options.env }
-            : command.options.env,
-        );
+      // Without extendEnv the child receives exactly this environment.
+      if (command._tag === "StandardCommand" && command.options.extendEnv !== true) {
+        launches.push(command.options.env);
       }
       return Effect.fail(
         PlatformError.systemError({ _tag: "NotFound", module: "kiro-env-test", method: "spawn" }),
