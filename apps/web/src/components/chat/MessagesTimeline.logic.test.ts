@@ -39,7 +39,10 @@ import {
   deriveFinalResponseRunIdsKey,
   workEntryReadOutput,
 } from "./MessagesTimeline.logic";
-import { deriveTimelineMinimapItems } from "./MessagesTimeline.minimap";
+import {
+  computeTimelineMinimapState,
+  EMPTY_TIMELINE_MINIMAP_STATE,
+} from "./MessagesTimeline.minimap";
 import { workEntryIconName } from "./TimelineWorkEntryRow.logic";
 
 describe("resolveAssistantMessageCopyState", () => {
@@ -2950,16 +2953,21 @@ describe("deriveMessagesTimelineRows", () => {
 
       expect(finalIds(rows)).toEqual(["final-1", "final-3"]);
       expect(
-        deriveTimelineMinimapItems(rows, "final-assistant").map((item) => ({
-          id: item.id,
-          primaryText: item.primaryText,
-        })),
+        computeTimelineMinimapState(rows, EMPTY_TIMELINE_MINIMAP_STATE).assistantItems.map(
+          (item) => ({
+            id: item.id,
+            primaryText: item.primaryText,
+          }),
+        ),
       ).toEqual([
         { id: "final-1-entry", primaryText: "Done." },
         { id: "final-3-entry", primaryText: "Third answer." },
       ]);
       expect(
-        deriveTimelineMinimapItems(rows, "user-turn").map((item) => [item.id, item.secondaryText]),
+        computeTimelineMinimapState(rows, EMPTY_TIMELINE_MINIMAP_STATE).userItems.map((item) => [
+          item.id,
+          item.secondaryText,
+        ]),
       ).toEqual([
         ["user-1-entry", "Done."],
         ["user-2-entry", "Still working."],

@@ -10,8 +10,6 @@ import type {
   ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
-  CheckIcon,
-  CopyIcon,
   CornerLeftUpIcon,
   ExternalLinkIcon,
   GitBranchIcon,
@@ -19,7 +17,8 @@ import {
   SendIcon,
 } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
-import { useRef, useState, type ReactNode } from "react";
+import { msg, useGT } from "gt-react";
+import { useState, type ReactNode } from "react";
 
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { cn } from "~/lib/utils";
@@ -33,11 +32,8 @@ import { formatRelativeTimeLabel } from "~/timestampFormat";
 import { useRightPanelStore } from "../../rightPanelStore";
 import ChatMarkdown from "../ChatMarkdown";
 import { LinearIcon } from "../Icons";
-import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
-import {
-  ANCHORED_COPY_TOAST_TIMEOUT_MS,
-  showAnchoredCopyErrorToast,
-} from "../ui/anchoredCopyToast";
+import { PullRequestCopyableCode } from "../pullRequest/PullRequestCopyableCode";
+import { PullRequestLabelChip } from "../pullRequest/pullRequestPresentation";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
@@ -48,7 +44,6 @@ import { linearCommentDraftKey, useLinearCommentDraftStore } from "./linearComme
 import { linearIssueUrl } from "./linearMarkdown.logic";
 import {
   formatLinearDueDate,
-  LinearLabelPill,
   LinearPriorityIcon,
   LinearStateIcon,
   LinearUserAvatar,
@@ -255,41 +250,12 @@ function DetailRow({ label, children }: { label: string; children: ReactNode }) 
   );
 }
 
-function CopyButton({ value, label }: { value: string; label: string }) {
-  const ref = useRef<HTMLButtonElement>(null);
-  const { copyToClipboard, isCopied } = useCopyToClipboard<void>({
-    onError: (error) => showAnchoredCopyErrorToast(ref, error),
-    timeout: ANCHORED_COPY_TOAST_TIMEOUT_MS,
-  });
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            ref={ref}
-            aria-label={label}
-            size="icon-micro"
-            variant="ghost-muted"
-            onClick={() => copyToClipboard(value, undefined)}
-          >
-            {isCopied ? (
-              <CheckIcon className="size-3 text-success" />
-            ) : (
-              <CopyIcon className="size-3" />
-            )}
-          </Button>
-        }
-      />
-      <TooltipPopup side="top">{label}</TooltipPopup>
-    </Tooltip>
-  );
-}
-
 /**
  * Timestamps, the due date, and the branch name. Two label/value pairs per row once the panel
  * is wide enough for them, one below the other before that.
  */
 function IssueDetails({ issue }: { issue: LinearIssue }) {
+  const gt = useGT();
   const due = issue.dueDate ? formatLinearDueDate(issue.dueDate) : null;
   const settled = isEnded(issue.state);
   return (
@@ -328,10 +294,25 @@ function IssueDetails({ issue }: { issue: LinearIssue }) {
       {issue.branchName ? (
         <div className="mt-2.5 flex min-w-0 items-center gap-1.5">
           <GitBranchIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-          <code className="min-w-0 truncate font-mono text-2xs text-foreground/90">
-            {issue.branchName}
-          </code>
-          <CopyButton value={issue.branchName} label="Copy branch name" />
+          <PullRequestCopyableCode
+            key={issue.branchName}
+            value={issue.branchName}
+            target={{
+              target: "branch name",
+              unavailableMessage: msg("Clipboard API is unavailable while copying branch name."),
+              failureMessage: msg("Failed to copy branch name to the clipboard."),
+            }}
+            copyLabel={gt("Copy branch name")}
+            copiedLabel={gt("Branch name copied")}
+            onError={(error) =>
+              toastManager.add({
+                type: "error",
+                title: gt("Failed to copy"),
+                description: error.message,
+              })
+            }
+            className="font-mono text-2xs text-foreground/90"
+          />
         </div>
       ) : null}
     </div>
@@ -701,7 +682,12 @@ export function LinearIssueDetailPanel({
             {issue.labels.length > 0 ? (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {issue.labels.map((label) => (
-                  <LinearLabelPill key={label.name} label={label} />
+                  <PullRequestLabelChip
+                    key={label.name}
+                    label={label}
+                    size="default"
+                    className="max-w-48"
+                  />
                 ))}
               </div>
             ) : null}
