@@ -15,8 +15,6 @@ import {
 const TIMELINE_MINIMAP_ARIA_EXCERPT_MAX_LENGTH = 120;
 export const TIMELINE_MINIMAP_PREVIEW_MAX_LENGTH = 240;
 
-export type TimelineMinimapKind = "user-turn" | "final-assistant";
-
 export interface TimelineMinimapItem {
   readonly id: string;
   readonly rowIndex: number;
@@ -238,14 +236,6 @@ export function computeTimelineMinimapState(
     userItems: reuseMinimapItems(previous.userItems, userItems),
     assistantItems: reuseMinimapItems(previous.assistantItems, assistantItems),
   };
-}
-
-export function deriveTimelineMinimapItems(
-  rows: ReadonlyArray<MessagesTimelineRow>,
-  kind: TimelineMinimapKind,
-): ReadonlyArray<TimelineMinimapItem> {
-  const state = computeTimelineMinimapState(rows, EMPTY_TIMELINE_MINIMAP_STATE);
-  return kind === "user-turn" ? state.userItems : state.assistantItems;
 }
 
 export function resolveTimelineMinimapTooltipTranslate(index: number, itemCount: number): string {
