@@ -990,7 +990,7 @@ export function useThreadActions() {
   ) => {
     const threadKey = scopedThreadKey(target);
     if (archivingThreadKeys.has(threadKey)) return;
-    // Re-reads after a confirmation: a changed action does nothing, and a grown discard asks again.
+    // Re-reads after a confirmation: a changed action does nothing; a larger discard asks again.
     const run = async (confirmed?: {
       readonly action: ArchiveToggleAction;
       readonly discarded: ArchiveQueuedMessageDiscard;

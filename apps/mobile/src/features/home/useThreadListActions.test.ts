@@ -739,6 +739,30 @@ describe("thread archive guard", () => {
     ]);
   });
 
+  it("re-reads side chat queues after the discard confirmation", async () => {
+    const sideChat = (queuedMessageCount: number) =>
+      makeThread({
+        id: ThreadId.make("side"),
+        lineage: {
+          parentThreadId: ThreadId.make("thread"),
+          relationshipToParent: "fork",
+          rootThreadId: ThreadId.make("thread"),
+          sideChat: true,
+        },
+        queuedMessageCount,
+      });
+    state.shells = [makeThread(), sideChat(1)];
+    expect(await useThreadListActions().archiveThread(makeThread())).toBe(false);
+    // A queue that grew while the dialog was open asks again instead of archiving.
+    state.shells = [makeThread(), sideChat(2)];
+    state.dialogs[0]?.onConfirm();
+    expect(state.dialogs).toHaveLength(2);
+    state.dialogs[1]?.onConfirm();
+    await vi.waitFor(() =>
+      expect(state.requests).toEqual([expect.objectContaining({ action: "archive" })]),
+    );
+  });
+
   it("archives when done from a row held from before the run started", async () => {
     state.shells = [
       makeThread({
