@@ -13,6 +13,7 @@ import * as Path from "effect/Path";
 
 import { isExistingDirectory } from "@t3tools/provider-core/server/pathExpansion";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import {
@@ -96,6 +97,7 @@ export const workerLive = Layer.effectDiscard(
     const ids = yield* IdAllocator.IdAllocatorV2;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
+    const git = yield* GitVcsDriver.GitVcsDriver;
 
     const follow = Effect.fn("SessionWorkspaceFollow.follow")(function* (
       observation: ProviderSessionCwdObservation,
@@ -116,6 +118,7 @@ export const workerLive = Layer.effectDiscard(
       }).pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
+        Effect.provideService(GitVcsDriver.GitVcsDriver, git),
       );
       if (Option.isNone(plan)) {
         yield* Effect.logDebug("orchestration-v2.session-workspace-follow.skipped", {

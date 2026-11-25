@@ -2792,10 +2792,7 @@ export function resolveDesktopWebAssetBrand(version: string): WebAssetBrand {
   return resolveWebAssetBrandForChannel(resolveDesktopUpdateChannel(version));
 }
 
-export function resolveDesktopBuildIconAssets(
-  version: string,
-  _flavor: typeof DesktopBuildFlavor.Type = "release",
-): DesktopBuildIconAssets {
+export function resolveDesktopBuildIconAssets(version: string): DesktopBuildIconAssets {
   if (resolveDesktopUpdateChannel(version) === "nightly") {
     return {
       macIconPng: BRAND_ASSET_PATHS.nightlyMacIconPng,
@@ -3799,7 +3796,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
 
   const appVersion =
     options.version ?? resolveTaggedSourceVersion(repoRoot, serverPackageJson.version);
-  const iconAssets = resolveDesktopBuildIconAssets(appVersion, options.flavor);
+  const iconAssets = resolveDesktopBuildIconAssets(appVersion);
   const commitHash = yield* resolveGitCommitHash(repoRoot);
   const mkdir = options.keepStage ? fs.makeTempDirectory : fs.makeTempDirectoryScoped;
   const stageRoot = yield* mkdir({

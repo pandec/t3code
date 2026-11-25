@@ -398,8 +398,8 @@ describe("readOpenCodeUsage", () => {
       assert.deepStrictEqual(
         records.map((record) => [record.dedupeKey, record.sessionId]),
         [
-          [`opencode:${openCodeForkSourceAssistantId}`, openCodeForkSourceSessionId],
-          ["opencode:msg_continuationassistant00001", openCodeForkContinuationSessionId],
+          [`opencode:${openCodeForkSourceSessionId}:2`, openCodeForkSourceSessionId],
+          [`opencode:${openCodeForkContinuationSessionId}:8`, openCodeForkContinuationSessionId],
         ],
       );
       assert.deepStrictEqual(records[0]?.totals, {
@@ -410,11 +410,6 @@ describe("readOpenCodeUsage", () => {
         reasoningTokens: 0,
       });
       assert.strictEqual(records[0]?.reportedCostUsd, 0.01);
-      // Saved history may still hold the copies, so the scan names them.
-      assert.sameMembers(
-        result.files.flatMap((file) => file.supersededKeys ?? []),
-        ["opencode:msg_1607ab38e001GxURO0NU4GY4Az_2", "opencode:msg_1607b8a6d001MA7a5GgmyUywMf_2"],
-      );
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -444,17 +439,47 @@ describe("readOpenCodeUsage", () => {
         [source.id, fork.id, sibling.id],
       );
 
-      // Deleting the source leaves the first fork holding the only copy.
+      // Deleting the source leaves the first fork holding the only copy, still keyed by lineage.
       yield* db.unsafe("DELETE FROM session_message WHERE session_id = ?", [source.id]);
       yield* db.unsafe("DELETE FROM session_v2 WHERE id = ?", [source.id]);
       const remaining = (yield* readOpenCodeUsage(dir, 0)).files.flatMap((file) => file.records);
-      assert.includeMembers(
-        remaining.map((record) => record.dedupeKey),
-        ["opencode:msg_1607ab38e001GxURO0NU4GY4Az_2", "opencode:msg_forkreply000000000000003"],
+      assert.deepStrictEqual(
+        remaining.map((record) => [record.dedupeKey, record.sessionId]),
+        [
+          [`opencode:${source.id}:2`, fork.id],
+          [`opencode:${fork.id}:3`, fork.id],
+          [`opencode:${sibling.id}:3`, sibling.id],
+        ],
       );
-      assert.notInclude(
-        remaining.map((record) => record.dedupeKey),
-        "opencode:msg_1607b8a6d001MA7a5GgmyUywMf_2",
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("counts a reply in both message tables once under its message id", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "usage-reader-test-" });
+      const db = yield* openDatabase(path.join(dir, "opencode.db"));
+      const data = JSON.stringify({
+        role: "assistant",
+        modelID: "big-pickle",
+        time: { created: 1780000000000 },
+        tokens: { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+      });
+      yield* db.unsafe("CREATE TABLE message (id TEXT, session_id TEXT, data TEXT)");
+      yield* db.unsafe(
+        "CREATE TABLE session_message (id TEXT, session_id TEXT, type TEXT, seq INTEGER, data TEXT)",
+      );
+      yield* db.unsafe("INSERT INTO message VALUES ('msg-1', 'session-1', ?)", [data]);
+      yield* db.unsafe(
+        "INSERT INTO session_message VALUES ('msg-1', 'session-1', 'assistant', 1, ?)",
+        [data],
+      );
+
+      const records = (yield* readOpenCodeUsage(dir, 0)).files.flatMap((file) => file.records);
+      assert.deepStrictEqual(
+        records.map((record) => record.dedupeKey),
+        ["opencode:msg-1"],
       );
     }).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -509,8 +534,8 @@ describe("readOpenCodeUsage", () => {
       assert.deepStrictEqual(
         records.map((record) => [record.dedupeKey, record.model, record.reportedCostUsd]),
         [
-          ["opencode:assistant-1", "big-pickle", 0.02],
-          ["opencode:compaction-1", "big-pickle", 0.5],
+          ["opencode:session-1:2", "big-pickle", 0.02],
+          ["opencode:session-1:3", "big-pickle", 0.5],
         ],
       );
       assert.deepStrictEqual(records[1]?.totals, {

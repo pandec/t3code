@@ -24,6 +24,7 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { forkParked } from "../serverActivation.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import { isThreadPayloadEvent } from "./DeferredArchive.ts";
 import { evaluateWorktreeSwitch, pendingWorktreeSwitch } from "./DeferredWorktreeSwitch.ts";
@@ -84,10 +85,12 @@ export const make = Effect.gen(function* () {
   const random = yield* SecureRandom.SecureRandom;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const git = yield* GitVcsDriver.GitVcsDriver;
   const providePlatform = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideService(Path.Path, path),
+      Effect.provideService(GitVcsDriver.GitVcsDriver, git),
     );
   const newCommandId = (prefix: string, threadId: ThreadId) =>
     random
