@@ -22,11 +22,13 @@ import {
   listeningSpeedSpokenLabel,
   type ListeningTrackRef,
 } from "@t3tools/shared/listeningPlayback";
+import { RegistryContext } from "@effect/atom-react";
+import { AsyncResult } from "effect/reactivity";
 import { HeadphonesIcon, MinusIcon, PauseIcon, PlayIcon, PlusIcon } from "lucide-react";
 import {
   type CSSProperties,
   type KeyboardEvent,
-  useEffect,
+  useContext,
   useRef,
   useState,
   useSyncExternalStore,
@@ -88,11 +90,12 @@ export function useAssistantMessageSpeech(input: {
   // Creating a recording operates the environment; playing an existing one does not.
   const canCreate =
     useEnvironmentScope(environmentId, AuthOrchestrationOperateScope) && input.available;
-  const threadSpeech = useEnvironmentQuery(
+  const threadSpeechQuery =
     input.persistentJobs && threadId !== null
       ? messageSpeechThread({ environmentId, input: { threadId } })
-      : null,
-  ).data;
+      : null;
+  const threadSpeech = useEnvironmentQuery(threadSpeechQuery).data;
+  const registry = useContext(RegistryContext);
   const readSession = () => getMessageArtifactSessionSnapshot(environmentId, messageId, text);
   const session = useSyncExternalStore(
     (listener) => subscribeMessageArtifactSession(environmentId, messageId, listener),
@@ -101,11 +104,6 @@ export function useAssistantMessageSpeech(input: {
   );
   const speech = threadSpeech?.recordings.get(messageId) ?? session.speech;
   const serverPending = threadSpeech?.pending.has(messageId) ?? false;
-  const serverPendingRef = useRef(serverPending);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- mirrors server pending for the async synthesize callback
-  useEffect(() => {
-    serverPendingRef.current = serverPending;
-  }, [serverPending]);
   const [requesting, setRequesting] = useState(false);
   // null = untouched: a message that already has a recording shows its
   // player, so reopening a thread shows which messages have one.
@@ -126,7 +124,11 @@ export function useAssistantMessageSpeech(input: {
         const reason = messageSpeechFailureReasonFromError(squashAtomCommandFailure(result));
         // A dropped connection says nothing about the server's job, which the
         // thread's listening state still shows.
-        if (reason === undefined && serverPendingRef.current) return;
+        const live =
+          threadSpeechQuery === null
+            ? null
+            : AsyncResult.getOrElse(registry.get(threadSpeechQuery), () => null);
+        if (reason === undefined && live?.pending.has(messageId)) return;
         toastManager.add({
           type: "error",
           title: "Listening version unavailable",
