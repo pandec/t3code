@@ -9,7 +9,6 @@ import {
 import type { MessagesTimelineRow } from "./MessagesTimeline.logic";
 import {
   computeTimelineMinimapState,
-  deriveTimelineMinimapItems,
   EMPTY_TIMELINE_MINIMAP_STATE,
   resolveTimelineMinimapAnchorIndex,
   resolveTimelineMinimapAriaLabel,
@@ -76,7 +75,7 @@ describe("resolveTimelineMinimapTooltipTranslate", () => {
   });
 });
 
-describe("deriveTimelineMinimapItems", () => {
+describe("computeTimelineMinimapState items", () => {
   it("lists replies in order without gaps and flags messages from other agents", () => {
     const rows = [
       messageRow({ id: "user-1", role: "user", text: "user-1" }),
@@ -92,20 +91,17 @@ describe("deriveTimelineMinimapItems", () => {
     ];
 
     expect(
-      deriveTimelineMinimapItems(rows, "final-assistant").map(({ id, timestamp }) => [
-        id,
-        timestamp,
-      ]),
+      computeTimelineMinimapState(rows, EMPTY_TIMELINE_MINIMAP_STATE).assistantItems.map(
+        ({ id, timestamp }) => [id, timestamp],
+      ),
     ).toEqual([
       ["assistant-1", "updated:assistant-1"],
       ["assistant-3", "updated:assistant-3"],
     ]);
     expect(
-      deriveTimelineMinimapItems(rows, "user-turn").map(({ id, fromAgent, timestamp }) => [
-        id,
-        fromAgent,
-        timestamp,
-      ]),
+      computeTimelineMinimapState(rows, EMPTY_TIMELINE_MINIMAP_STATE).userItems.map(
+        ({ id, fromAgent, timestamp }) => [id, fromAgent, timestamp],
+      ),
     ).toEqual([
       ["user-1", false, "created:user-1"],
       ["user-2", false, "created:user-2"],
@@ -122,7 +118,9 @@ describe("deriveTimelineMinimapItems", () => {
       }),
     ];
 
-    expect(deriveTimelineMinimapItems(rows, "user-turn")[0]?.primaryText).toBeNull();
+    expect(
+      computeTimelineMinimapState(rows, EMPTY_TIMELINE_MINIMAP_STATE).userItems[0]?.primaryText,
+    ).toBeNull();
   });
 
   it("previews a quote and a context chip in the user's message as their text", () => {
@@ -146,9 +144,9 @@ describe("deriveTimelineMinimapItems", () => {
       messageRow({ id: "user-1", role: "user", text: `${quote}\nWhere does ${file} cover this?` }),
     ];
 
-    expect(deriveTimelineMinimapItems(rows, "user-turn")[0]?.primaryText).toBe(
-      "The cache misses on a cold start. Where does README.md cover this?",
-    );
+    expect(
+      computeTimelineMinimapState(rows, EMPTY_TIMELINE_MINIMAP_STATE).userItems[0]?.primaryText,
+    ).toBe("The cache misses on a cold start. Where does README.md cover this?");
   });
 });
 

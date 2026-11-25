@@ -146,19 +146,6 @@ export function LinearStateBadge({
   );
 }
 
-export function LinearLabelPill({ label }: { label: LinearIssue["labels"][number] }) {
-  return (
-    <span className="inline-flex h-6 items-center gap-1.5 rounded-full border border-border/60 px-2 text-xs text-foreground/90">
-      <span
-        aria-hidden
-        className="size-2 shrink-0 rounded-full"
-        style={{ backgroundColor: label.color }}
-      />
-      <span className="truncate">{label.name}</span>
-    </span>
-  );
-}
-
 export function LinearUserAvatar({
   user,
   className,
