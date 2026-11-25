@@ -1,13 +1,14 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type {
-  DesktopThreadLink,
-  EnvironmentId,
-  ScopedThreadRef,
-  ThreadId,
-} from "@t3tools/contracts";
+import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 
 /** Stands in for the primary environment's id, which tools outside the app cannot know. */
 const PRIMARY_ENVIRONMENT_LINK_ALIAS = "primary";
+
+/** The ids of a desktop thread link, as written: the environment may be `primary`. */
+export interface DesktopThreadLink {
+  readonly environmentId: string;
+  readonly threadId: string;
+}
 
 export type DesktopThreadLinkResolution =
   | { readonly kind: "open"; readonly threadRef: ScopedThreadRef }
