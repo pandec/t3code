@@ -1500,7 +1500,9 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
   // Fork: thread-scoped variables reach the agent only as its adapter set them, never
   // inherited from this server's own environment.
   const spawnEnvironment = {
-    ...((options.spawn.extendEnv ?? true) ? withoutThreadEnvironment(process.env) : {}),
+    ...((options.spawn.extendEnv ?? true) || options.spawn.env === undefined
+      ? withoutThreadEnvironment(process.env)
+      : {}),
     ...options.spawn.env,
     ...(linuxCgroupLease === undefined
       ? {}
