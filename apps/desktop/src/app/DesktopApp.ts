@@ -17,7 +17,6 @@ import * as DesktopAppIdentity from "./DesktopAppIdentity.ts";
 import * as DesktopClerk from "./DesktopClerk.ts";
 import * as DesktopCliShim from "./DesktopCliShim.ts";
 import * as DesktopCliCommand from "./DesktopCliCommand.ts";
-import * as DesktopThreadLinks from "./DesktopThreadLinks.ts";
 import * as DesktopApplicationMenu from "../window/DesktopApplicationMenu.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as PreviewPasskeys from "../preview/Passkeys.ts";
@@ -338,7 +337,6 @@ const startup = Effect.gen(function* () {
   const electronApp = yield* ElectronApp.ElectronApp;
   const lifecycle = yield* DesktopLifecycle.DesktopLifecycle;
   const linuxUrlHandler = yield* DesktopLinuxUrlHandler.DesktopLinuxUrlHandler;
-  const threadLinks = yield* DesktopThreadLinks.DesktopThreadLinks;
   const clerk = yield* DesktopClerk.DesktopClerk;
   const shellEnvironment = yield* DesktopShellEnvironment.DesktopShellEnvironment;
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
@@ -428,8 +426,6 @@ const startup = Effect.gen(function* () {
   yield* bootstrap(backendStarted).pipe(
     Effect.catchCause((cause) => fatalStartupCause("bootstrap", cause)),
   );
-  // After bootstrap so revealing a linked thread never races the first window.
-  yield* threadLinks.start;
 }).pipe(Effect.withSpan("desktop.startup"));
 
 const scopedProgram = Effect.scoped(

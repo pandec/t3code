@@ -237,13 +237,24 @@ describe("DesktopClerk", () => {
       listeners.get("second-instance")?.({}, ["t3", first]);
       listeners.get("second-instance")?.({}, ["t3", second]);
       listeners.get("open-url")?.({ preventDefault: () => undefined }, launchPair);
+      // Fork: a macOS cold start hands the documented `app/` thread link to open-url.
+      listeners.get("open-url")?.(
+        { preventDefault: () => undefined },
+        "t3code-dev://app/primary/t",
+      );
       assert.deepEqual(received, []);
 
       yield* clerk.configure;
       listeners.get("second-instance")!({}, ["t3", later]);
       yield* Effect.promise(() => delivered.promise);
 
-      assert.deepEqual(received, [launchPair, first, second, later]);
+      assert.deepEqual(received, [
+        launchPair,
+        "t3code-dev://threads/primary/t",
+        first,
+        second,
+        later,
+      ]);
     }).pipe(
       Effect.scoped,
       Effect.provide(layerDesktopClerk(true, [], "darwin", undefined, undefined, listeners)),
@@ -461,6 +472,13 @@ it.effect("hands web and app links to the renderer and leaves other links alone"
       assert.strictEqual(open("t3code://pair"), 0);
       assert.strictEqual(open("mailto:hello@example.com"), 0);
       assert.strictEqual(open("t3code-dev://somewhere-else"), 0);
+      // Fork: the documented `app/` thread link, for this build only, also from previewed pages.
+      assert.strictEqual(open("t3code-dev://app/env-1/thread-2"), 1);
+      assert.strictEqual(open("t3code://app/env-1/thread-2"), 0);
+      assert.isTrue(clerk.openThreadLink("t3code-dev://app/primary/thread-3"));
+      assert.isFalse(clerk.openThreadLink("t3code-dev://threads/env-1/thread-1"));
+      assert.isFalse(clerk.openThreadLink("t3code://app/env-1/thread-2"));
+      assert.isFalse(clerk.openThreadLink("https://example.com/page"));
       yield* Effect.yieldNow;
       assert.deepStrictEqual(received, [
         "https://example.com/page",
@@ -468,6 +486,8 @@ it.effect("hands web and app links to the renderer and leaves other links alone"
         "t3code-dev://new?prompt=hi",
         "t3code-dev://threads/env-1/thread-1",
         pairLink,
+        "t3code-dev://threads/env-1/thread-2",
+        "t3code-dev://threads/primary/thread-3",
       ]);
     }).pipe(
       Effect.provide(layerDesktopClerk(true, [], "darwin", undefined, undefined, listeners)),
