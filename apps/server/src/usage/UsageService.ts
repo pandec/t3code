@@ -43,7 +43,6 @@ import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/
 import type {
   ProviderUsageInstance,
   ProviderUsageScan,
-  ProviderUsageScanFile,
   TranscriptUsageFormat,
   UsageRecord,
 } from "@t3tools/provider-core/server/usage";
@@ -746,50 +745,23 @@ export const make = Effect.gen(function* () {
 
   /**
    * Merges a local scan source's read into the scan cache. Records it no longer returns stay
-   * until retention, unless the reader names them as copies or another session still returns
-   * the same request under a new key. These readers report read errors, not malformed counts.
+   * until retention; a reader keys copies like their originals (OpenCode keys forks by lineage).
+   * These readers report read errors, not malformed counts.
    */
   const cacheReaderFiles = (
     provider: UsageProviderKind,
-    files: readonly ProviderUsageScanFile[],
+    files: NonNullable<ProviderUsageScan["files"]>,
     unreadable: boolean,
     retentionCutoffMs: number,
   ): ScannedFile[] =>
     files.map((file) => {
       const cached = fileCache.get(file.path);
-      const superseded = new Set(file.supersededKeys);
       const keyOf = (record: UsageRecord) => record.dedupeKey ?? encodeUsageRecordKey(record);
-      // An OpenCode fork copies its parent's messages, data and creation time included, into its
-      // own session under new ids; once the parent is deleted the reader returns the copy instead.
-      const requestOf = (record: UsageRecord) =>
-        encodeUsageRecordKey([
-          record.timestampMs,
-          record.model,
-          record.rateModel,
-          record.totals,
-          record.cacheCreation1hTokens,
-          record.reportedCostUsd,
-          record.speed,
-        ]);
-      const returnedKeys = new Set(file.records.map(keyOf));
-      const returnedSessions = new Map<string, Set<string>>();
-      for (const record of file.records) {
-        if (record.dedupeKey === null) continue;
-        const request = requestOf(record);
-        const sessions = returnedSessions.get(request) ?? new Set();
-        returnedSessions.set(request, sessions.add(record.sessionId));
-      }
       const recordsByKey = new Map<string, UsageRecord>();
       const expired = new Set<string>();
       for (const record of cached?.provider === provider
         ? [...cached.records, ...cached.tailRecords]
         : []) {
-        if (record.dedupeKey !== null && superseded.has(record.dedupeKey)) continue;
-        const copiedSessions =
-          record.dedupeKey === null || returnedKeys.has(record.dedupeKey)
-            ? undefined
-            : returnedSessions.get(requestOf(record));
-        if (copiedSessions !== undefined && !copiedSessions.has(record.sessionId)) continue;
         const key = keyOf(record);
         if (record.timestampMs < retentionCutoffMs) expired.add(key);
         recordsByKey.set(key, record);

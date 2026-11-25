@@ -72,7 +72,7 @@ import type { DesktopPreviewOverlay } from "~/previewStateStore";
 import { linkedThreadTitle } from "~/linkedThreadSurface";
 import type { RightPanelSurface } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
-import { type FilePathCopyKind, filePathCopyLabel } from "~/fileContextMenu";
+import type { FilePathCopyKind } from "~/fileContextMenu";
 import { issueStatePresentation } from "~/components/issue/issuePresentation";
 import { issueEnvironment } from "~/state/issues";
 import { resolveShortcutCommand, type ShortcutMatchContext } from "~/keybindings";
@@ -1353,9 +1353,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     if (surface.kind === "file" && surface.attachment === undefined) {
       // A host file's only path is the full one.
       if (!isAbsolutePath(surface.relativePath)) {
-        items.push({ id: "copy-relative-path", label: filePathCopyLabel("relative") });
+        items.push({ id: "copy-relative-path", label: gt("Copy relative path") });
       }
-      items.push({ id: "copy-full-path", label: filePathCopyLabel("full") });
+      items.push({ id: "copy-full-path", label: gt("Copy full path") });
     }
     const menuPreviewTabId = previewTabIdOf(surface, props.previewSessions);
     const menuOverlay = menuPreviewTabId ? (props.desktopByTabId[menuPreviewTabId] ?? null) : null;
