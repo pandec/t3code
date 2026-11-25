@@ -3,25 +3,33 @@ import {
   type ThreadRuntimeSummary,
 } from "@t3tools/client-runtime/state/models";
 
+import type { ArchiveQueuedMessageDiscard } from "@t3tools/client-runtime/state/thread-settled";
+
 import * as Dialog from "../../components/ui/Dialog";
 
 export function threadCanArchive(runtime: ThreadRuntimeSummary | null | undefined): boolean {
   return threadRuntimeCanArchive(runtime);
 }
 
-/** Fork: asks before archiving now discards a thread's queued messages. */
+/** Fork: asks before an archive discards queued messages of a thread or its side chats. */
 export function confirmQueuedMessageDiscard(input: {
   readonly title: string;
-  readonly count: number;
+  readonly discarded: ArchiveQueuedMessageDiscard;
+  readonly whenDone: boolean;
   readonly onConfirm: () => void;
-  readonly onCancel?: () => void;
 }): void {
+  const { total, inSideChats } = input.discarded;
+  const waiting =
+    inSideChats === 0
+      ? `“${input.title}” has`
+      : inSideChats === total
+        ? `Side chats of “${input.title}” have`
+        : `“${input.title}” and its side chats have`;
   Dialog.confirm({
-    title: `Archive and discard ${input.count} queued ${input.count === 1 ? "message" : "messages"}?`,
-    message: `“${input.title}” has messages waiting to run. Archiving discards them.`,
+    title: `Archive${input.whenDone ? " when done" : ""} and discard ${total} queued ${total === 1 ? "message" : "messages"}?`,
+    message: `${waiting} messages waiting to run. Archiving discards them.`,
     confirmText: "Archive",
     destructive: true,
     onConfirm: input.onConfirm,
-    ...(input.onCancel === undefined ? {} : { onCancel: input.onCancel }),
   });
 }

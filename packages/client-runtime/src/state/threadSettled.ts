@@ -74,18 +74,52 @@ export function resolveArchiveToggleAction(
     : "schedule";
 }
 
+export interface ArchiveQueuedMessageDiscard {
+  readonly total: number;
+  /** The part of `total` queued in side chats, which follow their parent's archive. */
+  readonly inSideChats: number;
+}
+
+const NO_QUEUED_MESSAGE_DISCARD: ArchiveQueuedMessageDiscard = { total: 0, inSideChats: 0 };
+
 /**
- * Fork: queued messages the archive control would discard. Archiving now cancels every queued
- * run, held ones included (Stop holds the queue), so every surface confirms while this is
- * positive. Archive-when-done and cancel discard nothing.
+ * Fork: queued messages the archive control would discard, so every surface confirms while
+ * `total` is positive. Archiving now cancels the thread's queued runs, held ones included (Stop
+ * holds the queue). The archive, now or when done, also takes the thread's unarchived side chats
+ * from `threads` with their queues. Cancel discards nothing.
  */
-export function archiveDiscardedQueuedMessageCount(
+export function archiveDiscardedQueuedMessages(
   shell: Pick<
     EnvironmentThreadShell,
-    "archivedAt" | "archiveRequest" | "runtime" | "pendingBackgroundTasks" | "queuedMessageCount"
+    | "environmentId"
+    | "id"
+    | "archivedAt"
+    | "archiveRequest"
+    | "runtime"
+    | "pendingBackgroundTasks"
+    | "queuedMessageCount"
   >,
-): number {
-  return resolveArchiveToggleAction(shell) === "archive" ? (shell.queuedMessageCount ?? 0) : 0;
+  threads: ReadonlyArray<
+    Pick<EnvironmentThreadShell, "environmentId" | "lineage" | "archivedAt" | "queuedMessageCount">
+  > = [],
+): ArchiveQueuedMessageDiscard {
+  const action = resolveArchiveToggleAction(shell);
+  if (action === "cancel") return NO_QUEUED_MESSAGE_DISCARD;
+  let inSideChats = 0;
+  for (const thread of threads) {
+    if (
+      thread.environmentId === shell.environmentId &&
+      thread.lineage.sideChat === true &&
+      thread.lineage.parentThreadId === shell.id &&
+      thread.archivedAt === null
+    ) {
+      inSideChats += thread.queuedMessageCount ?? 0;
+    }
+  }
+  const own = action === "archive" ? (shell.queuedMessageCount ?? 0) : 0;
+  return own + inSideChats === 0
+    ? NO_QUEUED_MESSAGE_DISCARD
+    : { total: own + inSideChats, inSideChats };
 }
 
 export interface ThreadSnoozeShell extends QueuedThreadShell {

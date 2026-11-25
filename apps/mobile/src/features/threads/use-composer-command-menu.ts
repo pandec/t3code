@@ -122,27 +122,17 @@ export function buildComposerSlashCommandItems(
   resolve: MessageResolver = m,
 ): ComposerCommandItem[] {
   const query = input.query.toLowerCase();
-  const builtIn = [
-    {
-      id: "cmd:model",
-      type: "slash-command",
-      command: "model",
-      label: "/model",
-      description: resolve(msg("Switch model")),
-    },
-    ...(input.hasThread
-      ? [
-          {
-            id: "cmd:t3-archive",
-            type: "slash-command" as const,
-            command: "t3-archive",
-            label: "/t3-archive",
-            description: "Archive now or when done; send again to cancel",
-          },
-        ]
-      : []),
-  ] satisfies ComposerCommandItem[];
-  const items: ComposerCommandItem[] = builtIn.filter((item) => item.command.includes(query));
+  const items: ComposerCommandItem[] = "model".includes(query)
+    ? [
+        {
+          id: "cmd:model",
+          type: "slash-command",
+          command: "model",
+          label: "/model",
+          description: resolve(msg("Switch model")),
+        },
+      ]
+    : [];
 
   // Providers expand commands only at the start of a message. T3 commands
   // change local state and do not have this restriction, except `/clear`.

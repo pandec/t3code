@@ -12,6 +12,7 @@ const commands = vi.hoisted(() => ({
   pin: vi.fn(),
   unpin: vi.fn(),
   archive: vi.fn(),
+  scheduleArchive: vi.fn(),
   unarchive: vi.fn(),
   delete: vi.fn(),
   settle: vi.fn(),
@@ -77,6 +78,7 @@ vi.mock("../archiveUndo", () => ({
   readEmptyNewThreadDraftId: () => emptyDraft.ids.shift() ?? null,
 }));
 const threadShell = vi.hoisted(() => ({
+  id: "thread",
   title: "Thread",
   archivedAt: null as string | null,
   archiveRequest: null,
@@ -95,11 +97,12 @@ const threadShell = vi.hoisted(() => ({
   environmentId: "undo-env",
   session: null,
 }));
-const shellLookup = vi.hoisted(() => ({ missing: false }));
+const shellLookup = vi.hoisted(() => ({ missing: false, sideChats: [] as Array<object> }));
 vi.mock("../state/entities", async (original) => ({
   ...(await original<typeof import("../state/entities")>()),
   readEnvironmentServerConfigLoaded: () => true,
   readThreadShell: () => (shellLookup.missing ? null : threadShell),
+  readThreadShells: () => shellLookup.sideChats,
 }));
 const visitAfterPark = vi.hoisted(() => ({
   target: null as { kind: "server"; threadRef: { environmentId: string; threadId: string } } | null,
@@ -116,6 +119,8 @@ vi.mock("../state/use-atom-command", () => ({
         return commands.unpin;
       case threadEnvironment.archive:
         return commands.archive;
+      case threadEnvironment.scheduleArchive:
+        return commands.scheduleArchive;
       case threadEnvironment.unarchive:
         return commands.unarchive;
       case threadEnvironment.delete:
@@ -157,6 +162,7 @@ beforeEach(() => {
   visitAfterPark.target = null;
   emptyDraft.ids = [];
   shellLookup.missing = false;
+  shellLookup.sideChats = [];
   threadShell.pinnedAt = null;
   threadShell.snoozedAt = null;
   threadShell.activeOrderKey = null;
@@ -321,6 +327,24 @@ describe("attemptArchiveThread", () => {
     await useThreadActions().attemptArchiveThread(target);
     expect(dialogs.confirm).toHaveBeenCalledOnce();
     expect(commands.archive).not.toHaveBeenCalled();
+  });
+
+  it("counts side chat queues, and confirms an archive when done that discards them", async () => {
+    threadShell.pendingBackgroundTasks = [{ taskId: "agent", kind: "subagent" }];
+    shellLookup.sideChats = [
+      {
+        environmentId: "undo-env",
+        lineage: { parentThreadId: "thread", sideChat: true },
+        archivedAt: null,
+        queuedMessageCount: 2,
+      },
+    ];
+    dialogs.confirm.mockResolvedValue(true);
+    await useThreadActions().attemptArchiveThread(target);
+    expect(dialogs.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("2 queued messages in its side chats"),
+    );
+    expect(commands.scheduleArchive).toHaveBeenCalledOnce();
   });
 
   it("keeps the thread when the confirmation is declined", async () => {

@@ -17,7 +17,6 @@ import {
   snapshotComposerSend,
   withMessageContext,
   makeThreadErrorSetter,
-  hasStandaloneComposerCommandContext,
   resolveDraftCreationGroup,
 } from "../ChatView.logic";
 import { isUsageLimitsCommand } from "@t3tools/shared/usageLimits";
@@ -62,10 +61,7 @@ import {
 import {
   type ComposerSubmissionIntent,
   collapseExpandedComposerCursor,
-  parseComposerArchiveCommand,
 } from "../../composer-logic";
-import { hasPendingArchive } from "@t3tools/client-runtime/state/thread-settled";
-import { useThreadActions } from "../../hooks/useThreadActions";
 import { useThreadGroupCatalog } from "../../hooks/useThreadGroups";
 import { useKeepFullHistoryOverrideStore } from "../../keepFullHistoryOverrideStore";
 import { draftSubmissionTracker } from "../../draftSubmissionState";
@@ -397,7 +393,6 @@ export function useComposerSend(input: ComposerSendInput) {
   const navigate = useNavigate();
   const clientSettingsHydrated = useClientSettingsHydrated();
   const steerGraceWindowMs = useSteerGraceWindowMs();
-  const { attemptArchiveThread } = useThreadActions();
   const customGroupCatalog = useThreadGroupCatalog();
   const setKeepFullHistoryOverride = useKeepFullHistoryOverrideStore((state) => state.setOverride);
   const startThreadTurn = useOrchestrationCommand(threadEnvironment.startTurn, {
@@ -759,64 +754,6 @@ export function useComposerSend(input: ComposerSendInput) {
         return;
       }
       onAdvanceActivePendingUserInput();
-      return;
-    }
-    // Fork: `/t3-archive` archives now or when done; sent again, it cancels.
-    // Attachments or contexts mean a real prompt, which goes to the provider.
-    const archiveCommand =
-      !directAnnotation &&
-      !queuedRunEdit.isEditing &&
-      sendCtx !== undefined &&
-      sendCtx.threadContexts.length === 0 &&
-      hasStandaloneComposerCommandContext({
-        imageCount: sendCtx.images.length,
-        fileCount: sendCtx.files.length,
-        terminalContextCount: sendCtx.terminalContexts.length,
-        previewAnnotationCount: sendCtx.previewAnnotations.length,
-        reviewCommentCount: sendCtx.reviewComments.length,
-      })
-        ? parseComposerArchiveCommand(promptRef.current)
-        : null;
-    if (archiveCommand) {
-      if (archiveCommand.action === null) {
-        toastManager.add({
-          type: "error",
-          title: "Unable to archive thread",
-          description: "Usage: /t3-archive (send again to cancel a pending archive)",
-        });
-        return;
-      }
-      if (!isServerThread) {
-        toastManager.add({ type: "error", title: "No thread to archive yet" });
-        return;
-      }
-      if (activeThread.archivedAt !== null) {
-        toastManager.add({ type: "error", title: "This thread is already archived" });
-        return;
-      }
-      if (archiveCommand.action === "cancel" && !hasPendingArchive(activeThread)) {
-        toastManager.add({ type: "error", title: "No archive is pending for this thread" });
-        return;
-      }
-      // The shared archive path: archive now (with its confirmation and
-      // Undo), archive when done, or cancel a pending archive.
-      const promptForArchive = promptRef.current;
-      const draftTargetForArchive = composerDraftTarget;
-      sendInFlightRef.current = true;
-      // A promise `finally`: the React Compiler cannot compile try/finally.
-      await attemptArchiveThread(scopeThreadRef(environmentId, activeThread.id), {
-        ...(archiveCommand.action === "cancel" ? { expectedAction: "cancel" as const } : {}),
-        scheduledHint: "Send /t3-archive again to cancel.",
-        // Clear only an unchanged draft: the user may have typed on meanwhile.
-        onApplied: () => {
-          if (promptRef.current !== promptForArchive) return;
-          promptRef.current = "";
-          clearComposerDraftContent(draftTargetForArchive);
-          composerRef.current?.resetCursorState();
-        },
-      }).finally(() => {
-        sendInFlightRef.current = false;
-      });
       return;
     }
     if (!sendCtx?.providerAvailable) {

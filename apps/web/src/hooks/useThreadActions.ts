@@ -11,7 +11,8 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
-  archiveDiscardedQueuedMessageCount,
+  archiveDiscardedQueuedMessages,
+  type ArchiveQueuedMessageDiscard,
   type ArchiveToggleAction,
   canSnooze,
   effectiveSnoozed,
@@ -408,6 +409,22 @@ function threadOperationFailure(target: ScopedThreadRef) {
           }),
         ),
       );
+}
+
+/** Fork: names how many queued messages an archive discards and where they wait. */
+function queuedMessageDiscardPrompt(
+  title: string,
+  action: ArchiveToggleAction,
+  discarded: ArchiveQueuedMessageDiscard,
+): string {
+  const messages = `${discarded.total} queued ${discarded.total === 1 ? "message" : "messages"}`;
+  const where =
+    discarded.inSideChats === 0
+      ? ""
+      : discarded.inSideChats === discarded.total
+        ? " in its side chats"
+        : `, including ${discarded.inSideChats} in its side chats`;
+  return `Archive "${title}"${action === "schedule" ? " when done" : ""} and discard ${messages}${where}?`;
 }
 
 export function useThreadActions() {
@@ -954,17 +971,15 @@ export function useThreadActions() {
 
   /**
    * Fork: the one user-facing archive path: archive now, when done, or cancel
-   * (`resolveArchiveToggleAction`). A changed `expectedAction` does nothing; archiving
-   * now confirms when set or when it discards queued messages, and toasts failures. Concurrent attempts collapse into one;
-   * `onApplied` runs once the request lands, before an archive's navigation.
+   * (`resolveArchiveToggleAction`). A changed `expectedAction` does nothing; archiving now
+   * confirms when set, any discard of queued messages confirms, and failures toast. Concurrent
+   * attempts collapse into one; `onApplied` runs once the request lands, before navigation.
    */
   const attemptArchiveThread = async (
     target: ScopedThreadRef,
     opts: {
       expectedAction?: ArchiveToggleAction;
       onApplied?: () => void;
-      /** Appended to the "Archive when done" notice. */
-      scheduledHint?: string;
     } = {},
   ) => {
     const threadKey = scopedThreadKey(target);
@@ -974,8 +989,23 @@ export function useThreadActions() {
     const run = async () => {
       const toggleAction = resolveArchiveToggleAction(resolved.thread);
       if (opts.expectedAction !== undefined && opts.expectedAction !== toggleAction) return;
+      // Discarding queued messages, including those of side chats the archive takes, always
+      // confirms; otherwise only archiving now does, when set.
+      const discarded = archiveDiscardedQueuedMessages(resolved.thread, readThreadShells());
+      if (discarded.total > 0 || (toggleAction === "archive" && confirmThreadArchive)) {
+        const localApi = readLocalApi();
+        if (!localApi) return;
+        const confirmed = await settlePromise(() =>
+          localApi.dialogs.confirm(
+            discarded.total > 0
+              ? queuedMessageDiscardPrompt(resolved.thread.title, toggleAction, discarded)
+              : `Archive thread "${resolved.thread.title}"?`,
+          ),
+        );
+        if (confirmed._tag === "Failure" || !confirmed.value) return;
+      }
       if (toggleAction !== "archive") {
-        // Scheduling and cancelling are reversible, so they skip the confirmation.
+        // Scheduling and cancelling are reversible, so only discards confirm them.
         const input = { threadId: target.threadId };
         const result = await (toggleAction === "cancel"
           ? cancelThreadArchiveMutation({ environmentId: target.environmentId, input })
@@ -1004,28 +1034,10 @@ export function useThreadActions() {
             description:
               toggleAction === "cancel"
                 ? "This thread will stay open."
-                : `Archives when the current turn and background work finish.${
-                    opts.scheduledHint === undefined ? "" : ` ${opts.scheduledHint}`
-                  }`,
+                : "Archives when the current turn and background work finish.",
           }),
         );
         return;
-      }
-      // Archiving now discards queued messages, so that always confirms.
-      const discardedCount = archiveDiscardedQueuedMessageCount(resolved.thread);
-      if (confirmThreadArchive || discardedCount > 0) {
-        const localApi = readLocalApi();
-        if (!localApi) return;
-        const confirmed = await settlePromise(() =>
-          localApi.dialogs.confirm(
-            discardedCount > 0
-              ? `Archive "${resolved.thread.title}" and discard ${discardedCount} queued ${
-                  discardedCount === 1 ? "message" : "messages"
-                }?`
-              : `Archive thread "${resolved.thread.title}"?`,
-          ),
-        );
-        if (confirmed._tag === "Failure" || !confirmed.value) return;
       }
       let didArchive = false;
       const result = await archiveThread(target, {

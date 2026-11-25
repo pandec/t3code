@@ -71,22 +71,6 @@ describe("resolveComposerMenuSelection", () => {
 });
 
 describe("mobile slash commands", () => {
-  it("offers archive only for an existing thread and inserts it for submission", () => {
-    const input = { query: "t3-arch", atMessageStart: true, selectedProviderStatus: null };
-    expect(buildComposerSlashCommandItems({ ...input, hasThread: false })).toEqual([]);
-    const items = buildComposerSlashCommandItems({ ...input, hasThread: true });
-    expect(items).toHaveLength(1);
-    const item = items[0];
-    if (!item) throw new Error("Expected archive command");
-    expect(
-      resolveComposerCommandSelection({
-        draftMessage: "/t3-arch",
-        trigger: { rangeStart: 0, rangeEnd: 8 },
-        item,
-      }),
-    ).toEqual({ text: "/t3-archive ", cursor: 12 });
-  });
-
   it("keeps a provider's native /plan", () => {
     const items = buildComposerSlashCommandItems({
       query: "pl",

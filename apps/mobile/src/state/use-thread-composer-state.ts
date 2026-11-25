@@ -46,16 +46,6 @@ import {
   type CodexFeedbackSubmission,
 } from "@t3tools/client-runtime/state/threads";
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
-import {
-  isAtomCommandInterrupted,
-  settlePromise,
-  squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
-import {
-  archiveDiscardedQueuedMessageCount,
-  hasPendingArchive,
-} from "@t3tools/client-runtime/state/thread-settled";
-import { parseComposerArchiveCommand } from "@t3tools/shared/composerTrigger";
 import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
 import { upgradeLegacyContextMessage } from "@t3tools/shared/composerContextLegacy";
 import { restoreAttachmentOnlyBootstrapPrompt } from "@t3tools/shared/composerContextReferences";
@@ -93,7 +83,6 @@ import { threadAllowsProviderSwitch } from "./thread-provider-switching";
 import { appAtomRegistry } from "./atom-registry";
 import { pendingThreadCreationMessage } from "./pending-thread-creation";
 import type { SideChatMessage } from "../features/threads/useStartSideChat";
-import { confirmQueuedMessageDiscard } from "../features/home/threadArchive";
 import {
   composerAttachmentUploadBlockReason,
   composerAttachmentUploadsAtom,
@@ -109,7 +98,6 @@ import {
   isFreshSessionPending,
   mergeComposerDraftContent,
   removeComposerDraftAttachment,
-  sameComposerDraftState,
   scheduleUnusedComposerAttachmentCleanup,
   setComposerDraftText,
   setFreshSessionPending,
@@ -133,6 +121,7 @@ import {
 } from "@t3tools/client-runtime/state/composer-dispatch";
 import { Atom } from "effect/reactivity";
 import { AsyncResult } from "effect/reactivity";
+import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { prepareTurnAttachments } from "../lib/attachmentUpload";
 import { DEFAULT_FOLLOW_UP_BEHAVIOR } from "../lib/followUpBehavior";
 import { mobilePreferencesAtom } from "./preferences";
@@ -275,13 +264,6 @@ export function useThreadComposerState(input: {
     Record<string, ReadonlyArray<CodexFeedbackSubmission>>
   >({});
   const uploadThreadFeedback = useAtomCommand(threadEnvironment.uploadFeedback, {
-    reportFailure: false,
-  });
-  const archiveThread = useAtomCommand(threadEnvironment.archive, { reportFailure: false });
-  const scheduleThreadArchive = useAtomCommand(threadEnvironment.scheduleArchive, {
-    reportFailure: false,
-  });
-  const cancelThreadArchive = useAtomCommand(threadEnvironment.cancelArchive, {
     reportFailure: false,
   });
   const editQueuedRun = useAtomCommand(threadEnvironment.editQueuedRun, {
@@ -842,72 +824,6 @@ export function useThreadComposerState(input: {
     ) {
       setFreshSessionPending(threadKey, true);
       clearComposerDraftContent(threadKey);
-      return null;
-    }
-
-    // Fork: `/t3-archive` archives now or when done; sent again, it cancels.
-    // Attachments or context mean a real prompt, which goes to the provider.
-    const archiveCommand =
-      attachments.length === 0 && (draft.context?.records.length ?? 0) === 0
-        ? parseComposerArchiveCommand(text)
-        : null;
-    if (archiveCommand) {
-      if (archiveCommand.action === null) {
-        Dialog.alert(
-          "Unable to archive thread",
-          "Usage: /t3-archive (send again to cancel a pending archive)",
-        );
-        return null;
-      }
-      const environmentId = thread.environmentId;
-      const input = { threadId: thread.id };
-      const cancelArchive = archiveCommand.action === "cancel" || hasPendingArchive(thread);
-      // Archive-when-done is refused while messages are queued; archiving now discards them.
-      const discardedCount = cancelArchive ? 0 : archiveDiscardedQueuedMessageCount(thread);
-      if (
-        discardedCount > 0 &&
-        !(await new Promise<boolean>((resolve) =>
-          confirmQueuedMessageDiscard({
-            title: thread.title,
-            count: discardedCount,
-            onConfirm: () => resolve(true),
-            onCancel: () => resolve(false),
-          }),
-        ))
-      ) {
-        return null;
-      }
-      const result = await (cancelArchive
-        ? cancelThreadArchive({ environmentId, input })
-        : discardedCount > 0
-          ? archiveThread({ environmentId, input })
-          : scheduleThreadArchive({ environmentId, input: { ...input, afterTurn: true } }));
-      if (result._tag === "Failure") {
-        if (!isAtomCommandInterrupted(result)) {
-          const error = squashAtomCommandFailure(result);
-          Dialog.alert(
-            "Unable to update thread archive",
-            error instanceof Error ? error.message : "An error occurred.",
-          );
-        }
-        return null;
-      }
-      Dialog.alert(
-        cancelArchive
-          ? "Archive cancelled"
-          : discardedCount > 0
-            ? "Thread archived"
-            : "Archive requested",
-        cancelArchive
-          ? "This thread will stay open."
-          : discardedCount > 0
-            ? "Its queued messages were discarded."
-            : "Archives when the current turn and background work finish. Send /t3-archive again to cancel.",
-      );
-      // Clear only an unchanged draft: the user may have typed on meanwhile.
-      if (sameComposerDraftState(getComposerDraftSnapshot(threadKey), draft)) {
-        clearComposerDraftContent(threadKey);
-      }
       return null;
     }
 

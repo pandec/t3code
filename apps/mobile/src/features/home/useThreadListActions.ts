@@ -4,7 +4,7 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import * as ThreadUndo from "@t3tools/client-runtime/state/thread-undo";
 import { showThreadUndoNotice } from "./thread-undo-notice";
 import {
-  archiveDiscardedQueuedMessageCount,
+  archiveDiscardedQueuedMessages,
   canSnooze,
   resolveArchiveToggleAction,
 } from "@t3tools/client-runtime/state/thread-settled";
@@ -454,21 +454,25 @@ export function useThreadListActions(
   const titleRegenerationInFlightThreadKeys = useRef(new Set<string>());
 
   /**
-   * The archive toggle: archives, archives when done, or cancels a pending archive. Archiving
-   * now discards queued messages, so that always confirms first, offline from the cached shell.
+   * The archive toggle: archives, archives when done, or cancels a pending archive. Discarding
+   * queued messages, the thread's or its side chats', always confirms first, offline from cache.
    */
   const archiveThread = (thread: EnvironmentThreadShell, discardConfirmed = false) => {
-    const discardedCount = archiveDiscardedQueuedMessageCount(thread);
-    if (discardedCount > 0 && !discardConfirmed) {
+    const toggle = resolveArchiveToggleAction(thread);
+    const discarded = archiveDiscardedQueuedMessages(
+      thread,
+      appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
+    );
+    if (discarded.total > 0 && !discardConfirmed) {
       confirmQueuedMessageDiscard({
         title: thread.title,
-        count: discardedCount,
+        discarded,
+        whenDone: toggle === "schedule",
         // The thread can change while the dialog is open (a resumed turn must not be archived).
         onConfirm: () => void archiveThread(liveThread(thread), true),
       });
       return Promise.resolve(false);
     }
-    const toggle = resolveArchiveToggleAction(thread);
     return executeAction(
       toggle === "cancel"
         ? "cancel-archive"
@@ -478,7 +482,7 @@ export function useThreadListActions(
       thread,
       undefined,
       undefined,
-      discardConfirmed && discardedCount > 0,
+      discardConfirmed && discarded.total > 0,
     );
   };
   const offerUndo = (

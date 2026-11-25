@@ -399,11 +399,6 @@ once the provider reports usage.
 Claude instances can also compact idle threads for you. See
 [compact long conversations](./providers-claude.md#compact-long-conversations).
 
-Send `/t3-archive` by itself, without attachments or context, to archive the current
-thread on web, desktop, or mobile. A working thread
-[archives when done](./thread-sidebar.md#archive-when-done); an idle one archives right
-away. Send `/t3-archive` again before it runs to cancel the pending archive.
-
 ## Goals
 
 With Codex, Claude, and OpenCode 2.2.5 or later, send `/goal` followed by what "done" means, for example
