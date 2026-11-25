@@ -30,6 +30,7 @@ import type * as EffectAcpSchema from "effect-acp/compat";
 import * as EffectAcpProtocol from "effect-acp/protocol";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { AgentScope, AgentScopeThreadId, RAISE_OOM_SCORE_LINE } from "@t3tools/shared/AgentScope";
+import { withoutThreadEnvironment } from "@t3tools/provider-core/server/threadEnvironment";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import { signalProcessGroup } from "@t3tools/provider-core/server/processGroup";
@@ -1496,20 +1497,21 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           ...wrapCommandForLinuxCgroup(linuxCgroupLease, containedTargetCommand, spawnCommand.args),
           shell: false,
         };
-  const spawnEnvironment =
-    linuxCgroupLease === undefined
-      ? options.spawn.env
-      : {
-          ...options.spawn.env,
-          ELECTRON_RUN_AS_NODE: "1",
-          T3_ACP_CGROUP_WRAPPER: "1",
-        };
+  // Fork: thread-scoped variables reach the agent only as its adapter set them, never
+  // inherited from this server's own environment.
+  const spawnEnvironment = {
+    ...((options.spawn.extendEnv ?? true) ? withoutThreadEnvironment(process.env) : {}),
+    ...options.spawn.env,
+    ...(linuxCgroupLease === undefined
+      ? {}
+      : { ELECTRON_RUN_AS_NODE: "1", T3_ACP_CGROUP_WRAPPER: "1" }),
+  };
   const child = yield* spawner
     .spawn(
       ChildProcess.make(containedSpawnCommand.command, containedSpawnCommand.args, {
         ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
-        ...(spawnEnvironment ? { env: spawnEnvironment } : {}),
-        extendEnv: options.spawn.extendEnv ?? true,
+        env: spawnEnvironment,
+        extendEnv: false,
         // Windows `detached` gives the child its own console, which breaks stdio pipes through
         // `.cmd` shims; taskkill /T cleans up the tree there without it.
         ...(options.ownDetachedProcessGroup === undefined
