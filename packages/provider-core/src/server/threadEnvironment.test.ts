@@ -9,6 +9,8 @@ describe("provider thread environment", () => {
       T3CODE_THREAD_ID: "parent",
       T3CODE_TURN_ID: "stale",
       T3CODE_WORKTREE_PATH: "/parent",
+      // A Windows environment keeps whatever spelling it inherited.
+      t3code_Turn_Id: "stale-windows",
     };
     const first = providerThreadEnvironment({ threadId: ThreadId.make("one"), cwd: "/one" }, base, {
       baseDir: "/t3",

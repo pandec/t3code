@@ -264,7 +264,8 @@ const make = Effect.gen(function* () {
         ),
       );
     })).flat();
-    // Fork: instances with one continuation key (a Claude shadow and its default) share sessions.
+    // Fork: instances with one continuation key (a Claude shadow and its default) share sessions;
+    // the guard also matches an owner recorded under that key whose instance is gone.
     const getMetadata = registry.getMetadata;
     const continuationKeys = new Map(
       getMetadata === undefined
@@ -276,11 +277,13 @@ const make = Effect.gen(function* () {
             ),
           )).flatMap(Option.toArray),
     );
-    const sharedSessionInstanceIds = (instanceId: ProviderInstanceId) => {
-      const key = continuationKeys.get(instanceId);
-      return [...continuationKeys].flatMap(([other, otherKey]) =>
-        key !== undefined && otherKey === key && other !== instanceId ? [other] : [],
+    const sharedSession = (instanceId: ProviderInstanceId) => {
+      const continuationKey = continuationKeys.get(instanceId);
+      if (continuationKey === undefined) return {};
+      const instanceIds = [...continuationKeys].flatMap(([other, key]) =>
+        key === continuationKey && other !== instanceId ? [other] : [],
       );
+      return { sharedSession: { continuationKey, instanceIds } };
     };
     const outcomes = scanner.recentThreads(project.workspaceRoot, completedSources);
     const importedThreadIds = new Set<ThreadId>();
@@ -443,7 +446,7 @@ const make = Effect.gen(function* () {
           const committed = yield* eventSink.write({
             unlessNativeThreadOwned: {
               ...providerThread,
-              sharedSessionInstanceIds: sharedSessionInstanceIds(thread.providerInstanceId),
+              ...sharedSession(thread.providerInstanceId),
             },
             events: [
               {

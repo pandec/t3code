@@ -320,6 +320,15 @@ it.effect(
       const ownedPi = candidate(PI_MODEL_SELECTION, "owned-pi", "pi");
       const shadowSessionId = "5b8f2f43-34b5-4c1e-9a6f-1f0c7a2d9e10";
       const shadowOwned = candidate(CLAUDE_MODEL_SELECTION, shadowSessionId, "claudeAgent");
+      // A since-removed shadow instance recorded the session under the default's key.
+      const removedSessionId = "7c1d9e52-0b6a-4f3e-8d21-5a9b3c4e6f70";
+      const removedOwned = candidate(CLAUDE_MODEL_SELECTION, removedSessionId, "claudeAgent");
+      yield* (yield* SqlClient.SqlClient)`
+        INSERT INTO fork_native_continuation
+          (provider_instance_id, driver, native_thread_id, continuation_key, recorded_at)
+        VALUES ('claude-removed', 'claudeAgent', ${removedSessionId},
+          ${continuationKeys.claudeAgent!}, ${timestamp})
+      `;
       const owners = [
         yield* seedOwner(active),
         yield* seedOwner(archived, "archived"),
@@ -329,6 +338,13 @@ it.effect(
           candidate(
             { ...CLAUDE_MODEL_SELECTION, instanceId: ProviderInstanceId.make("claude-shadow") },
             shadowSessionId,
+            "claudeAgent",
+          ),
+        ),
+        yield* seedOwner(
+          candidate(
+            { ...CLAUDE_MODEL_SELECTION, instanceId: ProviderInstanceId.make("claude-removed") },
+            removedSessionId,
             "claudeAgent",
           ),
         ),
@@ -351,13 +367,14 @@ it.effect(
         deleted,
         ownedPi,
         shadowOwned,
+        removedOwned,
         otherInstance,
         unowned,
         unownedPi,
       ]);
 
       expect(yield* importer.run).toEqual({ importedCount: 3, skippedCount: 0 });
-      for (const source of [active, archived, deleted, ownedPi, shadowOwned]) {
+      for (const source of [active, archived, deleted, ownedPi, shadowOwned, removedOwned]) {
         const threadId = importId(source);
         expect(yield* Effect.option(projections.getThread(threadId))).toEqual(Option.none());
         expect(yield* events.read({ threadId }).pipe(Stream.runCollect)).toEqual([]);

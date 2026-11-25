@@ -95,8 +95,14 @@ type NativeThreadOwnershipGuard = Pick<
   OrchestrationV2ProviderThread,
   "driver" | "providerInstanceId" | "appThreadId" | "nativeThreadRef"
 > & {
-  /** Fork: instances sharing this session's store (a Claude shadow and its default) also own it. */
-  readonly sharedSessionInstanceIds?: ReadonlyArray<ProviderInstanceId>;
+  /**
+   * Fork: a session store several instances share (a Claude shadow and its default). Its
+   * current instances own the session, and so does any instance recorded under its key.
+   */
+  readonly sharedSession?: {
+    readonly continuationKey: string;
+    readonly instanceIds: ReadonlyArray<ProviderInstanceId>;
+  };
 };
 
 export interface EventSinkV2Shape {
@@ -505,11 +511,25 @@ const layerBase: Layer.Layer<
           // Check ownership in the same transaction that claims the native session.
           const imported = input.unlessNativeThreadOwned;
           if (imported?.nativeThreadRef != null) {
+            const shared = imported.sharedSession;
             const owners = yield* sql`
               SELECT provider_thread_id
-              FROM orchestration_v2_projection_provider_threads
+              FROM orchestration_v2_projection_provider_threads AS owner
               WHERE driver = ${imported.driver}
-                AND provider_instance_id IN ${sql.in([imported.providerInstanceId, ...(imported.sharedSessionInstanceIds ?? [])])}
+                AND (
+                  provider_instance_id IN ${sql.in([imported.providerInstanceId, ...(shared?.instanceIds ?? [])])}
+                  ${
+                    shared === undefined
+                      ? sql``
+                      : sql`OR EXISTS (
+                          SELECT 1 FROM fork_native_continuation AS recorded
+                          WHERE recorded.provider_instance_id = owner.provider_instance_id
+                            AND recorded.driver = owner.driver
+                            AND recorded.native_thread_id = ${imported.nativeThreadRef.nativeId}
+                            AND recorded.continuation_key = ${shared.continuationKey}
+                        )`
+                  }
+                )
                 AND thread_id IS NOT ${imported.appThreadId}
                 AND json_extract(payload_json, '$.nativeThreadRef.nativeId') = ${imported.nativeThreadRef.nativeId}
               LIMIT 1
