@@ -7,19 +7,38 @@ import {
   makeRecentArchivedThreadsKey,
   type RecentArchivedThreadSnapshotsState,
 } from "@t3tools/client-runtime/state/threads";
-import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { createEnvironmentRpcQueryAtomFamily } from "@t3tools/client-runtime/state/runtime";
+import {
+  ORCHESTRATION_V2_WS_METHODS,
+  type EnvironmentId,
+  type ProjectId,
+} from "@t3tools/contracts";
+import { Atom } from "effect/reactivity";
 
 import { connectionAtomRuntime } from "../connection/runtime";
-import { orchestrationEnvironment } from "../state/orchestration";
 import { serverEnvironment } from "../state/server";
 import { environmentThreadShells } from "../state/threads";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentServerConfigsAtom } from "../state/server";
 import { environmentShell } from "../state/shell";
 
-// Fork: SP Labs owner lookups share this full-archive query with Settings.
+// Fork: Settings, SP Labs, and the recent-shelf fallback share this archive query. It refetches
+// on archive changes, unarchives included, and on snapshots that may hide changes made meanwhile.
+const archiveRefreshAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make((get) => {
+    const state = get(environmentShell.stateValueAtom(environmentId));
+    return `${state.archiveInvalidationSequence ?? 0}:${state.generation}`;
+  }),
+);
+
+const archivedShellSnapshot = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "web:archived-shell-snapshot",
+  tag: ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot,
+  refreshTrigger: ({ environmentId }) => archiveRefreshAtom(environmentId),
+});
+
 export function archivedSnapshotAtom(environmentId: EnvironmentId) {
-  return orchestrationEnvironment.archivedShellSnapshot({
+  return archivedShellSnapshot({
     environmentId,
     input: {},
   });
