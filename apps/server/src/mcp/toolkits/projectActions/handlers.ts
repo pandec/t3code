@@ -15,19 +15,11 @@ const resolveTarget = (projectId: ProjectId | undefined) =>
   readCaller().pipe(Effect.flatMap((context) => resolveProjectId(context, projectId)));
 
 /**
- * Fork: project actions toolkit. Listing reads; edits, like other project
- * changes, need a full-access caller, re-checked under the caller's lock
- * right before writing. Edits compare-and-set against the actions they read,
+ * Fork: project actions toolkit. Edits, like other project changes, need a
+ * full-access caller, re-checked under the caller's lock right before writing. Edits compare-and-set against the actions they read,
  * so a concurrent change is refused rather than lost.
  */
 export const layer = McpToolAccess.toLayer(ProjectActionsToolkit, {
-  t3_project_actions_list: McpToolAccess.reads((input) =>
-    Effect.gen(function* () {
-      const projectId = yield* resolveTarget(input.projectId);
-      const actions = yield* ProjectActions.ProjectActions;
-      return yield* actions.list(projectId).pipe(Effect.mapError(failure));
-    }),
-  ),
   t3_project_actions_upsert: McpToolAccess.writesEnvironment((input, check) =>
     Effect.gen(function* () {
       const projectId = yield* resolveTarget(input.projectId);

@@ -208,7 +208,6 @@ it.effect("voice_reply exists only for credentials with the voice capability", (
         expect(names, session.path).toEqual(
           expect.arrayContaining([
             "archive_thread",
-            "t3_project_actions_list",
             "t3_project_actions_upsert",
             "t3_project_actions_remove",
             "telegram_send",
