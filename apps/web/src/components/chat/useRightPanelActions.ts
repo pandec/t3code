@@ -316,7 +316,7 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     if (activeWorkspaceRoot === undefined) {
       toastManager.add({
         type: "error",
-        title: "Failed to copy full path",
+        title: m(msg("Failed to copy full path")),
         description: "The project root is not loaded yet.",
       });
       return;
