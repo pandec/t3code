@@ -31,19 +31,29 @@ export const resolveWorktreeSwitchTarget = Effect.fn("resolveWorktreeSwitchTarge
         new WorktreeSwitchError({ message: "The project or target directory no longer exists." }),
     ),
   );
+  // Git ends each answer with one LF; anything before it, newlines included, is the path.
   const run = (cwd: string, args: ReadonlyArray<string>) =>
     git
       .execute({ operation: "resolveWorktreeSwitchTarget", cwd, args, allowNonZeroExit: true })
       .pipe(
-        Effect.map((result) => (result.exitCode === 0 ? result.stdout.split(/\r?\n/u) : null)),
+        Effect.map((result) =>
+          result.exitCode === 0 && result.stdout.endsWith("\n") ? result.stdout.slice(0, -1) : null,
+        ),
         Effect.orElseSucceed(() => null),
       );
   // Git resolves the common directory for every layout (git-annex symlinks `.git` to its admin
   // directory); null unless `cwd`, a physical path, is a checkout's top level.
   const commonDir = Effect.fn("resolveWorktreeSwitchTarget.commonDir")(function* (cwd: string) {
-    const lines = yield* run(cwd, ["rev-parse", "--show-toplevel", "--git-common-dir"]);
-    if (!lines?.[0] || !lines[1] || path.resolve(lines[0]) !== cwd) return null;
-    return yield* fs.realPath(path.resolve(cwd, lines[1])).pipe(Effect.orElseSucceed(() => null));
+    const [topLevel, gitCommonDir] = yield* Effect.all([
+      run(cwd, ["rev-parse", "--show-toplevel"]),
+      run(cwd, ["rev-parse", "--git-common-dir"]),
+    ]);
+    if (!topLevel || !gitCommonDir) return null;
+    const canonical = (target: string) =>
+      fs.realPath(path.resolve(cwd, target)).pipe(Effect.orElseSucceed(() => null));
+    // Compare canonical forms: Git and Node may spell a case-insensitive path differently.
+    if ((yield* canonical(topLevel)) !== cwd) return null;
+    return yield* canonical(gitCommonDir);
   });
   const [repository, targetRepository] = yield* Effect.all([commonDir(root), commonDir(target)]);
   if (repository === null || targetRepository !== repository) {
@@ -54,6 +64,6 @@ export const resolveWorktreeSwitchTarget = Effect.fn("resolveWorktreeSwitchTarge
   }
   if (target === root) return { targetPath: target, worktreePath: null, branch: null };
   const head = yield* run(target, ["symbolic-ref", "--quiet", "HEAD"]);
-  const branch = /^refs\/heads\/(.+)$/u.exec(head?.[0] ?? "")?.[1] ?? null;
+  const branch = /^refs\/heads\/(.+)$/u.exec(head ?? "")?.[1] ?? null;
   return { targetPath: target, worktreePath: target, branch };
 });

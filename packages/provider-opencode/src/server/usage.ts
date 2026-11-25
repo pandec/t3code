@@ -361,8 +361,12 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
             const copyOf = original(record.sessionId, row.seq, record.timestampMs);
             if (originals.has(copyOf)) continue;
             originals.add(copyOf);
-            // Fork: keyed by lineage, so retained history meets a copy once its original is gone.
-            if (record.dedupeKey !== null) seen.add(record.dedupeKey);
+            // Fork: keyed by lineage, so retained history meets a copy once its original is gone;
+            // a row already counted under its message id (migrated from `message`) stays counted once.
+            if (record.dedupeKey !== null) {
+              if (seen.has(record.dedupeKey)) continue;
+              seen.add(record.dedupeKey);
+            }
             append(file.records, { ...record, dedupeKey: `opencode:${copyOf}` });
             continue;
           }

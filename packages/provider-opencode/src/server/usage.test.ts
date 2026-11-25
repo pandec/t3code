@@ -454,6 +454,36 @@ describe("readOpenCodeUsage", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("counts a reply in both message tables once under its message id", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "usage-reader-test-" });
+      const db = yield* openDatabase(path.join(dir, "opencode.db"));
+      const data = JSON.stringify({
+        role: "assistant",
+        modelID: "big-pickle",
+        time: { created: 1780000000000 },
+        tokens: { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+      });
+      yield* db.unsafe("CREATE TABLE message (id TEXT, session_id TEXT, data TEXT)");
+      yield* db.unsafe(
+        "CREATE TABLE session_message (id TEXT, session_id TEXT, type TEXT, seq INTEGER, data TEXT)",
+      );
+      yield* db.unsafe("INSERT INTO message VALUES ('msg-1', 'session-1', ?)", [data]);
+      yield* db.unsafe(
+        "INSERT INTO session_message VALUES ('msg-1', 'session-1', 'assistant', 1, ?)",
+        [data],
+      );
+
+      const records = (yield* readOpenCodeUsage(dir, 0)).files.flatMap((file) => file.records);
+      assert.deepStrictEqual(
+        records.map((record) => record.dedupeKey),
+        ["opencode:msg-1"],
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("counts OpenCode 2 compaction requests alongside assistant replies", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
