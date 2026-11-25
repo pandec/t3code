@@ -234,12 +234,6 @@ function watchesEqual(left: ThreadPullRequestWatch, right: ThreadPullRequestWatc
   );
 }
 
-/**
- * Wakes a thread's agent when a watched pull request finishes checks, gets someone else's comment,
- * starts to conflict, or merges or closes without the agent's own command. A two-minute pass reads
- * each moved pull request once per project. Settling or archiving the thread, or a merge or close,
- * ends a watch; each end is logged once.
- */
 export class PullRequestWatchReactor extends Context.Service<
   PullRequestWatchReactor,
   {
