@@ -19,7 +19,7 @@ const ACTIVE_WORK_STATUSES: ReadonlySet<string> = new Set([
 type ResolveStatus<T> = (thread: T) => string;
 
 /** Marked threads plus threads that are running or need the user right now. */
-export function isActiveWorkThread<T extends Pick<EnvironmentThreadShell, "activeMarkedAt">>(
+function isActiveWorkThread<T extends Pick<EnvironmentThreadShell, "activeMarkedAt">>(
   thread: T,
   status: ResolveStatus<T>,
 ): boolean {

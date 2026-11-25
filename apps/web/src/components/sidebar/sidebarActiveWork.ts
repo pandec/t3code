@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import * as Schema from "effect/Schema";
 import type { EnvironmentId } from "@t3tools/contracts";
 import {
-  isActiveWorkThread,
   matchesActiveWorkFilter,
   nextActiveWorkThreadKeys as nextSharedActiveWorkThreadKeys,
 } from "@t3tools/client-runtime/state/thread-active-work";
@@ -14,13 +13,6 @@ import {
   resolveSidebarThreadStatus,
   resolveThreadLastVisitedAt,
 } from "../Sidebar.logic";
-
-export function isSidebarActiveWorkThread(
-  thread: Parameters<typeof resolveSidebarThreadStatus>[0] &
-    Pick<SidebarThreadSummary, "activeMarkedAt">,
-): boolean {
-  return isActiveWorkThread(thread, resolveSidebarThreadStatus);
-}
 
 export function nextActiveWorkThreadKeys(
   previous: readonly string[],
