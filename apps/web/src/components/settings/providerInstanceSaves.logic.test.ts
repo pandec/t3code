@@ -64,4 +64,36 @@ describe("provider instance saves", () => {
 
     expect(settleProviderInstanceSave(pending, instanceId, sent, true, withKey("")).size).toBe(0);
   });
+
+  it("keeps a key save when the keyless enable before it echoes", () => {
+    const keyless: ProviderInstanceConfig = {
+      driver: ProviderDriverKind.make("codex"),
+      usageSource: { kind: "cliproxyapi", managementKey: "" },
+    };
+    const enable = save(keyless);
+    const withNewKey = save(withKey("new-key"));
+    const pending = addProviderInstanceSave(
+      addProviderInstanceSave(new Map(), instanceId, enable, undefined),
+      instanceId,
+      withNewKey,
+      undefined,
+    );
+
+    const echoed = reconcileProviderInstanceSaves(pending, { [instanceId]: keyless });
+    expect(echoed.get(instanceId)?.saves.map((entry) => entry.models)).toEqual([withNewKey.models]);
+  });
+
+  it("waits for echoes when a key-only reply follows an earlier outstanding save", () => {
+    const rename = save({ ...withKey(""), displayName: "B" });
+    const restore = save(withKey("new-key"));
+    const pending = addProviderInstanceSave(
+      addProviderInstanceSave(new Map(), instanceId, rename, withKey("")),
+      instanceId,
+      restore,
+      withKey(""),
+    );
+
+    const settled = settleProviderInstanceSave(pending, instanceId, restore, true, withKey(""));
+    expect(settled.get(instanceId)?.saves).toHaveLength(2);
+  });
 });

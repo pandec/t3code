@@ -19,7 +19,7 @@ export type ProviderInstanceSaves = ReadonlyMap<
 const storedSnapshot = (instance: ProviderInstanceConfig | undefined) =>
   stableStringify(instance ?? null);
 
-/** Sensitive env values and usage-source keys echo redacted, so a write and its echo share a key without them. */
+/** Sensitive env values and usage-source keys echo redacted, so the key keeps only whether one is set. */
 export function providerInstanceKey(instance: ProviderInstanceConfig | undefined): string {
   if (instance === undefined) return "";
   const { environment, usageSource } = instance;
@@ -27,12 +27,17 @@ export function providerInstanceKey(instance: ProviderInstanceConfig | undefined
     ...instance,
     environment: environment?.map((variable) =>
       variable.sensitive && typeof variable.value === "string"
-        ? { name: variable.name, sensitive: true }
+        ? {
+            name: variable.name,
+            sensitive: true,
+            set: variable.value !== "" || !!variable.valueRedacted,
+          }
         : variable,
     ),
     usageSource: usageSource && {
       kind: usageSource.kind,
       managementUrl: usageSource.managementUrl,
+      keySet: usageSource.managementKey !== "" || !!usageSource.managementKeyRedacted,
     },
   });
 }
@@ -93,17 +98,16 @@ export function settleProviderInstanceSave(
   if (entry === undefined) return saves;
   // A write that changed only redacted fields reads back as the stored envelope, so no echo comes.
   const sentIndex = entry.saves.findIndex((save) => save.models === sent.models);
+  // Only the oldest save: an earlier one still awaits an echo that can arrive after this reply.
   const unobservable =
     saved &&
-    sentIndex >= 0 &&
+    sentIndex === 0 &&
     storedSnapshot(returned) === entry.stored &&
     storedSnapshot(sent.models) !== entry.stored;
   return withInstanceSaves(
     saves,
     instanceId,
     entry.stored,
-    unobservable
-      ? entry.saves.slice(sentIndex + 1)
-      : settleCustomModelSave(entry.saves, sent, saved),
+    unobservable ? entry.saves.slice(1) : settleCustomModelSave(entry.saves, sent, saved),
   );
 }
