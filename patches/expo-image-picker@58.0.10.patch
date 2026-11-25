@@ -1,26 +1,8 @@
 diff --git a/ios/ImagePickerHandler.swift b/ios/ImagePickerHandler.swift
-index 476910ded2a9f53ce18563b3f8c005717cb451e4..ff9260a8e0c5b73e55afb083315bae5efcfb105a 100644
+index 476910ded2a9f53ce18563b3f8c005717cb451e4..b21861673964d98ad95b8ef37a2b48aa6d73efdc 100644
 --- a/ios/ImagePickerHandler.swift
 +++ b/ios/ImagePickerHandler.swift
-@@ -52,25 +52,33 @@ internal class ImagePickerHandler: NSObject,
-   // MARK: - UIImagePickerControllerDelegate
- 
-   func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: MediaInfo) {
--    handlePickedMedia(mediaInfo: info)
--    picker.dismiss(animated: true)
-+    picker.dismiss(animated: true) { [weak self] in
-+      self?.handlePickedMedia(mediaInfo: info)
-+    }
-   }
- 
-   func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
--    handlePickingCancellation()
--    picker.dismiss(animated: true)
-+    picker.dismiss(animated: true) { [weak self] in
-+      self?.handlePickingCancellation()
-+    }
-   }
- 
+@@ -64,13 +64,19 @@ internal class ImagePickerHandler: NSObject,
    // MARK: - PHPickerViewControllerDelegate
  
    func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
@@ -47,10 +29,10 @@ index 476910ded2a9f53ce18563b3f8c005717cb451e4..ff9260a8e0c5b73e55afb083315bae5e
  
    // MARK: - UIAdaptivePresentationControllerDelegate
 diff --git a/ios/ImagePickerModule.swift b/ios/ImagePickerModule.swift
-index 6d413603b378ee4b70cdd37bd48bb020ffc49755..f643d04f7cd13505a9f5a8c2e86c4bdc364aa5ed 100644
+index bc19e0525a1ab36e394f3609235daacb794888e3..29419cb493707024142324e9135575ffb8b560aa 100644
 --- a/ios/ImagePickerModule.swift
 +++ b/ios/ImagePickerModule.swift
-@@ -163,6 +163,13 @@ public class ImagePickerModule: Module, OnMediaPickingResultHandler {
+@@ -169,6 +169,13 @@ public class ImagePickerModule: Module, OnMediaPickingResultHandler {
    }
  
    private func presentPickerUI(_ picker: PickerUIController, pickingContext context: PickingContext) {
