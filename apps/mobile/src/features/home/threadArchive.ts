@@ -27,7 +27,11 @@ export function confirmQueuedMessageDiscard(input: {
         : `“${input.title}” and its side chats have`;
   Dialog.confirm({
     title: `Archive${input.whenDone ? " when done" : ""} and discard ${total} queued ${total === 1 ? "message" : "messages"}?`,
-    message: `${waiting} messages waiting to run. Archiving discards them.`,
+    message: `${waiting} messages waiting to run. Archiving discards them.${
+      inSideChats === 0
+        ? ""
+        : " A side chat still running a delegated task stays open and keeps its messages."
+    }`,
     confirmText: "Archive",
     destructive: true,
     onConfirm: input.onConfirm,

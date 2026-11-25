@@ -329,6 +329,19 @@ describe("attemptArchiveThread", () => {
     expect(commands.archive).not.toHaveBeenCalled();
   });
 
+  it("asks again when the queue grew while the confirmation was open", async () => {
+    threadShell.queuedMessageCount = 1;
+    dialogs.confirm
+      .mockImplementationOnce(async () => {
+        threadShell.queuedMessageCount = 2;
+        return true;
+      })
+      .mockResolvedValueOnce(false);
+    await useThreadActions().attemptArchiveThread(target);
+    expect(dialogs.confirm).toHaveBeenCalledTimes(2);
+    expect(commands.archive).not.toHaveBeenCalled();
+  });
+
   it("counts side chat queues, and confirms an archive when done that discards them", async () => {
     threadShell.pendingBackgroundTasks = [{ taskId: "agent", kind: "subagent" }];
     shellLookup.sideChats = [

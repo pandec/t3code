@@ -9,7 +9,11 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import type { ThreadRuntimeSummary } from "./models.ts";
-import { archiveDiscardedQueuedMessages, resolveArchiveToggleAction } from "./threadSettled.ts";
+import {
+  archiveDiscardedQueuedMessages,
+  discardExceedsConfirmed,
+  resolveArchiveToggleAction,
+} from "./threadSettled.ts";
 
 function runtime(status: ThreadRuntimeSummary["status"]): ThreadRuntimeSummary {
   return {
@@ -127,5 +131,14 @@ describe("archiveDiscardedQueuedMessages", () => {
     expect(
       archiveDiscardedQueuedMessages({ ...withQueue, archiveRequest: pendingArchive }, threads),
     ).toEqual({ total: 0, inSideChats: 0 });
+  });
+
+  it("asks again when either queue grew past what was confirmed", () => {
+    const confirmed = { total: 3, inSideChats: 2 };
+    expect(discardExceedsConfirmed({ total: 3, inSideChats: 2 }, confirmed)).toBe(false);
+    expect(discardExceedsConfirmed({ total: 1, inSideChats: 0 }, confirmed)).toBe(false);
+    expect(discardExceedsConfirmed({ total: 4, inSideChats: 3 }, confirmed)).toBe(true);
+    // The same total moved from a side chat to the thread itself.
+    expect(discardExceedsConfirmed({ total: 3, inSideChats: 1 }, confirmed)).toBe(true);
   });
 });

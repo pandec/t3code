@@ -4,7 +4,10 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import * as ThreadUndo from "@t3tools/client-runtime/state/thread-undo";
 import { showThreadUndoNotice } from "./thread-undo-notice";
 import {
+  type ArchiveQueuedMessageDiscard,
+  type ArchiveToggleAction,
   archiveDiscardedQueuedMessages,
+  discardExceedsConfirmed,
   canSnooze,
   resolveArchiveToggleAction,
 } from "@t3tools/client-runtime/state/thread-settled";
@@ -457,19 +460,30 @@ export function useThreadListActions(
    * The archive toggle: archives, archives when done, or cancels a pending archive. Discarding
    * queued messages, the thread's or its side chats', always confirms first, offline from cache.
    */
-  const archiveThread = (thread: EnvironmentThreadShell, discardConfirmed = false) => {
+  const archiveThread = (
+    thread: EnvironmentThreadShell,
+    confirmed?: {
+      readonly toggle: ArchiveToggleAction;
+      readonly discarded: ArchiveQueuedMessageDiscard;
+    },
+  ): Promise<boolean> => {
     const toggle = resolveArchiveToggleAction(thread);
+    // The thread can change while the dialog is open: a changed action does nothing.
+    if (confirmed !== undefined && confirmed.toggle !== toggle) return Promise.resolve(false);
     const discarded = archiveDiscardedQueuedMessages(
       thread,
       appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
     );
-    if (discarded.total > 0 && !discardConfirmed) {
+    if (
+      confirmed === undefined
+        ? discarded.total > 0
+        : discardExceedsConfirmed(discarded, confirmed.discarded)
+    ) {
       confirmQueuedMessageDiscard({
         title: thread.title,
         discarded,
         whenDone: toggle === "schedule",
-        // The thread can change while the dialog is open (a resumed turn must not be archived).
-        onConfirm: () => void archiveThread(liveThread(thread), true),
+        onConfirm: () => void archiveThread(liveThread(thread), { toggle, discarded }),
       });
       return Promise.resolve(false);
     }
@@ -482,7 +496,8 @@ export function useThreadListActions(
       thread,
       undefined,
       undefined,
-      discardConfirmed && discarded.total > 0,
+      // Replay may archive now only over the thread's own confirmed queue.
+      confirmed !== undefined && discarded.total > discarded.inSideChats,
     );
   };
   const offerUndo = (

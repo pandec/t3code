@@ -13,6 +13,7 @@ import {
 import {
   archiveDiscardedQueuedMessages,
   type ArchiveQueuedMessageDiscard,
+  discardExceedsConfirmed,
   type ArchiveToggleAction,
   canSnooze,
   effectiveSnoozed,
@@ -424,8 +425,13 @@ function queuedMessageDiscardPrompt(
       : discarded.inSideChats === discarded.total
         ? " in its side chats"
         : `, including ${discarded.inSideChats} in its side chats`;
-  return `Archive "${title}"${action === "schedule" ? " when done" : ""} and discard ${messages}${where}?`;
+  const question = `Archive "${title}"${action === "schedule" ? " when done" : ""} and discard ${messages}${where}?`;
+  return discarded.inSideChats === 0 ? question : `${question}\n\n${SIDE_CHAT_DISCARD_CAVEAT}`;
 }
+
+/** Fork: the side chat count is an upper bound the client cannot narrow (see the server cascade). */
+const SIDE_CHAT_DISCARD_CAVEAT =
+  "A side chat still running a delegated task stays open and keeps its messages.";
 
 export function useThreadActions() {
   const archiveThreadMutation = useOrchestrationCommand(threadEnvironment.archive, {
@@ -984,25 +990,35 @@ export function useThreadActions() {
   ) => {
     const threadKey = scopedThreadKey(target);
     if (archivingThreadKeys.has(threadKey)) return;
-    const resolved = resolveThreadTarget(target);
-    if (!resolved || resolved.thread.archivedAt !== null) return;
-    const run = async () => {
+    // Re-reads after a confirmation: a changed action does nothing, and a grown discard asks again.
+    const run = async (confirmed?: {
+      readonly action: ArchiveToggleAction;
+      readonly discarded: ArchiveQueuedMessageDiscard;
+    }): Promise<void> => {
+      const resolved = resolveThreadTarget(target);
+      if (!resolved || resolved.thread.archivedAt !== null) return;
       const toggleAction = resolveArchiveToggleAction(resolved.thread);
       if (opts.expectedAction !== undefined && opts.expectedAction !== toggleAction) return;
+      if (confirmed !== undefined && confirmed.action !== toggleAction) return;
       // Discarding queued messages, including those of side chats the archive takes, always
       // confirms; otherwise only archiving now does, when set.
       const discarded = archiveDiscardedQueuedMessages(resolved.thread, readThreadShells());
-      if (discarded.total > 0 || (toggleAction === "archive" && confirmThreadArchive)) {
+      if (
+        confirmed === undefined
+          ? discarded.total > 0 || (toggleAction === "archive" && confirmThreadArchive)
+          : discardExceedsConfirmed(discarded, confirmed.discarded)
+      ) {
         const localApi = readLocalApi();
         if (!localApi) return;
-        const confirmed = await settlePromise(() =>
+        const answer = await settlePromise(() =>
           localApi.dialogs.confirm(
             discarded.total > 0
               ? queuedMessageDiscardPrompt(resolved.thread.title, toggleAction, discarded)
               : `Archive thread "${resolved.thread.title}"?`,
           ),
         );
-        if (confirmed._tag === "Failure" || !confirmed.value) return;
+        if (answer._tag === "Failure" || !answer.value) return;
+        return run({ action: toggleAction, discarded });
       }
       if (toggleAction !== "archive") {
         // Scheduling and cancelling are reversible, so only discards confirm them.

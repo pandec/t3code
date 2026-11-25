@@ -122,6 +122,17 @@ export function archiveDiscardedQueuedMessages(
     : { total: own + inSideChats, inSideChats };
 }
 
+/** Fork: whether a re-read discard exceeds what the user confirmed, so it must ask again. */
+export function discardExceedsConfirmed(
+  next: ArchiveQueuedMessageDiscard,
+  confirmed: ArchiveQueuedMessageDiscard,
+): boolean {
+  return (
+    next.total > confirmed.total ||
+    next.total - next.inSideChats > confirmed.total - confirmed.inSideChats
+  );
+}
+
 export interface ThreadSnoozeShell extends QueuedThreadShell {
   readonly source?: Pick<EnvironmentThreadShell["source"], "pendingRuntimeRequest">;
   readonly snoozedUntil?: string | null;
