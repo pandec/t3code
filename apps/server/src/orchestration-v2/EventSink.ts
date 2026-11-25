@@ -495,7 +495,7 @@ const layerBase: Layer.Layer<
     });
 
     // Fork: an owner through any instance sharing the session store also owns the session.
-    const ownerInstanceMatches = (guard: NativeThreadOwnershipGuard, nativeId: string) => {
+    const ownerInstanceMatches = (guard: NativeThreadOwnershipGuard, nativeId: string | null) => {
       const shared = guard.sharedSession;
       const instances = sql`provider_instance_id IN ${sql.in([guard.providerInstanceId, ...(shared?.instanceIds ?? [])])}`;
       return shared === undefined
