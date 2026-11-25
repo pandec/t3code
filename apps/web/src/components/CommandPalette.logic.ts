@@ -866,50 +866,6 @@ export function buildSnoozeThreadViewItems(input: {
   return items;
 }
 
-export function buildArchivedThreadsActionItems(input: {
-  /** Logical group key of the open thread's project, when there is one. */
-  readonly projectFilterKey: string | null;
-  readonly projectTitle: string | null;
-  readonly icon: ReactNode;
-  readonly openArchived: (projectFilterKey: string | null) => Promise<void>;
-}): CommandPaletteActionItem[] {
-  const items: CommandPaletteActionItem[] = [
-    {
-      kind: "action",
-      value: "action:archived-threads",
-      searchTerms: ["open archived threads", "archived", "archive", "history", "settings"],
-      title: "Open archived threads",
-      icon: input.icon,
-      run: async () => {
-        await input.openArchived(null);
-      },
-    },
-  ];
-
-  if (input.projectFilterKey !== null && input.projectTitle !== null) {
-    const projectFilterKey = input.projectFilterKey;
-    items.push({
-      kind: "action",
-      value: "action:archived-threads-in-project",
-      searchTerms: [
-        "open archived threads",
-        "archived",
-        "archive",
-        "project",
-        "current project",
-        input.projectTitle,
-      ],
-      title: `Open archived threads in ${input.projectTitle}`,
-      icon: input.icon,
-      run: async () => {
-        await input.openArchived(projectFilterKey);
-      },
-    });
-  }
-
-  return items;
-}
-
 export type BuildThreadActionItemsThread = Pick<
   SidebarThreadSummary,
   | "archivedAt"

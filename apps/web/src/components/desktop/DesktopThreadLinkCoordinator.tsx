@@ -11,7 +11,7 @@ import {
 } from "../../desktopThreadLink";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { readThreadShell } from "../../state/entities";
-import { orchestrationEnvironment } from "../../state/orchestration";
+import { archivedSnapshotAtom } from "../../lib/archivedThreadsState";
 import { primaryEnvironmentIdAtom } from "../../state/primaryEnvironment";
 import { environmentShell } from "../../state/shell";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../../threadRoutes";
@@ -44,10 +44,7 @@ function waitForThreadList(environmentId: EnvironmentId): Promise<boolean> {
 async function hasArchivedThread(threadRef: ScopedThreadRef): Promise<boolean | null> {
   const result = await executeAtomQuery(
     appAtomRegistry,
-    orchestrationEnvironment.archivedShellSnapshot({
-      environmentId: threadRef.environmentId,
-      input: {},
-    }),
+    archivedSnapshotAtom(threadRef.environmentId),
     {
       label: "thread link archived lookup",
       reportFailure: false,

@@ -92,7 +92,6 @@ import {
   GitForkIcon,
   MessageSquareDashedIcon,
   GroupIcon,
-  ArrowUpToLineIcon,
   LinkIcon,
   MessageSquareIcon,
   NotebookPenIcon,
@@ -184,9 +183,7 @@ import {
   usePrimaryEnvironmentId,
 } from "../state/environments";
 import {
-  readEnvironmentServerConfigLoaded,
   readEnvironmentSupportsSnoozeUntilDone,
-  readThreadShells,
   useProjects,
   useServerConfigs,
   useThreadShell,
@@ -195,7 +192,6 @@ import {
   useHiddenThreadKeys,
   useEnvironmentThreadRefs,
   useVisibleThreadShells,
-  useThreadShells,
   waitForProject,
 } from "../state/entities";
 import { useIsLabsPanelProject } from "../state/labs";
@@ -297,7 +293,6 @@ import {
 } from "./CommandPalette.logic";
 import { useThreadGroupCatalog } from "../hooks/useThreadGroups";
 import { groupMovableThreads, moveThreadsToGroup } from "../lib/threadGroupMove";
-import { planThreadMoveToTop } from "../lib/threadMoveToTop";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { openThreadGroupsDialog } from "./sidebar/threadGroupsDialogStore";
 import { threadGroupId } from "@t3tools/shared/threadGroups";
@@ -436,10 +431,6 @@ function threadActionIcon(id: CommandPaletteThreadActionId): ReactNode {
   }
 }
 
-// Fork: the dialog unmounts between invocations; keep an unfinished reorder
-// across openings.
-const pendingMovesToTop = new Set<string>();
-
 async function reportThreadActionFailure(
   title: string,
   run: () => Promise<AtomCommandResult<unknown, unknown>>,
@@ -455,22 +446,6 @@ async function reportThreadActionFailure(
     );
   }
   return result._tag === "Success";
-}
-
-// Stops on failure; each successful key write remains a valid placement.
-async function writeMoveToTopKeys(
-  assignments: ReadonlyArray<{ readonly threadRef: ScopedThreadRef; readonly orderKey: string }>,
-  reorder: (
-    threadRef: ScopedThreadRef,
-    orderKey: string,
-  ) => Promise<AtomCommandResult<unknown, unknown>>,
-): Promise<void> {
-  for (const assignment of assignments) {
-    const moved = await reportThreadActionFailure("Failed to move thread to top", () =>
-      reorder(assignment.threadRef, assignment.orderKey),
-    );
-    if (!moved) return;
-  }
 }
 
 export function CommandPalette({ children }: { children: ReactNode }) {
@@ -679,8 +654,6 @@ function OpenCommandPaletteDialog(props: {
     unsnoozeThread,
     forkThread,
     setThreadCustomGroup,
-    reorderActiveThread,
-    reorderPinnedThread,
   } = useThreadActions();
   // Fork: custom thread groups.
   const customGroupCatalog = useThreadGroupCatalog();
@@ -692,14 +665,10 @@ function OpenCommandPaletteDialog(props: {
     reportFailure: false,
   });
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
-  // Snooze state, presets and move-to-top plans read the clock at minute precision.
+  // Snooze state and presets read the clock at minute precision.
   const nowMinute = useNowMinute();
   const renderNow = new Date(`${nowMinute}:00.000Z`);
   const snoozeShortcutUntilDone = useClientSettings((s) => s.snoozeShortcutUntilDone);
-  // The sidebar's Working shelf and folder mode sort Active by activity, not order keys.
-  const activeKeyOrdered = useClientSettings(
-    (s) => !s.sidebarWorkingShelfEnabled && !s.boringSidebarEnabled,
-  );
   const paletteRouteTarget = useThreadRouteTarget();
   const projects = useProjects();
   const accentTint = useAccentTintSettings();
@@ -773,7 +742,6 @@ function OpenCommandPaletteDialog(props: {
         delegatedUnderParent,
       ),
   );
-  const allThreads = useThreadShells();
   const serverConfigs = useServerConfigs();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const providersByEnvironment = useEnvironmentProviders();
@@ -1970,52 +1938,6 @@ function OpenCommandPaletteDialog(props: {
         });
       }
     }
-  }
-
-  // Fork: group-aware "Move to top", planned against the full group or pinned
-  // shelf so search, filters and folded groups cannot change what "top" is.
-  const canReorderSection = (environmentId: EnvironmentId) => serverConfigs.has(environmentId);
-  const moveToTopPlan = planThreadMoveToTop({
-    threads: allThreads,
-    threadRef: currentThreadRef,
-    groups: customGroupCatalog.groups,
-    now: renderNow.toISOString(),
-    activeKeyOrdered,
-    canReorder: canReorderSection,
-  });
-  if (moveToTopPlan !== null && currentThreadRef !== null) {
-    const threadRef = currentThreadRef;
-    actionItems.push({
-      kind: "action",
-      value: "action:thread:move-to-top",
-      title: "Move current thread to top",
-      searchTerms: ["move", "top", "reorder", "group", "current thread"],
-      icon: <ArrowUpToLineIcon className={ITEM_ICON_CLASS} />,
-      ...(moveToTopPlan.disabledReason
-        ? { disabled: true, description: moveToTopPlan.disabledReason }
-        : {}),
-      run: async () => {
-        if (pendingMovesToTop.size > 0) return;
-        // Re-read shells at execution: a snooze or another client's reorder
-        // may have landed while the palette was open.
-        const plan = planThreadMoveToTop({
-          threads: readThreadShells(),
-          threadRef,
-          groups: customGroupCatalog.groups,
-          // oxlint-disable-next-line react/purity -- runs in an event handler (oxc#27309)
-          now: new Date().toISOString(),
-          activeKeyOrdered,
-          canReorder: readEnvironmentServerConfigLoaded,
-        });
-        if (plan === null || plan.disabledReason) return;
-        const moveKey = `${threadRef.environmentId}:${threadRef.threadId}`;
-        pendingMovesToTop.add(moveKey);
-        await writeMoveToTopKeys(
-          plan.assignments,
-          plan.section === "pinned" ? reorderPinnedThread : reorderActiveThread,
-        ).finally(() => pendingMovesToTop.delete(moveKey));
-      },
-    });
   }
 
   // Fork: a sidebar multi-selection takes over the group move; rows on

@@ -8,7 +8,6 @@ import type { Thread } from "../types";
 import { makeThreadFixture } from "../test-fixtures";
 import {
   buildArchiveCurrentThreadAction,
-  buildArchivedThreadsActionItems,
   buildCurrentThreadActionItems,
   newThreadNoProjectIndex,
   buildNestedSearchItems,
@@ -430,40 +429,6 @@ describe("buildSnoozeThreadViewItems", () => {
     const items = buildSnoozeThreadViewItems({ ...baseInput, query: "", snooze });
     await items[1]!.run();
     expect(snooze).toHaveBeenCalledWith(presets[1]);
-  });
-});
-
-describe("buildArchivedThreadsActionItems", () => {
-  it("offers only the unfiltered entry without a resolvable project", () => {
-    expect(
-      buildArchivedThreadsActionItems({
-        projectFilterKey: null,
-        projectTitle: "Ignored",
-        icon: null,
-        openArchived: vi.fn(),
-      }).map((item) => item.value),
-    ).toEqual(["action:archived-threads"]);
-  });
-
-  it("adds a project-scoped entry naming the current project", async () => {
-    const openArchived = vi.fn(async () => undefined);
-    const items = buildArchivedThreadsActionItems({
-      projectFilterKey: "github.com/t3tools/t3code",
-      projectTitle: "T3 Code",
-      icon: null,
-      openArchived,
-    });
-
-    expect(items.map((item) => item.value)).toEqual([
-      "action:archived-threads",
-      "action:archived-threads-in-project",
-    ]);
-    expect(items[1]).toMatchObject({ title: "Open archived threads in T3 Code" });
-
-    await items[0]?.run();
-    expect(openArchived).toHaveBeenCalledWith(null);
-    await items[1]?.run();
-    expect(openArchived).toHaveBeenCalledWith("github.com/t3tools/t3code");
   });
 });
 
