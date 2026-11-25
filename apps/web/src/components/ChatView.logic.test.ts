@@ -74,7 +74,6 @@ import {
   deriveLockedProvider,
   hasCompactableConversation,
   hasServerAcknowledgedLocalDispatch,
-  hasStandaloneComposerCommandContext,
   isComposerEmptyForQueuedMessageRecall,
   resolveDraftCreationGroup,
   startNewThreadForProject,
@@ -152,44 +151,6 @@ describe("deriveComposerSendState", () => {
     expect(state.trimmedPrompt).toBe("yoo  waddup");
     expect(state.expiredTerminalContextCount).toBe(1);
     expect(state.hasSendableContent).toBe(true);
-  });
-});
-
-describe("hasStandaloneComposerCommandContext", () => {
-  it("accepts a bare standalone command with no attachments or contexts", () => {
-    expect(
-      hasStandaloneComposerCommandContext({
-        imageCount: 0,
-        fileCount: 0,
-        terminalContextCount: 0,
-        previewAnnotationCount: 0,
-        reviewCommentCount: 0,
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects an expired terminal context even though it is not sendable", () => {
-    expect(
-      hasStandaloneComposerCommandContext({
-        imageCount: 0,
-        fileCount: 0,
-        terminalContextCount: 1,
-        previewAnnotationCount: 0,
-        reviewCommentCount: 0,
-      }),
-    ).toBe(false);
-  });
-
-  it("rejects a file attachment so /t3-archive never consumes it", () => {
-    expect(
-      hasStandaloneComposerCommandContext({
-        imageCount: 0,
-        fileCount: 1,
-        terminalContextCount: 0,
-        previewAnnotationCount: 0,
-        reviewCommentCount: 0,
-      }),
-    ).toBe(false);
   });
 });
 

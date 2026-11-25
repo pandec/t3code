@@ -380,7 +380,7 @@ patchedDependencies:
   dbus-next@0.10.2: cfff57561b0ee59b5addb3b2e6c6f20906e967507a530ab67e8db8108e520ba4
   electron-updater@6.8.9: 91b5648a7eed42761523ef542ebb7e548b037eda41d66533c8152ac65ac72155
   expo-audio@58.0.11: 92414572bf24ffd0c45de44c45f11f6c48bc0af13b8b9a56f77a67bc0e915c1e
-  expo-image-picker@58.0.10: 14695f23a28ddaf690584c26af6b3da56fde32223414d806642f099b07c29be2
+  expo-image-picker@58.0.10: 88fc761c6cf48f5b7be5bd07936c461d01205d2a0c21583a97dc263a0ac6381b
   expo-modules-core@58.0.30: 71ef37c8b95c45d2f453d85e707b65764734aac1ba546e30ac636cbbea3b3f7a
   expo-network@58.0.4: 159c2d760d1cd5102e95df51c20600111e7a72096ef0daea8215d50cae48bd98
   expo-notifications@58.1.8: 36541a7e5f22b7a7b6f78f51d839a812fc012434c48fc10093985628f413b8a8
@@ -694,7 +694,7 @@ importers:
         version: 58.0.16(expo@58.0.23)(react-native@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(react@19.3.0)
       expo-image-picker:
         specifier: 58.0.10
-        version: 58.0.10(patch_hash=14695f23a28ddaf690584c26af6b3da56fde32223414d806642f099b07c29be2)(expo@58.0.23)
+        version: 58.0.10(patch_hash=88fc761c6cf48f5b7be5bd07936c461d01205d2a0c21583a97dc263a0ac6381b)(expo@58.0.23)
       expo-keep-awake:
         specifier: ~58.0.3
         version: 58.0.3(expo@58.0.23)(react@19.3.0)
@@ -19431,7 +19431,7 @@ snapshots:
       react: 19.3.0
       react-native: 0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.88.1(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(supports-color@8.1.1)(utf-8-validate@6.0.6)
 
-  expo-image-picker@58.0.10(patch_hash=14695f23a28ddaf690584c26af6b3da56fde32223414d806642f099b07c29be2)(expo@58.0.23):
+  expo-image-picker@58.0.10(patch_hash=88fc761c6cf48f5b7be5bd07936c461d01205d2a0c21583a97dc263a0ac6381b)(expo@58.0.23):
     dependencies:
       expo: 58.0.23(d226faf1ca90e630d8c56a2108dee32d)
       expo-image-loader: 58.0.3(expo@58.0.23)

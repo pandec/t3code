@@ -894,22 +894,6 @@ export function isComposerEmptyForQueuedMessageRecall(options: {
   );
 }
 
-export function hasStandaloneComposerCommandContext(input: {
-  imageCount: number;
-  fileCount: number;
-  terminalContextCount: number;
-  previewAnnotationCount: number;
-  reviewCommentCount: number;
-}): boolean {
-  return (
-    input.imageCount === 0 &&
-    input.fileCount === 0 &&
-    input.terminalContextCount === 0 &&
-    input.previewAnnotationCount === 0 &&
-    input.reviewCommentCount === 0
-  );
-}
-
 export function buildExpiredTerminalContextToastCopy(
   expiredTerminalContextCount: number,
   variant: "omitted" | "empty",

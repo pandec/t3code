@@ -4,7 +4,10 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import * as ThreadUndo from "@t3tools/client-runtime/state/thread-undo";
 import { showThreadUndoNotice } from "./thread-undo-notice";
 import {
-  archiveDiscardedQueuedMessageCount,
+  type ArchiveQueuedMessageDiscard,
+  type ArchiveToggleAction,
+  archiveDiscardedQueuedMessages,
+  discardExceedsConfirmed,
   canSnooze,
   resolveArchiveToggleAction,
 } from "@t3tools/client-runtime/state/thread-settled";
@@ -454,21 +457,36 @@ export function useThreadListActions(
   const titleRegenerationInFlightThreadKeys = useRef(new Set<string>());
 
   /**
-   * The archive toggle: archives, archives when done, or cancels a pending archive. Archiving
-   * now discards queued messages, so that always confirms first, offline from the cached shell.
+   * The archive toggle: archives, archives when done, or cancels a pending archive. Discarding
+   * queued messages, the thread's or its side chats', always confirms first, offline from cache.
    */
-  const archiveThread = (thread: EnvironmentThreadShell, discardConfirmed = false) => {
-    const discardedCount = archiveDiscardedQueuedMessageCount(thread);
-    if (discardedCount > 0 && !discardConfirmed) {
+  const archiveThread = (
+    thread: EnvironmentThreadShell,
+    confirmed?: {
+      readonly toggle: ArchiveToggleAction;
+      readonly discarded: ArchiveQueuedMessageDiscard;
+    },
+  ): Promise<boolean> => {
+    const toggle = resolveArchiveToggleAction(thread);
+    // The thread can change while the dialog is open: a changed action does nothing.
+    if (confirmed !== undefined && confirmed.toggle !== toggle) return Promise.resolve(false);
+    const discarded = archiveDiscardedQueuedMessages(
+      thread,
+      appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
+    );
+    if (
+      confirmed === undefined
+        ? discarded.total > 0
+        : discardExceedsConfirmed(discarded, confirmed.discarded)
+    ) {
       confirmQueuedMessageDiscard({
         title: thread.title,
-        count: discardedCount,
-        // The thread can change while the dialog is open (a resumed turn must not be archived).
-        onConfirm: () => void archiveThread(liveThread(thread), true),
+        discarded,
+        whenDone: toggle === "schedule",
+        onConfirm: () => void archiveThread(liveThread(thread), { toggle, discarded }),
       });
       return Promise.resolve(false);
     }
-    const toggle = resolveArchiveToggleAction(thread);
     return executeAction(
       toggle === "cancel"
         ? "cancel-archive"
@@ -478,7 +496,8 @@ export function useThreadListActions(
       thread,
       undefined,
       undefined,
-      discardConfirmed && discardedCount > 0,
+      // Replay may archive now only over the thread's own confirmed queue.
+      confirmed !== undefined && discarded.total > discarded.inSideChats,
     );
   };
   const offerUndo = (

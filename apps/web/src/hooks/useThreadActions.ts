@@ -11,7 +11,9 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
-  archiveDiscardedQueuedMessageCount,
+  archiveDiscardedQueuedMessages,
+  type ArchiveQueuedMessageDiscard,
+  discardExceedsConfirmed,
   type ArchiveToggleAction,
   canSnooze,
   effectiveSnoozed,
@@ -409,6 +411,27 @@ function threadOperationFailure(target: ScopedThreadRef) {
         ),
       );
 }
+
+/** Fork: names how many queued messages an archive discards and where they wait. */
+function queuedMessageDiscardPrompt(
+  title: string,
+  action: ArchiveToggleAction,
+  discarded: ArchiveQueuedMessageDiscard,
+): string {
+  const messages = `${discarded.total} queued ${discarded.total === 1 ? "message" : "messages"}`;
+  const where =
+    discarded.inSideChats === 0
+      ? ""
+      : discarded.inSideChats === discarded.total
+        ? " in its side chats"
+        : `, including ${discarded.inSideChats} in its side chats`;
+  const question = `Archive "${title}"${action === "schedule" ? " when done" : ""} and discard ${messages}${where}?`;
+  return discarded.inSideChats === 0 ? question : `${question}\n\n${SIDE_CHAT_DISCARD_CAVEAT}`;
+}
+
+/** Fork: the side chat count is an upper bound the client cannot narrow (see the server cascade). */
+const SIDE_CHAT_DISCARD_CAVEAT =
+  "A side chat still running a delegated task stays open and keeps its messages.";
 
 export function useThreadActions() {
   const archiveThreadMutation = useOrchestrationCommand(threadEnvironment.archive, {
@@ -954,28 +977,51 @@ export function useThreadActions() {
 
   /**
    * Fork: the one user-facing archive path: archive now, when done, or cancel
-   * (`resolveArchiveToggleAction`). A changed `expectedAction` does nothing; archiving
-   * now confirms when set or when it discards queued messages, and toasts failures. Concurrent attempts collapse into one;
-   * `onApplied` runs once the request lands, before an archive's navigation.
+   * (`resolveArchiveToggleAction`). A changed `expectedAction` does nothing; archiving now
+   * confirms when set, any discard of queued messages confirms, and failures toast. Concurrent
+   * attempts collapse into one; `onApplied` runs once the request lands, before navigation.
    */
   const attemptArchiveThread = async (
     target: ScopedThreadRef,
     opts: {
       expectedAction?: ArchiveToggleAction;
       onApplied?: () => void;
-      /** Appended to the "Archive when done" notice. */
-      scheduledHint?: string;
     } = {},
   ) => {
     const threadKey = scopedThreadKey(target);
     if (archivingThreadKeys.has(threadKey)) return;
-    const resolved = resolveThreadTarget(target);
-    if (!resolved || resolved.thread.archivedAt !== null) return;
-    const run = async () => {
+    // Re-reads after a confirmation: a changed action does nothing; a larger discard asks again.
+    const run = async (confirmed?: {
+      readonly action: ArchiveToggleAction;
+      readonly discarded: ArchiveQueuedMessageDiscard;
+    }): Promise<void> => {
+      const resolved = resolveThreadTarget(target);
+      if (!resolved || resolved.thread.archivedAt !== null) return;
       const toggleAction = resolveArchiveToggleAction(resolved.thread);
       if (opts.expectedAction !== undefined && opts.expectedAction !== toggleAction) return;
+      if (confirmed !== undefined && confirmed.action !== toggleAction) return;
+      // Discarding queued messages, including those of side chats the archive takes, always
+      // confirms; otherwise only archiving now does, when set.
+      const discarded = archiveDiscardedQueuedMessages(resolved.thread, readThreadShells());
+      if (
+        confirmed === undefined
+          ? discarded.total > 0 || (toggleAction === "archive" && confirmThreadArchive)
+          : discardExceedsConfirmed(discarded, confirmed.discarded)
+      ) {
+        const localApi = readLocalApi();
+        if (!localApi) return;
+        const answer = await settlePromise(() =>
+          localApi.dialogs.confirm(
+            discarded.total > 0
+              ? queuedMessageDiscardPrompt(resolved.thread.title, toggleAction, discarded)
+              : `Archive thread "${resolved.thread.title}"?`,
+          ),
+        );
+        if (answer._tag === "Failure" || !answer.value) return;
+        return run({ action: toggleAction, discarded });
+      }
       if (toggleAction !== "archive") {
-        // Scheduling and cancelling are reversible, so they skip the confirmation.
+        // Scheduling and cancelling are reversible, so only discards confirm them.
         const input = { threadId: target.threadId };
         const result = await (toggleAction === "cancel"
           ? cancelThreadArchiveMutation({ environmentId: target.environmentId, input })
@@ -1004,28 +1050,10 @@ export function useThreadActions() {
             description:
               toggleAction === "cancel"
                 ? "This thread will stay open."
-                : `Archives when the current turn and background work finish.${
-                    opts.scheduledHint === undefined ? "" : ` ${opts.scheduledHint}`
-                  }`,
+                : "Archives when the current turn and background work finish.",
           }),
         );
         return;
-      }
-      // Archiving now discards queued messages, so that always confirms.
-      const discardedCount = archiveDiscardedQueuedMessageCount(resolved.thread);
-      if (confirmThreadArchive || discardedCount > 0) {
-        const localApi = readLocalApi();
-        if (!localApi) return;
-        const confirmed = await settlePromise(() =>
-          localApi.dialogs.confirm(
-            discardedCount > 0
-              ? `Archive "${resolved.thread.title}" and discard ${discardedCount} queued ${
-                  discardedCount === 1 ? "message" : "messages"
-                }?`
-              : `Archive thread "${resolved.thread.title}"?`,
-          ),
-        );
-        if (confirmed._tag === "Failure" || !confirmed.value) return;
       }
       let didArchive = false;
       const result = await archiveThread(target, {

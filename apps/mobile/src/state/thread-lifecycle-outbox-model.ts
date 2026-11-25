@@ -1,4 +1,4 @@
-import { archiveDiscardedQueuedMessageCount } from "@t3tools/client-runtime/state/thread-settled";
+import { archiveDiscardedQueuedMessages } from "@t3tools/client-runtime/state/thread-settled";
 import {
   scopeThreadShell,
   type EnvironmentShellStatus,
@@ -195,6 +195,8 @@ export function resolveThreadLifecycleOutboxAction(input: {
   readonly thread:
     | Pick<
         EnvironmentThreadShell,
+        | "environmentId"
+        | "id"
         | "archivedAt"
         | "archiveRequest"
         | "runtime"
@@ -226,7 +228,8 @@ export function resolveThreadLifecycleOutboxAction(input: {
   const archivePending = !archived && thread.archiveRequest?.status === "pending";
   if (input.desiredArchived) {
     if ((archived || archivePending) && !input.requiresDispatch) return "remove";
-    return input.discardQueuedMessages && archiveDiscardedQueuedMessageCount(thread) > 0
+    // Only the thread's own queue refuses archive-when-done; side chat queues never do.
+    return input.discardQueuedMessages && archiveDiscardedQueuedMessages(thread).total > 0
       ? "archive-now"
       : "archive";
   }

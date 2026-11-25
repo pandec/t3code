@@ -25,10 +25,8 @@ import {
   type ShortcutMatchContext,
 } from "./keybindings";
 
-export { parseComposerArchiveCommand } from "@t3tools/shared/composerTrigger";
-
 export type ComposerTriggerKind = "path" | "pull-request" | "slash-command" | "skill";
-export type ComposerSlashCommand = "model" | "prompt" | "t3-archive" | "side" | "btw" | "clear";
+export type ComposerSlashCommand = "model" | "prompt" | "side" | "btw" | "clear";
 export type ComposerSubmissionIntent = "foreground" | "background" | "alternate";
 
 export interface ComposerTrigger {

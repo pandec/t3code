@@ -1,14 +1,15 @@
 import {
+  revealedSteerMessageIds,
   STEER_PENDING_REVEAL_DELAY_MS,
-  unreadSteerMessageIds,
+  steerRevealPending,
+  unreadSteerKey,
+  unreadSteerSet,
   type SteerPendingThreadSnapshot,
 } from "@t3tools/client-runtime/state/thread-steer-pending";
-import { MessageId } from "@t3tools/contracts";
-import { useEffect, useMemo, useState } from "react";
+import type { MessageId } from "@t3tools/contracts";
+import { useEffect, useState } from "react";
 
-// Mirror of apps/web/src/state/threadSteerPending.ts. Keep in sync.
-const NO_PENDING_MESSAGE_IDS: ReadonlySet<MessageId> = new Set();
-const UNREAD_KEY_SEPARATOR = "\u0000";
+const NO_REVEALED_MESSAGE_IDS: ReadonlySet<MessageId> = new Set();
 
 /**
  * Derived from the thread projection so the answer survives reloads, devices and navigation. The
@@ -18,53 +19,21 @@ const UNREAD_KEY_SEPARATOR = "\u0000";
 export function useSteerPendingMessageIds(
   snapshot: SteerPendingThreadSnapshot | null,
 ): ReadonlySet<MessageId> {
-  // Keyed by content, and the Set rebuilt from the key rather than the array,
-  // so projection updates that leave the unread set unchanged neither restart
-  // the reveal timer nor need a ref to keep Set identity stable.
-  const unreadKey = useMemo(
-    () => (snapshot === null ? "" : unreadSteerMessageIds(snapshot).join(UNREAD_KEY_SEPARATOR)),
-    [snapshot],
-  );
-  const unread = useMemo(
-    () =>
-      unreadKey === ""
-        ? NO_PENDING_MESSAGE_IDS
-        : new Set(unreadKey.split(UNREAD_KEY_SEPARATOR).map((id) => MessageId.make(id))),
-    [unreadKey],
-  );
-  const [revealed, setRevealed] = useState<ReadonlySet<MessageId>>(NO_PENDING_MESSAGE_IDS);
+  return useRevealedSteerMessageIds(unreadSteerKey(snapshot));
+}
 
-  // A steer that resolves drops out of `unread` at once; one that stays is
-  // revealed once the delay passes. A second steer arriving before the first
-  // is revealed delays both; one arriving after does not hide the first.
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reveal-delay timer
+// Takes the string key so the compiler caches the set on content, not on each projection
+// update; a new set identity would restart the reveal timer while a turn streams.
+function useRevealedSteerMessageIds(unreadKey: string): ReadonlySet<MessageId> {
+  const unread = unreadSteerSet(unreadKey);
+  const [revealed, setRevealed] = useState<ReadonlySet<MessageId>>(NO_REVEALED_MESSAGE_IDS);
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reveals held steers after the delay
   useEffect(() => {
-    let allRevealed = true;
-    for (const messageId of unread) {
-      if (!revealed.has(messageId)) {
-        allRevealed = false;
-        break;
-      }
-    }
-    if (allRevealed) {
-      return;
-    }
-    const timer = setTimeout(() => {
-      setRevealed(unread);
-    }, STEER_PENDING_REVEAL_DELAY_MS);
+    if (!steerRevealPending(unread, revealed)) return;
+    const timer = setTimeout(() => setRevealed(unread), STEER_PENDING_REVEAL_DELAY_MS);
     return () => clearTimeout(timer);
   }, [revealed, unread]);
 
-  return useMemo(() => {
-    if (unread.size === 0 || revealed.size === 0) {
-      return NO_PENDING_MESSAGE_IDS;
-    }
-    const visible = new Set<MessageId>();
-    for (const messageId of unread) {
-      if (revealed.has(messageId)) {
-        visible.add(messageId);
-      }
-    }
-    return visible.size === 0 ? NO_PENDING_MESSAGE_IDS : visible;
-  }, [revealed, unread]);
+  return revealedSteerMessageIds(unread, revealed);
 }

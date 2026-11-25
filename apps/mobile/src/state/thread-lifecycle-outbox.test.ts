@@ -80,8 +80,17 @@ const live = {
   requiresDispatch: false,
   discardQueuedMessages: false,
 } as const;
-const idle = { archivedAt: null, archiveRequest: null, runtime: null, pendingBackgroundTasks: [] };
+const idle = {
+  environmentId,
+  id: threadId,
+  archivedAt: null,
+  archiveRequest: null,
+  runtime: null,
+  pendingBackgroundTasks: [],
+};
 const pendingArchive = {
+  environmentId,
+  id: threadId,
   runtime: null,
   pendingBackgroundTasks: [],
   archivedAt: null,
