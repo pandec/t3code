@@ -192,6 +192,21 @@ it.layer(TestLayer)("archive worktree removal", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("removes a linked worktree whose .git git-annex replaced with a symlink", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const removal = yield* ArchiveWorktreeRemoval;
+      const { worktreePath } = yield* setup("feature/annexed");
+      const adminDir = yield* git(worktreePath, ["rev-parse", "--absolute-git-dir"]);
+      yield* fs.remove(path.join(worktreePath, ".git"));
+      yield* fs.symlink(adminDir, path.join(worktreePath, ".git"));
+      assert.isNull(yield* removal.blocker(threadId));
+      assert.isNull(yield* removal.remove({ threadId, worktreePath }));
+      assert.isFalse(yield* fs.exists(worktreePath));
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("keeps a dirty worktree, though a running turn may still clean it", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

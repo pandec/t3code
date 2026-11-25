@@ -1,47 +1,9 @@
 import { EnvironmentId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  isSidebarActiveWorkThread,
-  matchesSidebarActiveWorkFilter,
-  nextActiveWorkThreadKeys,
-} from "./sidebarActiveWork";
+import { matchesSidebarActiveWorkFilter, nextActiveWorkThreadKeys } from "./sidebarActiveWork";
 import { makeThreadFixture } from "../../test-fixtures";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
-
-describe("isSidebarActiveWorkThread", () => {
-  const runtime = {
-    status: "running" as const,
-    activeRunId: null,
-    providerInstanceId: ProviderInstanceId.make("codex"),
-    providerName: "Codex",
-    lastError: null,
-    updatedAt: "2026-03-09T10:00:00.000Z",
-  };
-  const ready = { hasPendingApprovals: false, hasPendingUserInput: false, runtime: null };
-
-  it("keeps marked threads even when nothing runs", () => {
-    expect(isSidebarActiveWorkThread(ready)).toBe(false);
-    expect(
-      isSidebarActiveWorkThread({ ...ready, activeMarkedAt: "2026-03-09T10:00:00.000Z" }),
-    ).toBe(true);
-  });
-
-  it("keeps running threads and threads that need the user", () => {
-    expect(isSidebarActiveWorkThread({ ...ready, runtime })).toBe(true);
-    expect(isSidebarActiveWorkThread({ ...ready, hasPendingApprovals: true })).toBe(true);
-    expect(isSidebarActiveWorkThread({ ...ready, hasPendingUserInput: true })).toBe(true);
-  });
-
-  it("drops finished and failed threads", () => {
-    expect(
-      isSidebarActiveWorkThread({ ...ready, runtime: { ...runtime, status: "completed" } }),
-    ).toBe(false);
-    expect(isSidebarActiveWorkThread({ ...ready, runtime: { ...runtime, status: "failed" } })).toBe(
-      false,
-    );
-  });
-});
 
 describe("active work filter session", () => {
   const now = "2026-10-30T12:00:00.000Z";
@@ -51,12 +13,32 @@ describe("active work filter session", () => {
   const liveEnvironmentIds = new Set([thread.environmentId]);
   const finished = { ...thread, activeMarkedAt: null };
   const other = { ...thread, environmentId: EnvironmentId.make("other") };
+  const runtime = {
+    status: "running" as const,
+    activeRunId: null,
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    providerName: "Codex",
+    lastError: null,
+    updatedAt: now,
+  };
   const options = {
     retainedKeys: new Set<string>(),
     includeDone: false,
     routeThreadKey: null,
     now,
   };
+
+  it.each([
+    { change: { runtime: { ...runtime, status: "running" as const } }, admitted: true },
+    { change: { hasPendingApprovals: true }, admitted: true },
+    { change: { hasPendingUserInput: true }, admitted: true },
+    { change: { runtime: { ...runtime, status: "failed" as const } }, admitted: false },
+  ])("admits unmarked threads that run or need the user: %o", ({ change, admitted }) => {
+    const candidate = { ...finished, ...change };
+    expect(nextActiveWorkThreadKeys([], true, [candidate], now, liveEnvironmentIds)).toEqual(
+      admitted ? [key(candidate)] : [],
+    );
+  });
 
   it("retains activity, admits later activity, and resets on disable", () => {
     const bothLive = new Set([thread.environmentId, other.environmentId]);

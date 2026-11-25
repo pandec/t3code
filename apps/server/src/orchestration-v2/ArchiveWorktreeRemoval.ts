@@ -16,6 +16,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import { mayBeSpLabWorktree } from "../labs/labWorktree.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import { isLinkedWorktree } from "../vcs/worktreeRemoval.ts";
 import {
   canonicalWorkspacePath,
   reserveWorkspace,
@@ -94,9 +95,9 @@ const make = Effect.gen(function* () {
     beforeArchive = false,
   ) {
     const root = yield* canonicalWorkspacePath(worktreePath);
-    // A linked worktree has a `.git` file; a main checkout has a directory.
-    const gitEntry = yield* fs.stat(path.join(root, ".git")).pipe(Effect.orElseSucceed(() => null));
-    if (gitEntry?.type !== "File") return WORKTREE_KEPT_DETAIL.notWorktree;
+    if (!(yield* isLinkedWorktree(root).pipe(Effect.orElseSucceed(() => false)))) {
+      return WORKTREE_KEPT_DETAIL.notWorktree;
+    }
     if (yield* mayBeSpLabWorktree(fs, path, root)) return WORKTREE_KEPT_DETAIL.labWorktree;
     const projectShells = yield* projects.listShells();
     for (const project of projectShells) {

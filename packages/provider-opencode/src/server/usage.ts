@@ -2,7 +2,6 @@ import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import {
   totalTokens,
   type ProviderUsageReader,
-  type ProviderUsageScanFile,
   type UsageRecord,
 } from "@t3tools/provider-core/server/usage";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -89,14 +88,8 @@ function parseOpenCodeMessage(
   };
 }
 
-interface OpenCodeScanFile {
-  readonly path: string;
-  readonly records: UsageRecord[];
-  supersededKeys?: string[];
-}
-
 export interface OpenCodeUsageReadResult {
-  readonly files: readonly ProviderUsageScanFile[];
+  readonly files: readonly { readonly path: string; readonly records: readonly UsageRecord[] }[];
   readonly missing: boolean;
   readonly error: boolean;
 }
@@ -140,7 +133,7 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
 ): Effect.fn.Return<OpenCodeUsageReadResult, never, FileSystem.FileSystem | Path.Path> {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const files: OpenCodeScanFile[] = [];
+  const files: { path: string; records: UsageRecord[] }[] = [];
   const seen = new Set<string>();
   let found = false;
   let error = false;
@@ -183,7 +176,7 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
   );
   for (const name of databases) {
     found = true;
-    const file: OpenCodeScanFile = { path: path.join(root, name), records: [] };
+    const file = { path: path.join(root, name), records: [] as UsageRecord[] };
     files.push(file);
     // Taken before the snapshot opens, so a write that races the scan invalidates its rows.
     const [main, wal] = yield* Effect.forEach([file.path, `${file.path}-wal`], (target) =>
@@ -217,7 +210,8 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
           .pipe(Effect.map((rows) => new Set(rows.map((row) => row.name))));
       // A fork copies its parent's messages through the boundary under new ids, keeping
       // seq, creation time and data. Resolve each fork to its last copied seq so a copy
-      // names its original as (session, seq). A fork whose boundary is gone keeps its usage.
+      // names its original as (session, seq). Fork: a fork whose boundary is gone keeps its
+      // parent, so its copies keep the lineage keys saved history holds for the deleted originals.
       const forks = new Map<
         string,
         { readonly parent: string; readonly lastCopiedSeq: number; readonly created: number }
@@ -242,16 +236,16 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
                   WHEN 'before' THEN copied.seq < boundary.seq
                 END) AS last_copied_seq
            FROM session_v2 AS fork
-           JOIN session_message AS boundary
+           LEFT JOIN session_message AS boundary
              ON boundary.session_id = fork.fork_session_id
             AND boundary.id = json_extract(fork.fork_boundary, '$.messageID')
            WHERE fork.fork_session_id IS NOT NULL AND json_valid(fork.fork_boundary)`,
         );
         for (const row of resolved) {
-          if (typeof row.last_copied_seq !== "number" || typeof row.created !== "number") continue;
+          if (typeof row.created !== "number") continue;
           forks.set(text(row.id), {
             parent: text(row.parent),
-            lastCopiedSeq: row.last_copied_seq,
+            lastCopiedSeq: typeof row.last_copied_seq === "number" ? row.last_copied_seq : Infinity,
             created: row.created,
           });
         }
@@ -278,8 +272,7 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
         const columns = yield* columnsOf(table);
         const timestamp = columns.has("time_created") ? "time_created" : "NULL";
         const updated = columns.has("time_updated") ? "time_updated" : "NULL";
-        const lineage =
-          table === "session_message" && forks.size > 0 && columns.has("seq") ? "seq" : "NULL";
+        const lineage = table === "session_message" && columns.has("seq") ? "seq" : "NULL";
         // Without time_updated an in-place edit can keep the length, so any database write counts.
         const version = updated === "NULL" ? `${identity}/${stamp(wal!)}` : identity;
         // OpenCode 2 records a compaction request's spend on its compaction message.
@@ -366,12 +359,16 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
           const record = cached.get(row.row_id)!.record;
           if (record !== null && typeof row.seq === "number") {
             const copyOf = original(record.sessionId, row.seq, record.timestampMs);
-            if (originals.has(copyOf)) {
-              // Saved history from before copies were recognized may still hold this one.
-              if (record.dedupeKey !== null) (file.supersededKeys ??= []).push(record.dedupeKey);
-              continue;
-            }
+            if (originals.has(copyOf)) continue;
             originals.add(copyOf);
+            // Fork: keyed by lineage, so retained history meets a copy once its original is gone;
+            // a row already counted under its message id (migrated from `message`) stays counted once.
+            if (record.dedupeKey !== null) {
+              if (seen.has(record.dedupeKey)) continue;
+              seen.add(record.dedupeKey);
+            }
+            append(file.records, { ...record, dedupeKey: `opencode:${copyOf}` });
+            continue;
           }
           append(file.records, record);
         }

@@ -7,7 +7,7 @@ import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { useEffect, useState } from "react";
 
-import { liveArchivedShellSnapshotAtom } from "../../lib/archivedThreadsState";
+import { archivedSnapshotAtom } from "../../lib/archivedThreadsState";
 import { cn } from "~/lib/utils";
 import { useThreadShell } from "../../state/entities";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
@@ -117,9 +117,7 @@ function archivedOwnerShell(
   environmentId: EnvironmentId,
   threadId: string,
 ): EnvironmentThreadShell | null {
-  const snapshot = Option.getOrNull(
-    AsyncResult.value(get(liveArchivedShellSnapshotAtom(environmentId))),
-  );
+  const snapshot = Option.getOrNull(AsyncResult.value(get(archivedSnapshotAtom(environmentId))));
   const thread = snapshot?.threads.find((candidate) => candidate.id === threadId);
   return thread ? presentThreadShell(environmentId, thread) : null;
 }

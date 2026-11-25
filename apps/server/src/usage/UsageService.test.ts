@@ -2975,52 +2975,10 @@ describe("UsageService", () => {
         }
       });
       yield* Effect.gen(function* () {
-        const { stateDir } = yield* ServerConfig.ServerConfig;
-        const mtimeMs = yield* Clock.currentTimeMillis;
-        const databasePath = yield* Effect.promise(() => NodeFSP.realpath(database));
-        const saved = (id: string, sessionId: string): UsageRecord => ({
-          provider: "opencode",
-          timestampMs: created,
-          model: "example-model",
-          sessionId,
-          totals: {
-            uncachedInputTokens: 10,
-            cachedInputTokens: 0,
-            cacheCreationTokens: 0,
-            outputTokens: 5,
-            reasoningTokens: 0,
-          },
-          reportedCostUsd: null,
-          speed: "standard",
-          dedupeKey: `opencode:${id}`,
-        });
-        // A cache saved before copies were recognized holds both rows.
-        const cache = makeScanCacheWriter()(
-          new Map([
-            [
-              databasePath,
-              {
-                size: 0,
-                mtimeMs,
-                provider: "opencode" as const,
-                records: [saved("original", "parent"), saved("copy", "fork")],
-                tailRecords: [],
-                malformedRecords: 0,
-                tailMalformedRecords: 0,
-                position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
-              },
-            ],
-          ]),
-          {},
-        );
-        yield* Effect.promise(async () => {
-          await NodeFSP.mkdir(stateDir, { recursive: true });
-          await NodeFSP.writeFile(NodePath.join(stateDir, SCAN_CACHE_FILE_NAME), cache);
-        });
         const service = yield* UsageService.make;
         assert.strictEqual(totalOutputTokens(yield* service.readSummary(WINDOW)), 5);
 
-        // Deleting the parent removes the lineage, so the reader now returns the copy itself.
+        // The reader now returns the copy itself, under the key saved history holds for the original.
         yield* Effect.promise(async () => {
           const db = new NodeSqlite.DatabaseSync(database);
           try {
