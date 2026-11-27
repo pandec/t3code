@@ -86,7 +86,7 @@ arrow/Space selector to opt into remote desktops, the local desktop, and (on mac
 checkout is inspected concurrently and dirty, uninspectable, or non-`dev` states are reported before mutation;
 dirty or uninspectable targets fail the run. Clean non-`dev` targets require a second unchecked batch approval
 to switch branches. When some targets are eligible and others are excluded, interactive runs ask (default No)
-before continuing with the eligible remainder, while non-TTY use skips non-`dev` targets. On remote hosts with the background service installed (`t3code.service` on Linux, the
+before continuing with the eligible remainder, while non-TTY use skips non-`dev` targets. On any target, remote or local, with the background service installed (`t3code.service` on Linux, the
 `com.t3tools.t3code.service` LaunchAgent on macOS), the desktop stage also runs `vp run release:fork`
 (`scripts/fork-release.ts`), because that service runs its own pinned runtime rather than the desktop app. Local targets share
 checkout/dependency preparation; remote targets, the local desktop install, and the local iOS build all run

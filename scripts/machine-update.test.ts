@@ -401,6 +401,36 @@ it("shares local prep, runs surfaces concurrently, and reports a failed desktop 
   assert.equal(resultExitCode(execution), 1);
 });
 
+it("moves a local background service to a fork build after the desktop install", async () => {
+  const run = async (hasLocalService: boolean, desktopExitCode = 0) => {
+    const commands: string[] = [];
+    const runner: CommandRunner = {
+      dryRun: false,
+      cancel: () => undefined,
+      run: async (request) => {
+        if (request.stage === "desktop") commands.push(request.args.join(" "));
+        return request.args.includes("install:desktop:dev")
+          ? { ...ok(), exitCode: desktopExitCode }
+          : ok();
+      },
+    };
+    const execution = await executeUpdatePlan(
+      { remoteTargets: [], local: { machine: "ubuntu-dell", desktop: true, ios: false } },
+      { ...testDependencies(runner), hasLocalService: () => hasLocalService },
+    );
+    return { commands, exitCode: resultExitCode(execution) };
+  };
+  assert.deepStrictEqual(await run(true), {
+    commands: ["run install:desktop:dev", "run release:fork"],
+    exitCode: 0,
+  });
+  assert.deepStrictEqual(await run(false), { commands: ["run install:desktop:dev"], exitCode: 0 });
+  assert.deepStrictEqual(await run(true, 12), {
+    commands: ["run install:desktop:dev"],
+    exitCode: 1,
+  });
+});
+
 it("hands only real TTY local iOS execution to the terminal", async () => {
   const terminal = fakeTerminal([]);
   const requests: RunRequest[] = [];

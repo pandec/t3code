@@ -225,6 +225,17 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer))
       envAfter: "T3CODE_LAN=false\n",
     },
     {
+      label: "a fork service is kept rather than replaced with upstream",
+      prints: ["Keeping installed service version t3@0.0.1-pandec.20260101.1."],
+      installed: true,
+      status: { current: false, installedVersion: "0.0.1-pandec.20260101.1" },
+      env: "T3CODE_LAN=false\n",
+      args: ["--lan"],
+      installs: 0,
+      restarts: 1,
+      envAfter: "T3CODE_LAN=true\n",
+    },
+    {
       label: "a failed update keeps service.env matching the old service",
       // The old service still runs, so no foreground server is offered.
       prints: ["Fix that, then run `t3 up --base-dir <baseDir>` again."],

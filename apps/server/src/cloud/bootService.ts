@@ -15,7 +15,7 @@ import { CliError } from "effect/cli";
 import { HttpClient } from "effect/http";
 import * as Schema from "effect/Schema";
 
-import { CLI_RELEASE_BASE_URL_ENV } from "@t3tools/shared/cliRelease";
+import { CLI_RELEASE_BASE_URL_ENV, isForkReleaseVersion } from "@t3tools/shared/cliRelease";
 
 import * as ProcessRunner from "../processRunner.ts";
 import { acquireServiceSelectionLock } from "./serviceSelectionLock.ts";
@@ -724,6 +724,27 @@ export class BootServiceDowngradeRefusedError extends Schema.TaggedError<BootSer
 ) {
   override get message(): string {
     return `Refusing to replace t3@${this.installedVersion} with older t3@${this.targetVersion}. Run the command again with --allow-downgrade to continue.`;
+  }
+}
+
+/** A fork runtime comes only from `release:fork`; a non-fork CLI would replace it with upstream t3. */
+export const replacesForkRuntime = (
+  installedVersion: string | undefined,
+  cliVersion: string,
+): installedVersion is string =>
+  installedVersion !== undefined &&
+  isForkReleaseVersion(installedVersion) &&
+  !isForkReleaseVersion(cliVersion);
+
+export class BootServiceForkRuntimeRefusedError extends Schema.TaggedError<BootServiceForkRuntimeRefusedError>()(
+  "BootServiceForkRuntimeRefusedError",
+  {
+    installedVersion: Schema.String,
+    targetVersion: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Refusing to replace fork build t3@${this.installedVersion} with upstream t3@${this.targetVersion}. Run \`vp run release:fork\` from the fork checkout, or pass --allow-downgrade to install upstream anyway.`;
   }
 }
 

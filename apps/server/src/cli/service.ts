@@ -133,6 +133,15 @@ export const reconcileService = Effect.fn("cli.service.reconcile")(function* (op
     }
   }
   if (
+    options?.allowDowngrade !== true &&
+    BootService.replacesForkRuntime(status.installedVersion, packageJson.version)
+  ) {
+    return yield* new BootService.BootServiceForkRuntimeRefusedError({
+      installedVersion: status.installedVersion,
+      targetVersion: packageJson.version,
+    });
+  }
+  if (
     status.installedVersion !== undefined &&
     options?.allowDowngrade !== true &&
     compareExactServiceVersions(packageJson.version, status.installedVersion) < 0
@@ -213,6 +222,17 @@ function formatServiceStatus(
       ...formatProtection(protection),
       ...problems,
       `  Next: Run \`${commands.update}\` to match it, or pass \`--allow-downgrade\` to \`${commands.install}\` explicitly.`,
+    ].join("\n");
+  }
+  if (!status.current && BootService.replacesForkRuntime(status.installedVersion, cliVersion)) {
+    return [
+      "T3 Code service",
+      `  Status: installed · t3@${installedVersion} (fork build, this CLI is t3@${cliVersion})`,
+      `  Unit: ${status.unitPath}`,
+      `  Logs: ${status.logPath}`,
+      ...formatProtection(protection),
+      ...problems,
+      "  Next: Run `vp run release:fork` from the fork checkout to update it.",
     ].join("\n");
   }
   return [

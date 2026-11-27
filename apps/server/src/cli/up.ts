@@ -296,20 +296,22 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
     return yield* Console.log(formatNextSteps(routes, false, hints));
   }
   const { installedVersion } = before.service;
-  const newer =
-    installedVersion !== undefined &&
-    compareExactServiceVersions(installedVersion, packageJson.version) > 0;
+  // A newer or fork runtime is kept; only `release:fork` builds a fork runtime.
+  const keepInstalled =
+    (installedVersion !== undefined &&
+      compareExactServiceVersions(installedVersion, packageJson.version) > 0) ||
+    BootService.replacesForkRuntime(installedVersion, packageJson.version);
   // Asked before anything changes, so a declined restart leaves service.env
   // matching what the running service read when it started.
   // A stopped service of this version is not current, so reconcile starts it;
-  // a newer one is left alone and needs this restart to start.
+  // a kept one is left alone and needs this restart to start.
   const stopped = before.service.problems?.includes("service-stopped") === true;
   const restart =
     before.service.installed &&
-    (before.service.current || newer) &&
+    (before.service.current || keepInstalled) &&
     (needsRestart(current, routes) || stopped);
   // An older or broken service is reinstalled, which restarts it too.
-  const update = before.service.installed && !before.service.current && !newer && !stopped;
+  const update = before.service.installed && !before.service.current && !keepInstalled && !stopped;
   if ((restart || update) && interactive && !stopped) {
     const confirmed = yield* Prompt.run(
       Prompt.Confirm({
@@ -385,13 +387,13 @@ const setUp = Effect.fn("cli.up")(function* (flags: {
   if (!before.service.supported) {
     yield* printServeCommand("Background service unavailable.");
   } else {
-    if (newer) {
+    if (keepInstalled) {
       yield* Console.log(`Keeping installed service version t3@${installedVersion}.`);
     }
     if (update && !interactive) {
       yield* Console.log("Updating T3 Code. Running agent turns will stop.");
     }
-    const result = newer
+    const result = keepInstalled
       ? ({ changed: false } as const)
       : yield* CliService.reconcileService().pipe(
           Effect.catchTags({

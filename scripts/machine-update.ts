@@ -10,6 +10,8 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import { collectSshConfigAliasesFromFile } from "@t3tools/ssh/config";
 import * as Effect from "effect/Effect";
 
+import { installedBackgroundService } from "./lib/background-service.ts";
+
 export const FLEET = ["space-mac", "grey-mac", "ubuntu-dell"] as const;
 export type Machine = (typeof FLEET)[number];
 export type UpdateStage =
@@ -154,6 +156,8 @@ export interface UpdateDependencies {
   readonly homeDir: string;
   readonly env: NodeJS.ProcessEnv;
   readonly pathExists: (path: string) => boolean;
+  /** Whether this machine runs a background service, whose pinned runtime the desktop install skips. */
+  readonly hasLocalService?: (() => boolean) | undefined;
   readonly log: (line: string) => void;
   readonly progress?: ProgressReporter | undefined;
   readonly logRoot?: string | undefined;
@@ -1683,9 +1687,17 @@ export async function runLocalTarget(
     return result;
   }
 
-  const surfaces: ReadonlyArray<readonly ["desktop" | "ios", string, ReadonlyArray<string>]> = [
-    ...(plan.desktop ? ([["desktop", "pnpm", ["run", "install:desktop:dev"]]] as const) : []),
-    ...(plan.ios ? ([["ios", "pnpm", ["run", "ios:local:release"]]] as const) : []),
+  type Step = readonly [command: string, args: ReadonlyArray<string>];
+  // A background service runs its own pinned runtime, not the desktop app, so it needs its own build.
+  const desktopSteps: readonly [Step, ...Step[]] = [
+    ["pnpm", ["run", "install:desktop:dev"]],
+    ...(dependencies.hasLocalService?.() === true
+      ? ([["pnpm", ["run", "release:fork"]]] as const)
+      : []),
+  ];
+  const surfaces: ReadonlyArray<readonly ["desktop" | "ios", readonly [Step, ...Step[]]]> = [
+    ...(plan.desktop ? ([["desktop", desktopSteps]] as const) : []),
+    ...(plan.ios ? ([["ios", [["pnpm", ["run", "ios:local:release"]]]]] as const) : []),
   ];
   if (surfaces.length > 0) {
     dependencies.progress?.stage(jobId, surfaces.map(([stage]) => stage).join(" + "));
@@ -1702,21 +1714,24 @@ export async function runLocalTarget(
     let surfaceResults: ReadonlyArray<readonly ["desktop" | "ios", CommandResult]>;
     try {
       surfaceResults = await Promise.all(
-        surfaces.map(
-          async ([stage, command, args]) =>
-            [
+        surfaces.map(async ([stage, [first, ...rest]]) => {
+          const runStep = ([command, args]: Step) =>
+            dependencies.runner.run({
+              target: plan.machine,
               stage,
-              await dependencies.runner.run({
-                target: plan.machine,
-                stage,
-                command,
-                args,
-                cwd: checkout,
-                logPath,
-                ...(interactiveTerminal && stage === "ios" ? { interactiveTerminal: true } : {}),
-              }),
-            ] as const,
-        ),
+              command,
+              args,
+              cwd: checkout,
+              logPath,
+              ...(interactiveTerminal && stage === "ios" ? { interactiveTerminal: true } : {}),
+            });
+          let result = await runStep(first);
+          for (const step of rest) {
+            if (result.exitCode !== 0 || result.cancelled) break;
+            result = await runStep(step);
+          }
+          return [stage, result] as const;
+        }),
       );
     } finally {
       if (interactiveTerminal) {
@@ -2218,6 +2233,7 @@ export async function main(
     : createRealRunner(platform);
   const baseDependencies = {
     ...createDefaultDependencies(runner, lineLog),
+    hasLocalService: () => installedBackgroundService(platform) !== undefined,
     input,
     output,
   };

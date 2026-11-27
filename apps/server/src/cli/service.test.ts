@@ -72,6 +72,16 @@ it.layer(Layer.mergeAll(NodeServices.layer, NetService.layer))("service commands
           targetVersion: packageJson.version,
         },
       },
+      {
+        command,
+        label: "an upstream install over a fork build",
+        status: { ...status, current: false, installedVersion: "0.0.1-pandec.20260101.1" },
+        error: {
+          _tag: "BootServiceForkRuntimeRefusedError",
+          installedVersion: "0.0.1-pandec.20260101.1",
+          targetVersion: packageJson.version,
+        },
+      },
       // This home's newer state must not ask for --allow-downgrade first.
       {
         command,
