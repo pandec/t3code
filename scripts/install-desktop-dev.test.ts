@@ -10,10 +10,28 @@ import {
   parseMacDmgMountPoint,
   parseMacRunningAppPid,
   runDesktopInstallLifecycle,
+  staleArtifacts,
   startAppWithVerification,
   terminateProcessWithEscalation,
   waitForAppToStart,
 } from "./install-desktop-dev.ts";
+
+it("keeps only the two newest Dev builds, matched by version", () => {
+  const artifacts = [
+    { name: "T3-Code-Dev-0.1.10-arm64.dmg", modifiedAt: 1 },
+    { name: "T3-Code-Dev-0.1.10-arm64.zip.blockmap", modifiedAt: 1 },
+    // A same-version rebuild refreshes that build's mtime.
+    { name: "T3-Code-Dev-0.1.11-beta.1-arm64.dmg", modifiedAt: 5 },
+    { name: "T3-Code-Dev-0.1.12-x86_64.AppImage", modifiedAt: 3 },
+    { name: "T3-Code-Dev-0.1.9-x86_64.AppImage", modifiedAt: 2 },
+    { name: "builder-debug.yml", modifiedAt: 0 },
+  ];
+  assert.deepStrictEqual(staleArtifacts(artifacts), [
+    "T3-Code-Dev-0.1.10-arm64.dmg",
+    "T3-Code-Dev-0.1.10-arm64.zip.blockmap",
+    "T3-Code-Dev-0.1.9-x86_64.AppImage",
+  ]);
+});
 
 it("escapes macOS app names before exact pgrep and pkill matching", () => {
   assert.equal(escapeProcessNameForExactMatch("T3 Code (Dev)"), "T3 Code \\(Dev\\)");

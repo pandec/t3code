@@ -111,7 +111,7 @@ After moving from an unsigned build, install the signed app at `/Applications/T3
 
 The fleet updater signs over SSH, so each Mac needs the certificate, key, and team configuration, usable without a Keychain prompt. For unattended signing, import the identity into a dedicated build keychain, grant Apple's signing tools access to its key, add it to the user's keychain search list (keep existing entries, or `codesign` reports "no identity found"), and run `security set-keychain-settings /absolute/path/to/build.keychain-db` without `-t` or `-l` so it does not lock mid-build. Set `T3CODE_DESKTOP_MAC_KEYCHAIN` and `T3CODE_DESKTOP_MAC_KEYCHAIN_PASSWORD_FILE` (absolute paths; password file outside the checkout, mode `600`) in `.env.local`; leave both unset to use the login keychain. Test signing through the real fleet SSH session, also after a reboot.
 
-`t3-install-desktop` relaunches the app through the systemd user manager on Linux, which needs systemd 250 or newer (Ubuntu 24.04 or later).
+After a successful install, `t3-install-desktop` (and so the fleet updater) keeps only the two newest builds in `release-dev/`. It relaunches the app through the systemd user manager on Linux, which needs systemd 250 or newer (Ubuntu 24.04 or later).
 
 ### Windows installer prerequisites
 

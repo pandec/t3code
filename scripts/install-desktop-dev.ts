@@ -296,6 +296,61 @@ const findLatestArtifact = Effect.fn("installDesktopDev.findLatestArtifact")(
   Effect.mapError((cause) => asDesktopInstallError("Failed to inspect desktop artifacts", cause)),
 );
 
+const ARTIFACT_PREFIX = "T3-Code-Dev-";
+const KEPT_ARTIFACT_VERSIONS = 2;
+
+/** Artifacts named `T3-Code-Dev-<version>-<arch>.<ext>` outside the newest builds by mtime. */
+export function staleArtifacts(
+  artifacts: ReadonlyArray<{ readonly name: string; readonly modifiedAt: number }>,
+  keep = KEPT_ARTIFACT_VERSIONS,
+): ReadonlyArray<string> {
+  const versionOf = (name: string) => {
+    const rest = name.slice(ARTIFACT_PREFIX.length);
+    return rest.slice(0, rest.lastIndexOf("-"));
+  };
+  const named = artifacts.filter(({ name }) => name.startsWith(ARTIFACT_PREFIX) && versionOf(name));
+  const newestByVersion = new Map<string, number>();
+  for (const { name, modifiedAt } of named) {
+    const version = versionOf(name);
+    newestByVersion.set(version, Math.max(newestByVersion.get(version) ?? 0, modifiedAt));
+  }
+  const kept = new Set(
+    [...newestByVersion]
+      .sort(([, left], [, right]) => right - left)
+      .slice(0, keep)
+      .map(([version]) => version),
+  );
+  return named.filter(({ name }) => !kept.has(versionOf(name))).map(({ name }) => name);
+}
+
+const pruneReleaseDirectory = Effect.fn("installDesktopDev.pruneReleaseDirectory")(
+  function* (fs: FileSystem.FileSystem, path: Path.Path, directory: string) {
+    const artifacts = yield* Effect.forEach(yield* fs.readDirectory(directory), (name) =>
+      fs.stat(path.join(directory, name)).pipe(
+        Effect.map((info) =>
+          info.type === "File"
+            ? [
+                {
+                  name,
+                  modifiedAt: Option.match(info.mtime, {
+                    onNone: () => 0,
+                    onSome: (value) => value.getTime(),
+                  }),
+                },
+              ]
+            : [],
+        ),
+      ),
+    );
+    const stale = staleArtifacts(artifacts.flat());
+    yield* Effect.forEach(stale, (name) => fs.remove(path.join(directory, name)));
+    if (stale.length > 0)
+      yield* Effect.log(`Removed ${stale.length} old artifacts from ${directory}`);
+  },
+  // Pruning is housekeeping; it must not fail an install that already succeeded.
+  Effect.catch((cause) => Effect.logWarning("Could not prune old desktop artifacts", cause)),
+);
+
 // pgrep -x also matches the embedded backend (same binary via process.execPath), so a lingering
 // child would read as "running". LaunchServices only knows the GUI app; empty output means not
 // running. Stopping still waits on the executable name so no backend is orphaned.
@@ -419,7 +474,9 @@ const createMacLifecycle = Effect.fn("installDesktopDev.createMacLifecycle")(fun
     isRunning,
     stop: stopMacApp(spawner),
     build: runCommand(spawner, "vp", ["run", "dist:desktop:dev"], { cwd: repoRoot }),
-    install: installMacArtifact(spawner, fs, path, releaseDirectory, teamId),
+    install: installMacArtifact(spawner, fs, path, releaseDirectory, teamId).pipe(
+      Effect.andThen(pruneReleaseDirectory(fs, path, releaseDirectory)),
+    ),
     start: startAppWithVerification(
       MAC_APP_PROCESS,
       start,
@@ -605,7 +662,9 @@ const createLinuxLifecycle = Effect.fn("installDesktopDev.createLinuxLifecycle")
     isRunning,
     stop: stopLinuxApp(spawner),
     build: runCommand(spawner, "vp", ["run", "dist:desktop:dev:linux"], { cwd: repoRoot }),
-    install: installLinuxArtifact(spawner, fs, path, repoRoot, homeDirectory),
+    install: installLinuxArtifact(spawner, fs, path, repoRoot, homeDirectory).pipe(
+      Effect.andThen(pruneReleaseDirectory(fs, path, path.join(repoRoot, "release-dev"))),
+    ),
     start,
   } satisfies DesktopInstallLifecycle;
 });
